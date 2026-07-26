@@ -1,41 +1,96 @@
-const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const { verifyToken } = require("../utils/jwt");
 
 exports.protect = async (req, res, next) => {
   try {
-    let token;
+    const authorization = String(
+      req.headers.authorization || ""
+    ).trim();
 
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
+    if (!authorization.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
     }
+
+    const token = authorization
+      .slice(7)
+      .trim();
 
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: "Not authorized. No token provided.",
+        message: "Authentication token is missing",
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = verifyToken(token);
 
-    const user = await User.findById(decoded.id).select("-password");
+    if (!decoded?.id) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token",
+      });
+    }
+
+    const user = await User.findById(
+      decoded.id
+    ).select("-password");
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: "User no longer exists.",
+        message: "User account not found",
+      });
+    }
+
+    if (user.suspended) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account has been suspended. Contact support.",
       });
     }
 
     req.user = user;
-    next();
+
+    return next();
   } catch (error) {
+    console.error("Auth middleware error:", {
+      name: error.name,
+      message: error.message,
+    });
+
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Your session has expired. Please log in again.",
+      });
+    }
+
     return res.status(401).json({
       success: false,
-      message: "Not authorized. Invalid token.",
+      message: "Invalid authentication token",
     });
   }
+};
+
+exports.admin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required",
+    });
+  }
+
+  if (req.user.role !== "admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Admin access required",
+    });
+  }
+
+  return next();
 };
