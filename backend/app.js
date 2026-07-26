@@ -11,16 +11,15 @@ const catalogRoutes = require("./routes/catalogRoutes");
 
 const app = express();
 
-// Allowed frontend origins
 const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  process.env.FRONTEND_URL, // Production frontend (Vercel)
+  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests without an Origin header (Postman, Render health checks, etc.)
+  origin(origin, callback) {
+    // Allow Postman, Render health checks, and server-to-server requests.
     if (!origin) {
       return callback(null, true);
     }
@@ -29,7 +28,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    console.error("❌ Blocked by CORS:", origin);
+    console.error("Blocked by CORS:", origin);
 
     return callback(
       new Error(`Origin ${origin} is not allowed by CORS`)
@@ -51,16 +50,15 @@ const corsOptions = {
     "Content-Type",
     "Authorization",
   ],
+
+  optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-
-app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
   res.json({
@@ -69,6 +67,7 @@ app.get("/", (req, res) => {
   });
 });
 
+app.use("/api/admin", adminRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/orders", orderRoutes);
