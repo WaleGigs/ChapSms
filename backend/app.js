@@ -12,12 +12,7 @@ const catalogRoutes = require("./routes/catalogRoutes");
 const app = express();
 
 const corsOptions = {
-  origin: [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://chapssms-web.vercel.app",
-  ],
-
+  origin: true,
   credentials: true,
 
   methods: [
@@ -37,31 +32,24 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// Must remain before routes and body middleware.
 app.use(cors(corsOptions));
 
 app.use(express.json());
-app.use(
-  express.urlencoded({
-    extended: true,
-  })
-);
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message:
-      "🚀 ChapsSmS API is running...",
+    message: "🚀 ChapsSmS API is running...",
   });
 });
 
-// Temporary diagnostic endpoint.
 app.get("/api/cors-test", (req, res) => {
   res.json({
     success: true,
     origin: req.headers.origin || null,
-    message: "CORS test successful",
+    message: "CORS is working",
   });
 });
 
