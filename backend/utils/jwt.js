@@ -2,7 +2,8 @@ const jwt = require("jsonwebtoken");
 
 function getJwtSecret() {
   const secret = String(
-    process.env.JWT_SECRET || ""
+    process.env.JWT_SECRET ||
+      ""
   ).trim();
 
   if (!secret) {
@@ -28,15 +29,22 @@ function generateToken(user) {
   return jwt.sign(
     {
       id: userId,
-      role: user.role || "user",
+      role:
+        user.role ||
+        "user",
     },
     getJwtSecret(),
     {
       expiresIn:
-        process.env.JWT_EXPIRES || "7d",
+        process.env
+          .JWT_EXPIRES ||
+        "7d",
 
-      issuer: "chapsms-api",
-      audience: "chapsms-web",
+      issuer:
+        "chapsms-api",
+
+      audience:
+        "chapsms-web",
     }
   );
 }
@@ -44,7 +52,8 @@ function generateToken(user) {
 function verifyToken(token) {
   if (
     !token ||
-    typeof token !== "string"
+    typeof token !==
+      "string"
   ) {
     throw new Error(
       "JWT token must be a non-empty string"
@@ -55,8 +64,11 @@ function verifyToken(token) {
     token.trim(),
     getJwtSecret(),
     {
-      issuer: "chapsms-api",
-      audience: "chapsms-web",
+      issuer:
+        "chapsms-api",
+
+      audience:
+        "chapsms-web",
     }
   );
 }

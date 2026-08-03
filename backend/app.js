@@ -12,16 +12,51 @@ const catalogRoutes = require("./routes/catalogRoutes");
 
 const app = express();
 
+const configuredOrigins = String(
+  process.env.CORS_ORIGINS || process.env.CLIENT_URL || "",
+)
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
 const corsOptions = {
-  origin: true,
+  origin(origin, callback) {
+    if (!origin || configuredOrigins.length === 0) {
+      callback(null, true);
+      return;
+    }
+
+    const normalizedOrigin = origin.replace(/\/$/, "");
+
+    if (configuredOrigins.includes(normalizedOrigin)) {
+      callback(null, true);
+      return;
+    }
+
+    const error = new Error(`CORS blocked origin: ${origin}`);
+    error.status = 403;
+    callback(error);
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "flutterwave-signature", "verif-hash"],
   optionsSuccessStatus: 204,
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: "1mb" }));
+
+/* Preserve the raw JSON needed to validate Flutterwave's HMAC webhook. */
+app.use(
+  express.json({
+    limit: "1mb",
+    verify(req, _res, buffer) {
+      if (req.originalUrl === "/api/payment/webhook") {
+        req.rawBody = buffer.toString("utf8");
+      }
+    },
+  }),
+);
+
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 

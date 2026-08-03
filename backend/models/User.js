@@ -16,15 +16,30 @@ const userSchema = new mongoose.Schema(
       default: "local",
     },
 
+    /*
+     * New local accounts use username.
+     * This remains optional at schema level so older accounts
+     * that still contain firstName/lastName continue working.
+     */
+    username: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
+    /*
+     * Kept for existing users and future Google profile data.
+     * They are no longer required for local registration.
+     */
     firstName: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
     },
 
     lastName: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
     },
 
@@ -112,4 +127,25 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("User", userSchema);
+/*
+ * Case-insensitive unique usernames.
+ * Existing documents without username are ignored by the sparse index.
+ */
+userSchema.index(
+  { username: 1 },
+  {
+    unique: true,
+    sparse: true,
+    collation: {
+      locale: "en",
+      strength: 2,
+    },
+  }
+);
+
+module.exports =
+  mongoose.models.User ||
+  mongoose.model(
+    "User",
+    userSchema
+  );
