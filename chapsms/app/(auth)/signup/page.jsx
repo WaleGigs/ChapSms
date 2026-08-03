@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Mail, UserRound } from "lucide-react";
@@ -11,119 +11,175 @@ import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import PasswordField from "@/components/auth/PasswordField";
-import PasswordChecklist from "@/components/auth/PasswordChecklist";
-import {
-  normalizeEmail,
-  validateSignupField,
-  validateSignupForm,
-} from "@/lib/formValidation";
+
+function normalizeEmail(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+function validatePassword(password) {
+  const value = String(password || "");
+
+  if (!value) {
+    return "Password is required";
+  }
+
+  if (value.length < 6 || value.length > 64) {
+    return "Password must contain 6–64 characters";
+  }
+
+  if (/\s/.test(value)) {
+    return "Password must not contain spaces";
+  }
+
+  return "";
+}
 
 export default function SignupPage() {
   const router = useRouter();
   const { signup } = useAuth();
 
   const [form, setForm] = useState({
-    firstName: "",
-    lastName: "",
+    username: "",
     email: "",
     password: "",
     confirmPassword: "",
     terms: false,
   });
-  const [touched, setTouched] = useState({});
+
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const currentErrors = useMemo(() => validateSignupForm(form), [form]);
-  const canSubmit = Object.keys(currentErrors).length === 0 && !loading;
-
   function updateField(event) {
-    const { name, value, type, checked } = event.target;
-    const nextValue = type === "checkbox" ? checked : value;
-    const nextForm = {
-      ...form,
-      [name]: nextValue,
-    };
+    const {
+      name,
+      value,
+      type,
+      checked,
+    } = event.target;
 
-    setForm(nextForm);
-    setSubmitError("");
+    const nextValue =
+      type === "checkbox"
+        ? checked
+        : value;
 
-    if (touched[name]) {
-      setErrors((current) => ({
-        ...current,
-        [name]: validateSignupField(name, nextValue, nextForm),
-      }));
-    }
-
-    if (name === "password" && touched.confirmPassword) {
-      setErrors((current) => ({
-        ...current,
-        confirmPassword: validateSignupField(
-          "confirmPassword",
-          nextForm.confirmPassword,
-          nextForm
-        ),
-      }));
-    }
-  }
-
-  function handleBlur(event) {
-    const { name, value, type, checked } = event.target;
-    const nextValue = type === "checkbox" ? checked : value;
-
-    setTouched((current) => ({
+    setForm((current) => ({
       ...current,
-      [name]: true,
+      [name]: nextValue,
     }));
+
+    setSubmitError("");
 
     setErrors((current) => ({
       ...current,
-      [name]: validateSignupField(name, nextValue, form),
+      [name]: "",
+      ...(name === "password"
+        ? { confirmPassword: "" }
+        : {}),
     }));
+  }
+
+  function validateForm() {
+    const nextErrors = {};
+    const username =
+      form.username.trim();
+
+    const email =
+      normalizeEmail(form.email);
+
+    if (!username) {
+      nextErrors.username =
+        "Username is required";
+    }
+
+    if (!email) {
+      nextErrors.email =
+        "Email address is required";
+    }
+
+    const passwordError =
+      validatePassword(
+        form.password
+      );
+
+    if (passwordError) {
+      nextErrors.password =
+        passwordError;
+    }
+
+    if (!form.confirmPassword) {
+      nextErrors.confirmPassword =
+        "Confirm your password";
+    } else if (
+      form.password !==
+      form.confirmPassword
+    ) {
+      nextErrors.confirmPassword =
+        "Passwords do not match";
+    }
+
+    if (!form.terms) {
+      nextErrors.terms =
+        "Accept the Terms and Privacy Policy";
+    }
+
+    return nextErrors;
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
 
-    if (loading) return;
-
-    const validationErrors = validateSignupForm(form);
-    setTouched({
-      firstName: true,
-      lastName: true,
-      email: true,
-      password: true,
-      confirmPassword: true,
-      terms: true,
-    });
-    setErrors(validationErrors);
-    setSubmitError("");
-
-    if (Object.keys(validationErrors).length > 0) {
+    if (loading) {
       return;
     }
 
-    const email = normalizeEmail(form.email);
+    const validationErrors =
+      validateForm();
+
+    setErrors(validationErrors);
+    setSubmitError("");
+
+    if (
+      Object.keys(validationErrors)
+        .length > 0
+    ) {
+      return;
+    }
+
+    const username =
+      form.username.trim();
+
+    const email =
+      normalizeEmail(form.email);
 
     try {
       setLoading(true);
 
-      const response = await signup({
-        firstName: form.firstName.trim(),
-        lastName: form.lastName.trim(),
-        email,
-        password: form.password,
-      });
+      const response =
+        await signup({
+          username,
+          email,
+          password:
+            form.password,
+        });
 
       toast.success(
         response?.message ||
           "Account created. Check your email for the verification code."
       );
 
-      router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+      router.push(
+        `/verify-email?email=${encodeURIComponent(
+          email
+        )}`
+      );
     } catch (error) {
-      const message = error?.message || "Signup failed. Please try again.";
+      const message =
+        error?.message ||
+        "Unable to create your account. Please try again.";
+
       setSubmitError(message);
       toast.error(message);
     } finally {
@@ -131,17 +187,41 @@ export default function SignupPage() {
     }
   }
 
+  const passwordError =
+    validatePassword(
+      form.password
+    );
+
+  const canSubmit =
+    Boolean(
+      form.username.trim()
+    ) &&
+    Boolean(
+      normalizeEmail(
+        form.email
+      )
+    ) &&
+    !passwordError &&
+    form.password ===
+      form.confirmPassword &&
+    form.terms &&
+    !loading;
+
   return (
     <Card className="rounded-[26px] p-5 shadow-xl sm:p-8">
       <div className="mb-7 sm:mb-8">
         <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
           New account
         </p>
+
         <h1 className="mt-3 text-3xl font-black tracking-tight text-[var(--foreground)] sm:text-4xl">
           Create your ChapsSmS account
         </h1>
+
         <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
-          Use accurate details and create a strong password to protect your wallet and orders.
+          Choose a username, enter
+          your email address, and
+          create a password.
         </p>
       </div>
 
@@ -154,36 +234,26 @@ export default function SignupPage() {
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Input
-            label="First name"
-            name="firstName"
-            placeholder="Michael"
-            autoComplete="given-name"
-            maxLength={50}
-            value={form.firstName}
-            onChange={updateField}
-            onBlur={handleBlur}
-            error={touched.firstName ? errors.firstName : ""}
-            leftIcon={UserRound}
-            required
-          />
-
-          <Input
-            label="Last name"
-            name="lastName"
-            placeholder="Jordan"
-            autoComplete="family-name"
-            maxLength={50}
-            value={form.lastName}
-            onChange={updateField}
-            onBlur={handleBlur}
-            error={touched.lastName ? errors.lastName : ""}
-            leftIcon={UserRound}
-            required
-          />
-        </div>
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-5"
+        noValidate
+      >
+        <Input
+          label="Username"
+          name="username"
+          type="text"
+          placeholder="Choose a username"
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          maxLength={50}
+          value={form.username}
+          onChange={updateField}
+          error={errors.username}
+          leftIcon={UserRound}
+          required
+        />
 
         <Input
           label="Email address"
@@ -197,8 +267,7 @@ export default function SignupPage() {
           maxLength={254}
           value={form.email}
           onChange={updateField}
-          onBlur={handleBlur}
-          error={touched.email ? errors.email : ""}
+          error={errors.email}
           leftIcon={Mail}
           required
         />
@@ -206,57 +275,66 @@ export default function SignupPage() {
         <PasswordField
           label="Password"
           name="password"
-          placeholder="Create a strong password"
+          placeholder="6–64 characters, no spaces"
           autoComplete="new-password"
+          minLength={6}
           maxLength={64}
           value={form.password}
           onChange={updateField}
-          onBlur={handleBlur}
-          error={touched.password ? errors.password : ""}
+          error={errors.password}
           required
         />
-
-        <PasswordChecklist password={form.password} />
 
         <PasswordField
           label="Confirm password"
           name="confirmPassword"
           placeholder="Enter the password again"
           autoComplete="new-password"
+          minLength={6}
           maxLength={64}
           value={form.confirmPassword}
           onChange={updateField}
-          onBlur={handleBlur}
-          error={touched.confirmPassword ? errors.confirmPassword : ""}
+          error={
+            errors.confirmPassword
+          }
           required
         />
 
+        <p className="-mt-2 text-xs text-[var(--muted-foreground)]">
+          Password must contain 6–64 characters and no spaces.
+        </p>
+
         <div>
-          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/35 p-4 text-sm text-[var(--muted-foreground)]">
+          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4 text-sm text-[var(--muted-foreground)]">
             <input
               name="terms"
               type="checkbox"
               checked={form.terms}
               onChange={updateField}
-              onBlur={handleBlur}
               className="mt-0.5 h-4 w-4 shrink-0 rounded border-[var(--input)] accent-blue-600"
             />
 
-            <span className="leading-6">
+            <span>
               I agree to the{" "}
-              <Link href="/terms" className="font-bold text-blue-600">
+              <Link
+                href="/terms"
+                className="font-bold text-blue-600 hover:text-blue-700"
+              >
                 Terms
               </Link>{" "}
               and{" "}
-              <Link href="/privacy" className="font-bold text-blue-600">
+              <Link
+                href="/privacy"
+                className="font-bold text-blue-600 hover:text-blue-700"
+              >
                 Privacy Policy
               </Link>
               .
             </span>
           </label>
 
-          {touched.terms && errors.terms ? (
-            <p role="alert" className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
+          {errors.terms ? (
+            <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
               {errors.terms}
             </p>
           ) : null}
@@ -269,7 +347,9 @@ export default function SignupPage() {
           disabled={!canSubmit}
           aria-busy={loading}
         >
-          {loading ? "Creating account..." : "Create secure account"}
+          {loading
+            ? "Creating account..."
+            : "Create account"}
         </Button>
       </form>
 
@@ -277,7 +357,7 @@ export default function SignupPage() {
         Already have an account?{" "}
         <Link
           href="/login"
-          className="focus-ring rounded-md font-bold text-blue-600 hover:text-blue-700"
+          className="font-bold text-blue-600 hover:text-blue-700"
         >
           Login
         </Link>

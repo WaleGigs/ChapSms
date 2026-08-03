@@ -1,9 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Script from "next/script";
 import toast from "react-hot-toast";
 import {
+  Building2,
   CreditCard,
+  Landmark,
+  LoaderCircle,
   ShieldCheck,
   Wallet,
   Zap,
@@ -11,9 +15,9 @@ import {
 
 import Button from "@/components/ui/Button";
 import { useWallet } from "@/hooks/useWallet";
-import { api } from "@/lib/api";
+import { paymentService } from "@/services/paymentService";
 
-const presetAmounts = [1000, 2500, 5000, 10000, 25000, 50000];
+const presetAmounts = [500, 1000, 2000, 5000, 10000, 20000];
 
 function formatNaira(value) {
   return `₦${Number(value || 0).toLocaleString("en-NG", {
@@ -23,75 +27,149 @@ function formatNaira(value) {
 }
 
 export default function WalletPage() {
-  const { wallet } = useWallet();
+  const {
+    wallet,
+    refreshWallet,
+    updateWalletBalance,
+  } = useWallet();
 
   const [amount, setAmount] = useState(5000);
+  const [gateway, setGateway] = useState("flutterwave");
+  const [paymentMethod, setPaymentMethod] = useState("bank");
+  const [scriptReady, setScriptReady] = useState(false);
   const [funding, setFunding] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   const numericAmount = useMemo(() => Number(amount) || 0, [amount]);
 
   async function handleFundWallet(event) {
     event.preventDefault();
 
+    if (gateway !== "flutterwave") {
+      toast("Paystack will be connected after its backend integration.");
+      return;
+    }
+
     if (!Number.isFinite(numericAmount) || numericAmount < 100) {
       toast.error("Minimum funding amount is ₦100");
+      return;
+    }
+
+    if (!scriptReady || typeof window.FlutterwaveCheckout !== "function") {
+      toast.error("Payment checkout is still loading. Try again in a moment.");
       return;
     }
 
     try {
       setFunding(true);
 
-      const response = await api("/payment/initialize", {
-        method: "POST",
-        body: JSON.stringify({
-          amount: numericAmount,
-        }),
+      const checkout = await paymentService.initializePayment({
+        amount: numericAmount,
+        paymentMethod,
       });
 
-      if (!response.paymentLink) {
-        throw new Error("Payment link was not returned");
+      if (!checkout?.txRef || !checkout?.publicKey) {
+        throw new Error("The server did not return valid checkout details");
       }
 
-      window.location.href = response.paymentLink;
+      let verificationStarted = false;
+      let modal;
+
+      modal = window.FlutterwaveCheckout({
+        public_key: checkout.publicKey,
+        tx_ref: checkout.txRef,
+        amount: checkout.amount,
+        currency: checkout.currency || "NGN",
+        payment_options: checkout.paymentOptions,
+        customer: checkout.customer,
+        meta: checkout.meta,
+        customizations: {
+          title: "ChapsSmS Wallet Funding",
+          description: `Fund your wallet with ${formatNaira(checkout.amount)}`,
+        },
+        configurations: {
+          session_duration: 10,
+          max_retry_attempt: 5,
+        },
+        bank_transfer_options: {
+          expires: 3600,
+        },
+        callback: async (payment) => {
+          verificationStarted = true;
+          setVerifying(true);
+
+          try {
+            const result = await paymentService.verifyPayment({
+              transactionId:
+                payment?.transaction_id || payment?.id,
+              txRef: checkout.txRef,
+            });
+
+            if (result?.walletBalance !== undefined) {
+              updateWalletBalance(Number(result.walletBalance));
+            }
+
+            await refreshWallet();
+            toast.success(result?.message || "Wallet funded successfully");
+            modal?.close();
+          } catch (error) {
+            console.error("Payment verification failed:", error);
+            toast.error(error?.message || "Payment could not be verified");
+          } finally {
+            setVerifying(false);
+            setFunding(false);
+          }
+        },
+        onclose: () => {
+          if (!verificationStarted) {
+            setFunding(false);
+            toast("Payment checkout closed");
+          }
+        },
+      });
     } catch (error) {
       console.error("Flutterwave initialization failed:", error);
-      toast.error(error.message || "Unable to start payment");
+      toast.error(error?.message || "Unable to start payment");
       setFunding(false);
     }
   }
 
+  const busy = funding || verifying;
+
   return (
-    <div className="mx-auto w-full max-w-6xl">
-      <div className="mb-7">
-        <h1 className="text-3xl font-black tracking-tight text-slate-950">
-          Add <span className="text-blue-600">Funds</span>
-        </h1>
+    <>
+      <Script
+        src="https://checkout.flutterwave.com/v3.js"
+        strategy="afterInteractive"
+        onLoad={() => setScriptReady(true)}
+        onError={() => {
+          setScriptReady(false);
+          toast.error("Unable to load Flutterwave checkout");
+        }}
+      />
 
-        <p className="mt-2 text-sm text-slate-500 sm:text-base">
-          Top up your ChapsSmS wallet securely with Flutterwave.
-        </p>
-      </div>
+      <div className="mx-auto w-full max-w-5xl">
+        <div className="mb-7">
+          <h1 className="text-3xl font-black tracking-tight text-[var(--foreground)]">
+            Add <span className="text-blue-600">Funds</span>
+          </h1>
+          <p className="mt-2 text-sm text-[var(--muted-foreground)] sm:text-base">
+            Select an amount, gateway and payment method without leaving this page.
+          </p>
+        </div>
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-          <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white">
-              <Wallet size={22} />
-            </div>
-
-            <div>
-              <h2 className="text-xl font-black text-slate-950">
-                Choose an amount
-              </h2>
-
-              <p className="mt-1 text-sm text-slate-500">
-                Select a preset amount or enter a custom value.
-              </p>
-            </div>
+        <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-8">
+          <div className="text-center">
+            <p className="text-xs font-bold uppercase tracking-[0.28em] text-[var(--muted-foreground)]">
+              Amount to add
+            </p>
+            <p className="mt-5 text-5xl font-black tracking-tight text-[var(--foreground)]">
+              {numericAmount > 0 ? formatNaira(numericAmount) : "₦"}
+            </p>
           </div>
 
-          <form onSubmit={handleFundWallet} className="mt-7">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <form onSubmit={handleFundWallet} className="mt-8">
+            <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
               {presetAmounts.map((value) => {
                 const selected = numericAmount === value;
 
@@ -100,13 +178,13 @@ export default function WalletPage() {
                     key={value}
                     type="button"
                     onClick={() => setAmount(value)}
-                    className={`h-12 rounded-xl border text-sm font-bold transition ${
+                    className={`min-h-12 rounded-2xl border px-2 text-xs font-black transition sm:text-sm ${
                       selected
                         ? "border-blue-600 bg-blue-600 text-white shadow-sm"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50"
+                        : "border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:border-blue-400"
                     }`}
                   >
-                    {formatNaira(value)}
+                    ₦{value.toLocaleString("en-NG")}
                   </button>
                 );
               })}
@@ -115,16 +193,14 @@ export default function WalletPage() {
             <div className="mt-6">
               <label
                 htmlFor="amount"
-                className="mb-2 block text-sm font-bold text-slate-700"
+                className="mb-2 block text-sm font-bold text-[var(--foreground)]"
               >
-                Or enter a custom amount
+                Custom amount
               </label>
-
               <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-black text-slate-400">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl font-black text-[var(--muted-foreground)]">
                   ₦
                 </span>
-
                 <input
                   id="amount"
                   name="amount"
@@ -134,93 +210,144 @@ export default function WalletPage() {
                   value={amount}
                   onChange={(event) => setAmount(event.target.value)}
                   placeholder="Enter amount"
-                  className="h-14 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-4 text-xl font-black text-slate-950 outline-none transition placeholder:text-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  className="h-16 w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 text-2xl font-black text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20"
                 />
               </div>
             </div>
 
+            <p className="mt-8 text-center text-[10px] font-bold uppercase tracking-[0.28em] text-[var(--muted-foreground)] sm:text-xs">
+              Pay with any option below
+            </p>
+
+            <div className="mt-4 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1.5">
+              <button
+                type="button"
+                onClick={() => setGateway("flutterwave")}
+                className={`min-h-12 rounded-xl text-sm font-black transition ${
+                  gateway === "flutterwave"
+                    ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+              >
+                Flutterwave
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGateway("paystack");
+                  toast("Paystack is coming after backend integration.");
+                }}
+                className={`relative min-h-12 rounded-xl text-sm font-black transition ${
+                  gateway === "paystack"
+                    ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+              >
+                Paystack
+                <span className="absolute right-2 top-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+                  Soon
+                </span>
+              </button>
+            </div>
+
+            <div className="mt-5 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1.5">
+              <button
+                type="button"
+                onClick={() => setPaymentMethod("bank")}
+                className={`flex min-h-14 items-center justify-center gap-2 rounded-xl text-sm font-black transition ${
+                  paymentMethod === "bank"
+                    ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+              >
+                <Landmark size={18} />
+                Bank
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod("card")}
+                className={`flex min-h-14 items-center justify-center gap-2 rounded-xl text-sm font-black transition ${
+                  paymentMethod === "card"
+                    ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+              >
+                <CreditCard size={18} />
+                Card
+              </button>
+            </div>
+
             <Button
               type="submit"
-              disabled={funding}
-              className="mt-6 h-12 w-full"
+              disabled={busy || gateway !== "flutterwave" || !scriptReady}
+              className="mt-7 h-14 w-full"
             >
-              <CreditCard size={18} />
-
-              {funding
-                ? "Opening checkout..."
-                : `Pay ${formatNaira(numericAmount)}`}
+              {busy ? (
+                <LoaderCircle size={19} className="animate-spin" />
+              ) : (
+                <Wallet size={19} />
+              )}
+              {verifying
+                ? "Verifying payment..."
+                : funding
+                  ? "Opening secure checkout..."
+                  : `Proceed to pay ${formatNaira(numericAmount)}`}
             </Button>
 
-            <p className="mt-4 text-center text-xs leading-5 text-slate-400">
-              You will be redirected to Flutterwave to complete your payment.
+            <p className="mt-4 flex items-center justify-center gap-2 text-xs text-[var(--muted-foreground)]">
+              <ShieldCheck size={15} />
+              Secured and verified by the backend
             </p>
           </form>
         </section>
 
-        <aside className="space-y-4">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
-              Current balance
-            </p>
-
-            <p className="mt-3 text-4xl font-black tracking-tight text-slate-950">
-              {formatNaira(wallet?.balance)}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="space-y-6">
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <Zap size={18} />
+        <div className="mt-5 grid gap-4 sm:grid-cols-3">
+          {[
+            {
+              icon: Zap,
+              title: "Instant credit",
+              text: "Your wallet updates after verified payment.",
+            },
+            {
+              icon: Building2,
+              title: "Bank or card",
+              text: "Choose a method before opening checkout.",
+            },
+            {
+              icon: ShieldCheck,
+              title: "Server verified",
+              text: "The secret key never enters the browser.",
+            },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.title}
+                className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-foreground)]">
+                  <Icon size={18} />
                 </div>
-
-                <div>
-                  <p className="font-bold text-slate-950">
-                    Instant credit
-                  </p>
-
-                  <p className="mt-1 text-sm leading-5 text-slate-500">
-                    Your wallet is credited after successful verification.
-                  </p>
-                </div>
+                <p className="mt-4 font-black text-[var(--foreground)]">
+                  {item.title}
+                </p>
+                <p className="mt-1 text-sm leading-6 text-[var(--muted-foreground)]">
+                  {item.text}
+                </p>
               </div>
+            );
+          })}
+        </div>
 
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <CreditCard size={18} />
-                </div>
-
-                <div>
-                  <p className="font-bold text-slate-950">
-                    Multiple payment methods
-                  </p>
-
-                  <p className="mt-1 text-sm leading-5 text-slate-500">
-                    Complete payment using the options available at checkout.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <ShieldCheck size={18} />
-                </div>
-
-                <div>
-                  <p className="font-bold text-slate-950">
-                    Secure verification
-                  </p>
-
-                  <p className="mt-1 text-sm leading-5 text-slate-500">
-                    Payments are verified by the backend before wallet credit.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </aside>
+        <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 text-center shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
+            Current wallet balance
+          </p>
+          <p className="mt-2 text-3xl font-black text-[var(--foreground)]">
+            {formatNaira(wallet?.balance)}
+          </p>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

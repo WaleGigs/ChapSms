@@ -101,11 +101,11 @@ export default function ApiKeysPage() {
   return (
     <div className="mx-auto w-full max-w-[1080px]">
       <div className="text-center">
-        <h1 className="text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">
+        <h1 className="text-3xl font-black tracking-tight text-[var(--foreground)] sm:text-4xl">
           API <span className="text-blue-600">Documentation</span>
         </h1>
 
-        <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-300 sm:text-base">
+        <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)] sm:text-base">
           Integrate ChapsSmS into your application and automate verification
           number purchases.
         </p>
@@ -134,17 +134,17 @@ export default function ApiKeysPage() {
           return (
             <div
               key={item.title}
-              className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
+              className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm"
             >
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent)] text-[var(--accent-foreground)]">
                 <Icon size={21} />
               </div>
 
-              <h2 className="mt-5 text-lg font-black text-slate-950">
+              <h2 className="mt-5 text-lg font-black text-[var(--foreground)]">
                 {item.title}
               </h2>
 
-              <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-300">
+              <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)]">
                 {item.text}
               </p>
             </div>
@@ -152,7 +152,7 @@ export default function ApiKeysPage() {
         })}
       </div>
 
-      <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+      <section className="mt-8 rounded-3xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm sm:p-8">
         <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
           <div className="flex items-start gap-4">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white">
@@ -160,11 +160,11 @@ export default function ApiKeysPage() {
             </div>
 
             <div>
-              <h2 className="text-xl font-black text-slate-950">
+              <h2 className="text-xl font-black text-[var(--foreground)]">
                 Getting started
               </h2>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-300">
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)]">
                 Include your API key in the Authorization header of every
                 request.
               </p>
@@ -183,7 +183,7 @@ export default function ApiKeysPage() {
 
         <div className="mt-7 space-y-5">
           <div>
-            <p className="mb-2 text-sm font-bold text-slate-700">Base URL</p>
+            <p className="mb-2 text-sm font-bold text-[var(--foreground)]">Base URL</p>
 
             <CopyBlock
               value="https://api.chapssms.com/api/v1"
@@ -197,7 +197,7 @@ export default function ApiKeysPage() {
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-bold text-slate-700">
+            <p className="mb-2 text-sm font-bold text-[var(--foreground)]">
               Authorization header
             </p>
 
@@ -213,19 +213,19 @@ export default function ApiKeysPage() {
           </div>
 
           <div>
-            <p className="mb-2 text-sm font-bold text-slate-700">
+            <p className="mb-2 text-sm font-bold text-[var(--foreground)]">
               Your API key
             </p>
 
             <div className="flex flex-col gap-3 sm:flex-row">
-              <div className="flex min-h-12 flex-1 items-center rounded-xl border border-slate-200 bg-slate-50 px-4 font-mono text-sm font-bold text-slate-700">
+              <div className="flex min-h-12 flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--muted)] px-4 font-mono text-sm font-bold text-[var(--foreground)]">
                 {visibleKey ? apiKey : "••••••••••••••••••••••••••••••"}
               </div>
 
               <button
                 type="button"
                 onClick={() => setVisibleKey((current) => !current)}
-                className="h-12 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+                className="h-12 rounded-xl border border-[var(--border)] px-4 text-sm font-bold text-[var(--foreground)] transition hover:bg-[var(--muted)]"
               >
                 {visibleKey ? "Hide" : "Show"}
               </button>
@@ -248,9 +248,9 @@ export default function ApiKeysPage() {
       </section>
 
       <div className="mt-10">
-        <h2 className="text-2xl font-black text-slate-950">API reference</h2>
+        <h2 className="text-2xl font-black text-[var(--foreground)]">API reference</h2>
 
-        <p className="mt-2 text-sm text-slate-500 dark:text-slate-300">
+        <p className="mt-2 text-sm text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)]">
           Expand an endpoint to view its request format and example.
         </p>
       </div>
@@ -262,17 +262,17 @@ export default function ApiKeysPage() {
           return (
             <div
               key={endpoint.id}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+              className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-sm"
             >
               <button
                 type="button"
                 onClick={() =>
                   setOpenEndpoint(open ? null : endpoint.id)
                 }
-                className="flex w-full items-center justify-between gap-4 p-5 text-left transition hover:bg-slate-50"
+                className="flex w-full items-center justify-between gap-4 p-5 text-left transition hover:bg-[var(--muted)]"
               >
                 <div className="flex min-w-0 items-center gap-4">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-foreground)]">
                     {endpoint.id === "services" ? (
                       <ListChecks size={19} />
                     ) : endpoint.id === "number" ? (
@@ -285,14 +285,14 @@ export default function ApiKeysPage() {
                   </div>
 
                   <div className="min-w-0">
-                    <h3 className="font-black text-slate-950">
-                      <span className="mr-2 text-slate-400">
+                    <h3 className="font-black text-[var(--foreground)]">
+                      <span className="mr-2 text-[var(--muted-foreground)]">
                         {endpoint.number}.
                       </span>
                       {endpoint.title}
                     </h3>
 
-                    <p className="mt-1 truncate font-mono text-xs text-slate-400">
+                    <p className="mt-1 truncate font-mono text-xs text-[var(--muted-foreground)]">
                       {endpoint.method} {endpoint.path}
                     </p>
                   </div>
@@ -300,15 +300,15 @@ export default function ApiKeysPage() {
 
                 <ChevronDown
                   size={18}
-                  className={`shrink-0 text-slate-400 transition ${
+                  className={`shrink-0 text-[var(--muted-foreground)] transition ${
                     open ? "rotate-180" : ""
                   }`}
                 />
               </button>
 
               {open && (
-                <div className="border-t border-slate-200 p-5">
-                  <p className="text-sm leading-6 text-slate-600">
+                <div className="border-t border-[var(--border)] p-5">
+                  <p className="text-sm leading-6 text-[var(--muted-foreground)]">
                     {endpoint.description}
                   </p>
 
@@ -333,23 +333,23 @@ export default function ApiKeysPage() {
         })}
       </div>
 
-      <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-xl font-black text-slate-950">Rate limits</h2>
+      <section className="mt-8 rounded-3xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
+        <h2 className="text-xl font-black text-[var(--foreground)]">Rate limits</h2>
 
-        <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-300">
+        <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)]">
           API clients are currently limited to 60 requests per minute per API
           key. Space repeated order-status checks by at least five seconds.
         </p>
       </section>
 
       {showRegenerateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
-            <h2 className="text-2xl font-black text-slate-950">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4">
+          <div className="w-full max-w-md rounded-3xl bg-[var(--card)] p-6 shadow-2xl sm:p-8">
+            <h2 className="text-2xl font-black text-[var(--foreground)]">
               Regenerate API key?
             </h2>
 
-            <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-300">
+            <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] dark:text-[var(--muted-foreground)]">
               Your existing key will stop working. Applications using it must
               be updated.
             </p>
@@ -382,8 +382,8 @@ export default function ApiKeysPage() {
 
 function CopyBlock({ value, onCopy }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-sm text-slate-700">
+    <div className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)] px-4 py-3">
+      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-sm text-[var(--foreground)]">
         {value}
       </code>
 
@@ -391,7 +391,7 @@ function CopyBlock({ value, onCopy }) {
         type="button"
         onClick={onCopy}
         aria-label="Copy"
-        className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-950"
+        className="shrink-0 rounded-lg p-2 text-[var(--muted-foreground)] transition hover:bg-[var(--card)] hover:text-[var(--foreground)]"
       >
         <Copy size={17} />
       </button>

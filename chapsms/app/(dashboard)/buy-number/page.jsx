@@ -698,17 +698,17 @@ async function handleCancel() {
 
   function getStatusClasses() {
     if (otpCode || orderStatus === "received") {
-      return "bg-green-50 text-green-700 ring-green-200";
+      return "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-900";
     }
 
     if (
       orderStatus === "expired" ||
       orderStatus === "cancelled"
     ) {
-      return "bg-red-50 text-red-700 ring-red-200";
+      return "bg-red-50 text-red-700 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900";
     }
 
-    return "bg-blue-50 text-blue-700 ring-blue-200";
+    return "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900";
   }
 
   if (restoringOrder) {
@@ -720,7 +720,7 @@ async function handleCancel() {
             size={30}
           />
 
-          <p className="mt-3 text-sm text-slate-500">
+          <p className="mt-3 text-sm text-[var(--muted-foreground)]">
             Restoring your active order...
           </p>
         </div>
@@ -731,11 +731,11 @@ async function handleCancel() {
   return (
     <div className="mx-auto w-full max-w-[1120px] overflow-x-hidden">
       <div className="mb-5 sm:mb-6">
-        <h1 className="text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">
+        <h1 className="text-2xl font-black tracking-tight text-[var(--foreground)] sm:text-3xl">
           Receive <span className="text-blue-600">SMS</span>
         </h1>
 
-        <p className="mt-2 text-sm text-slate-500 sm:text-base">
+        <p className="mt-2 text-sm text-[var(--muted-foreground)] sm:text-base">
           Buy a number and receive your verification code in seconds.
         </p>
       </div>
@@ -743,7 +743,7 @@ async function handleCancel() {
       {!currentOrder ? (
         <>
           {/* <div className="mb-5 flex justify-center sm:mb-6">
-            <div className="grid w-full max-w-md grid-cols-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm sm:w-auto">
+            <div className="grid w-full max-w-md grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-sm sm:w-auto">
              
 
             
@@ -751,18 +751,18 @@ async function handleCancel() {
           </div> */}
 
           <div className="grid min-w-0 items-stretch gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_310px]">
-          <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
+          <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
             <div className="flex items-start justify-between gap-3 sm:gap-4">
               <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)] text-[var(--accent-foreground)]">
                   <MessageSquareText size={21} />
                 </div>
 
                 <div className="min-w-0">
-                  <h2 className="text-lg font-black text-slate-950 sm:text-xl">
+                  <h2 className="text-lg font-black text-[var(--foreground)] sm:text-xl">
                     Buy a number
                   </h2>
-<div className="rounded-2xl border border-gray-200 bg-white p-1.5 shadow-sm dark:border-gray-800 dark:bg-gray-950">
+<div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-sm">
   <div className="relative grid grid-cols-2">
     <div
       aria-hidden="true"
@@ -804,7 +804,7 @@ async function handleCancel() {
           className={`relative z-10 min-h-11 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
             isActive
               ? "text-white"
-              : "text-gray-600 hover:text-gray-950 dark:text-gray-400 dark:hover:text-white"
+              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
           }`}
         >
           {server.label}
@@ -813,7 +813,7 @@ async function handleCancel() {
     })}
   </div>
 </div>
-                  <p className="mt-1 text-sm text-slate-500">
+                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                     Select a country and service to continue.
                   </p>
                 </div>
@@ -824,7 +824,7 @@ async function handleCancel() {
                 onClick={reloadCatalog}
                 disabled={catalogLoading}
                 aria-label="Refresh live catalog"
-                className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                className="rounded-xl p-2 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
               >
                 <RefreshCw
                   size={17}
@@ -836,15 +836,15 @@ async function handleCancel() {
             </div>
 
             {catalogError && !countries.length && (
-              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
-                <p className="text-sm font-semibold text-red-700">
+              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
+                <p className="text-sm font-semibold text-red-700 dark:text-red-300">
                   {catalogError}
                 </p>
 
                 <button
                   type="button"
                   onClick={reloadCatalog}
-                  className="mt-3 text-sm font-bold text-red-700 underline"
+                  className="mt-3 text-sm font-bold text-red-700 dark:text-red-300 underline"
                 >
                   Try again
                 </button>
@@ -859,7 +859,7 @@ async function handleCancel() {
                     size={30}
                   />
 
-                  <p className="mt-3 text-sm text-slate-500">
+                  <p className="mt-3 text-sm text-[var(--muted-foreground)]">
                     Loading live countries and services...
                   </p>
                 </div>
@@ -867,7 +867,7 @@ async function handleCancel() {
             ) : (
               <div className="mt-6 space-y-5 sm:mt-7">
                 <div>
-                  <label className="mb-2 block text-sm font-bold text-slate-700">
+                  <label className="mb-2 block text-sm font-bold text-[var(--foreground)]">
                     Country
                   </label>
 
@@ -879,7 +879,7 @@ async function handleCancel() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-bold text-slate-700">
+                  <label className="mb-2 block text-sm font-bold text-[var(--foreground)]">
                     Service
                   </label>
 
@@ -891,13 +891,13 @@ async function handleCancel() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-4 rounded-2xl bg-slate-50 px-4 py-4 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
+                <div className="flex flex-col gap-4 rounded-2xl bg-[var(--muted)] px-4 py-4 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
                   <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
                       Live price
                     </p>
 
-                    <p className="mt-1 text-2xl font-black text-slate-950">
+                    <p className="mt-1 text-2xl font-black text-[var(--foreground)]">
                       {priceLoading
                         ? "Checking..."
                         : selectedService && estimatedPrice > 0
@@ -913,19 +913,21 @@ async function handleCancel() {
                   </div>
 
                   <div className="min-w-0 text-left min-[420px]:text-right">
-                    <p className="truncate text-sm font-bold text-slate-800">
+                    <p className="truncate text-sm font-bold text-[var(--foreground)]">
                     
                       {selectedCountry?.eng ||
+                        selectedCountry?.name ||
+                        selectedCountry?.label ||
                         "Select country"}
                     </p>
 
-                    <p className="mt-1 truncate text-sm text-slate-500">
+                    <p className="mt-1 truncate text-sm text-[var(--muted-foreground)]">
                       {selectedService?.name ||
                         "Select service"}
                     </p>
 
                     {selectedService && (
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                      <p className="mt-1 text-xs font-semibold text-[var(--muted-foreground)]">
                         {Number.isFinite(serviceStock) &&
                         serviceStock > 0
                           ? `${serviceStock.toLocaleString()} available`
@@ -974,8 +976,8 @@ async function handleCancel() {
             )}
           </section>
 
-          <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:rounded-3xl sm:p-6">
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+          <aside className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--muted-foreground)]">
               How it works
             </p>
 
@@ -994,7 +996,7 @@ async function handleCancel() {
                     {index + 1}
                   </span>
 
-                  <p className="pt-1 text-sm leading-6 text-slate-600">
+                  <p className="pt-1 text-sm leading-6 text-[var(--muted-foreground)]">
                     {item}
                   </p>
                 </div>
@@ -1004,14 +1006,14 @@ async function handleCancel() {
           </div>
         </>
       ) : (
-        <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
+        <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
           <div className="flex items-start justify-between gap-3 sm:gap-4">
             <div className="min-w-0">
-              <h2 className="text-lg font-black text-slate-950 sm:text-xl">
+              <h2 className="text-lg font-black text-[var(--foreground)] sm:text-xl">
                 Active order
               </h2>
 
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                 Use this number on{" "}
                 {formatName(
                   currentOrder.service ||
@@ -1027,7 +1029,7 @@ async function handleCancel() {
               disabled={
                 checkingOrder || orderIsClosed
               }
-              className="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RefreshCw
                 size={16}
@@ -1061,7 +1063,7 @@ async function handleCancel() {
                 {getStatusLabel()}
               </span>
 
-              <p className="mt-3 text-sm text-slate-500">
+              <p className="mt-3 text-sm text-[var(--muted-foreground)]">
                 {selectedCountry?.flag ||
                   currentOrder.country}{" "}
                 {selectedCountry?.eng ||
@@ -1074,12 +1076,12 @@ async function handleCancel() {
               </p>
             </div>
 
-            <div className="w-full rounded-xl bg-slate-50 px-4 py-3 text-left sm:w-auto sm:text-right">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+            <div className="w-full rounded-xl bg-[var(--muted)] px-4 py-3 text-left sm:w-auto sm:text-right">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
                 Paid
               </p>
 
-              <p className="mt-1 font-black text-slate-950">
+              <p className="mt-1 font-black text-[var(--foreground)]">
                 {formatNaira(
                   currentOrder.price ?? estimatedPrice
                 )}
@@ -1088,8 +1090,8 @@ async function handleCancel() {
           </div>
 
           <div className="mt-5 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <div className="flex items-center gap-2 text-slate-400">
+            <div className="rounded-2xl bg-[var(--muted)] p-4">
+              <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
                 <Hash size={14} />
 
                 <p className="text-[10px] font-bold uppercase tracking-[0.14em]">
@@ -1106,19 +1108,19 @@ async function handleCancel() {
                     "Order ID copied"
                   )
                 }
-                className="mt-2 max-w-full truncate text-left font-mono text-sm font-bold text-slate-800"
+                className="mt-2 max-w-full truncate text-left font-mono text-sm font-bold text-[var(--foreground)]"
               >
                 {currentOrder.providerOrderId ||
                   currentOrderId}
               </button>
             </div>
 
-          <div className="rounded-2xl bg-slate-50 p-4">
-  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          <div className="rounded-2xl bg-[var(--muted)] p-4">
+  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
     Server
   </p>
 
-  <p className="mt-2 text-sm font-bold text-slate-800">
+  <p className="mt-2 text-sm font-bold text-[var(--foreground)]">
     {currentOrder.server === "server1"
       ? "SERVER 1"
       : currentOrder.server === "server2"
@@ -1127,24 +1129,24 @@ async function handleCancel() {
   </p>
 </div>
 
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+            <div className="rounded-2xl bg-[var(--muted)] p-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
                 Purchased
               </p>
 
-              <p className="mt-2 text-sm font-bold text-slate-800">
+              <p className="mt-2 text-sm font-bold text-[var(--foreground)]">
                 {formatDate(currentOrder.createdAt)}
               </p>
             </div>
           </div>
 
-          <div className="mt-5 rounded-2xl border border-slate-200 p-4 sm:p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+          <div className="mt-5 rounded-2xl border border-[var(--border)] p-4 sm:p-5">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
               Virtual number
             </p>
 
             <div className="mt-3 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-              <p className="break-all text-2xl font-black tracking-tight text-slate-950 min-[420px]:text-3xl sm:text-[34px]">
+              <p className="break-all text-2xl font-black tracking-tight text-[var(--foreground)] min-[420px]:text-3xl sm:text-[34px]">
                 {formatPhoneNumber(
                   currentOrder.phoneNumber
                 )}
@@ -1177,7 +1179,7 @@ async function handleCancel() {
               className={`text-xs font-bold uppercase tracking-[0.14em] ${
                 otpCode
                   ? "text-blue-100"
-                  : "text-slate-400"
+                  : "text-[var(--muted-foreground)]"
               }`}
             >
               OTP code
@@ -1212,7 +1214,7 @@ async function handleCancel() {
           </div>
 
           {!otpCode && !orderIsClosed && (
-            <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+            <div className="mt-5 rounded-2xl bg-[var(--muted)] p-4">
               <div className="flex flex-col gap-4 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <Timer
@@ -1221,17 +1223,17 @@ async function handleCancel() {
                   />
 
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-800">
+                    <p className="text-sm font-bold text-[var(--foreground)]">
                       Waiting for SMS
                     </p>
 
-                    <p className="mt-0.5 text-xs text-slate-500">
+                    <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
                       Checking automatically every five seconds.
                     </p>
                   </div>
                 </div>
 
-                <p className="shrink-0 text-left text-xl font-black text-slate-950 min-[420px]:text-right">
+                <p className="shrink-0 text-left text-xl font-black text-[var(--foreground)] min-[420px]:text-right">
                   <CountdownTimer
                     initialSeconds={1200}
                     onExpire={() => {
@@ -1267,7 +1269,7 @@ async function handleCancel() {
                 type="button"
                 onClick={handleCancel}
                 disabled={cancellingOrder}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-5 text-sm font-bold text-red-600 transition hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-1"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-[var(--card)] dark:border-red-900 px-5 text-sm font-bold text-red-600 transition hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-1"
               >
                 {cancellingOrder ? (
                   <LoaderCircle
