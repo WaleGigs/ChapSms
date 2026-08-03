@@ -29,10 +29,12 @@ const transactionSchema = new mongoose.Schema(
     reference: {
       type: String,
       trim: true,
+      uppercase: true,
     },
 
     transactionId: {
-      type: Number,
+      type: String,
+      trim: true,
     },
 
     paymentGateway: {
@@ -49,6 +51,20 @@ const transactionSchema = new mongoose.Schema(
     paymentMethod: {
       type: String,
       default: "",
+    },
+
+    // Optional: Link wallet transaction to an order
+    orderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Order",
+      default: null,
+    },
+
+    // Public server only (never store provider here)
+    server: {
+      type: String,
+      enum: ["server1", "server2"],
+      default: null,
     },
   },
   {
@@ -83,5 +99,41 @@ const walletSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+/*
+|--------------------------------------------------------------------------
+| Indexes
+|--------------------------------------------------------------------------
+*/
+
+
+walletSchema.index({
+  "transactions.reference": 1,
+});
+
+walletSchema.index({
+  "transactions.transactionId": 1,
+});
+
+/*
+|--------------------------------------------------------------------------
+| Virtuals
+|--------------------------------------------------------------------------
+*/
+
+walletSchema.virtual("formattedBalance").get(function () {
+  return this.balance.toLocaleString("en-NG", {
+    style: "currency",
+    currency: "NGN",
+  });
+});
+
+walletSchema.set("toJSON", {
+  virtuals: true,
+});
+
+walletSchema.set("toObject", {
+  virtuals: true,
+});
 
 module.exports = mongoose.model("Wallet", walletSchema);

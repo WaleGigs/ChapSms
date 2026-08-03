@@ -786,23 +786,270 @@ async function getCountries() {
     );
   }
 
-    return result;
+    if (Array.isArray(result)) {
+  return result;
+}
+
+if (result.countries && Array.isArray(result.countries)) {
+  return result.countries;
+}
+
+return Object.values(result);
     
 }
-    async function getPrice({ service, country }) {
-  // Normalize first
-  const normalizedService = normalizeSmsBowerService(service);
-  const normalizedCountry = normalizeSmsBowerCountry(country);
 
-  console.log("SMSBower getPrice input:", {
-    service,
-    country,
+function parseSmsBowerJson(data, responseText, label) {
+  let parsed = data;
+
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      throw createProviderError(
+        `Unable to parse SMSBower ${label} response`,
+        {
+          code: `INVALID_${String(label)
+            .toUpperCase()
+            .replace(/\s+/g, "_")}_RESPONSE`,
+          retryable: true,
+          rawResponse: responseText,
+        }
+      );
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw createProviderError(
+      `SMSBower returned an invalid ${label} response`,
+      {
+        code: `INVALID_${String(label)
+          .toUpperCase()
+          .replace(/\s+/g, "_")}_RESPONSE`,
+        retryable: true,
+        rawResponse: responseText,
+      }
+    );
+  }
+
+  return parsed;
+}
+
+function findNestedValue(object, desiredKey) {
+  if (!object || typeof object !== "object") {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(object, desiredKey)) {
+    return object[desiredKey];
+  }
+
+  const normalizedDesired = String(desiredKey || "")
+    .trim()
+    .toLowerCase();
+
+  const match = Object.entries(object).find(([key]) => {
+    const normalizedKey = String(key || "")
+      .trim()
+      .toLowerCase();
+
+    return (
+      normalizedKey === normalizedDesired ||
+      normalizeSmsBowerCountry(normalizedKey) ===
+        normalizeSmsBowerCountry(normalizedDesired) ||
+      normalizeSmsBowerService(normalizedKey) ===
+        normalizeSmsBowerService(normalizedDesired)
+    );
   });
 
-  console.log("SMSBower normalized:", {
+  return match?.[1] ?? null;
+}
+
+function extractOperatorMap(
+  responseData,
+  normalizedCountry,
+  normalizedService
+) {
+  const containers = [
+    responseData,
+    responseData?.data,
+    responseData?.result,
+    responseData?.prices,
+  ].filter(Boolean);
+
+  for (const container of containers) {
+    const countryEntry =
+      findNestedValue(
+        container,
+        normalizedCountry
+      );
+
+    if (!countryEntry) {
+      continue;
+    }
+
+    const serviceEntry =
+      findNestedValue(
+        countryEntry,
+        normalizedService
+      );
+
+    if (
+      serviceEntry &&
+      typeof serviceEntry === "object"
+    ) {
+      return serviceEntry;
+    }
+  }
+
+  return null;
+}
+
+function normalizeOperatorEntries(
+  operatorMap,
+  currency
+) {
+  if (
+    !operatorMap ||
+    typeof operatorMap !== "object"
+  ) {
+    return [];
+  }
+
+  return Object.entries(operatorMap)
+    .map(([key, item]) => {
+      const source =
+        item &&
+        typeof item === "object"
+          ? item
+          : {};
+
+      const id = String(
+        source.provider_id ??
+          source.providerId ??
+          source.operator ??
+          source.id ??
+          key
+      ).trim();
+
+      const price = Number(
+        source.price ??
+          source.cost ??
+          source.amount
+      );
+
+      const stock = Number(
+        source.count ??
+          source.stock ??
+          source.quantity ??
+          0
+      );
+
+      if (
+        !id ||
+        !Number.isFinite(price) ||
+        price <= 0
+      ) {
+        return null;
+      }
+
+      return {
+        id,
+        operator: id,
+        name: `Operator ${id}`,
+        price,
+        stock:
+          Number.isFinite(stock) &&
+          stock >= 0
+            ? stock
+            : 0,
+        currency,
+      };
+    })
+    .filter(Boolean)
+    .sort((first, second) => {
+      if (first.price !== second.price) {
+        return first.price - second.price;
+      }
+
+      return second.stock - first.stock;
+    });
+}
+
+async function getOperators({
+  service,
+  country,
+}) {
+  const normalizedService =
+    normalizeSmsBowerService(service);
+
+  const normalizedCountry =
+    normalizeSmsBowerCountry(country);
+
+  const response = await request(
+    {
+      action: "getPricesV3",
+      service: normalizedService,
+      country: normalizedCountry,
+    },
+    {
+      retryable: true,
+    }
+  );
+
+  const prices = parseSmsBowerJson(
+    response.data,
+    response.text,
+    "operator prices"
+  );
+
+  const operatorMap =
+    extractOperatorMap(
+      prices,
+      normalizedCountry,
+      normalizedService
+    );
+
+  const currency =
+    process.env.SMSBOWER_CURRENCY ||
+    "USD";
+
+  const operators =
+    normalizeOperatorEntries(
+      operatorMap,
+      currency
+    );
+
+  if (!operators.length) {
+    throw createProviderError(
+      "No SMSBower operators are currently available for this country and service",
+      {
+        status: 409,
+        code: "NO_OPERATORS",
+        retryable: true,
+        rawResponse: response.text,
+      }
+    );
+  }
+
+  return {
+    provider: PROVIDER_NAME,
     service: normalizedService,
     country: normalizedCountry,
-  });
+    operators,
+    currency,
+    raw: prices,
+  };
+}
+
+async function getAggregatedPrice({
+  service,
+  country,
+}) {
+  const normalizedService =
+    normalizeSmsBowerService(service);
+
+  const normalizedCountry =
+    normalizeSmsBowerCountry(country);
 
   const response = await request(
     {
@@ -815,27 +1062,16 @@ async function getCountries() {
     }
   );
 
-  console.log("SMSBower raw price response:", response.text);
-
-  let prices = response.data;
-
-  if (typeof prices === "string") {
-    try {
-      prices = JSON.parse(prices);
-    } catch {
-      throw createProviderError(
-        "Unable to parse SMSBower price response",
-        {
-          code: "INVALID_PRICE_RESPONSE",
-          retryable: true,
-          rawResponse: response.text,
-        }
-      );
-    }
-  }
+  const prices = parseSmsBowerJson(
+    response.data,
+    response.text,
+    "price"
+  );
 
   const entry =
-    prices?.[normalizedCountry]?.[normalizedService];
+    prices?.[normalizedCountry]?.[
+      normalizedService
+    ];
 
   if (!entry) {
     throw createProviderError(
@@ -852,7 +1088,10 @@ async function getCountries() {
   const price = Number(entry.cost);
   const stock = Number(entry.count);
 
-  if (!Number.isFinite(price) || price <= 0) {
+  if (
+    !Number.isFinite(price) ||
+    price <= 0
+  ) {
     throw createProviderError(
       "SMSBower returned an invalid price",
       {
@@ -867,17 +1106,99 @@ async function getCountries() {
     provider: PROVIDER_NAME,
     service: normalizedService,
     country: normalizedCountry,
+    operator: "any",
     price,
-    stock: Number.isFinite(stock) ? stock : 0,
+    stock:
+      Number.isFinite(stock)
+        ? stock
+        : 0,
     currency:
-      process.env.SMSBOWER_CURRENCY || "USD",
+      process.env.SMSBOWER_CURRENCY ||
+      "USD",
     raw: prices,
   };
+}
+
+async function getPrice({
+  service,
+  country,
+  operator = "any",
+}) {
+  const normalizedOperator =
+    String(operator || "any")
+      .trim()
+      .toLowerCase() || "any";
+
+  try {
+    const result = await getOperators({
+      service,
+      country,
+    });
+
+    const selectedOperator =
+      normalizedOperator === "any"
+        ? result.operators[0]
+        : result.operators.find(
+            (item) =>
+              String(item.id)
+                .trim()
+                .toLowerCase() ===
+              normalizedOperator
+          );
+
+    if (!selectedOperator) {
+      throw createProviderError(
+        `SMSBower operator ${operator} is not currently available for this country and service`,
+        {
+          status: 409,
+          code:
+            "OPERATOR_NOT_AVAILABLE",
+          retryable: true,
+          rawResponse:
+            JSON.stringify(
+              result.operators
+            ),
+        }
+      );
+    }
+
+    return {
+      provider: PROVIDER_NAME,
+      service: result.service,
+      country: result.country,
+      operator: selectedOperator.id,
+      price: selectedOperator.price,
+      stock: selectedOperator.stock,
+      currency:
+        selectedOperator.currency ||
+        result.currency,
+      raw: result.raw,
+    };
+  } catch (error) {
+    /*
+     * The ordinary aggregate quote is retained only
+     * as a fallback for "any". A fixed operator must
+     * never silently fall back to a random provider.
+     */
+    if (
+      normalizedOperator !== "any" ||
+      error.code ===
+        "OPERATOR_NOT_AVAILABLE"
+    ) {
+      throw error;
+    }
+
+    return getAggregatedPrice({
+      service,
+      country,
+    });
+  }
 }
 
 async function buyNumber({
   service,
   country,
+  operator = "any",
   maxPrice,
   minPrice,
   providerIds,
@@ -902,6 +1223,20 @@ async function buyNumber({
     country: normalizedCountry,
   });
 
+  const normalizedOperator =
+    String(operator || "any")
+      .trim()
+      .toLowerCase() || "any";
+
+  const selectedProviderIds =
+    providerIds ||
+    (
+      normalizedOperator !== "any" &&
+      normalizedOperator !== "default"
+        ? normalizedOperator
+        : undefined
+    );
+
   const response = await request(
     {
       action: "getNumberV2",
@@ -913,8 +1248,11 @@ async function buyNumber({
       ...(minPrice !== undefined
         ? { minPrice }
         : {}),
-      ...(providerIds
-        ? { providerIds }
+      ...(selectedProviderIds
+        ? {
+            providerIds:
+              selectedProviderIds,
+          }
         : {}),
       ...(exceptProviderIds
         ? { exceptProviderIds }
@@ -936,10 +1274,19 @@ async function buyNumber({
     response.text
   );
 
-  return parseNumberResponse(
-    response.data,
-    response.text
-  );
+  const parsed =
+    parseNumberResponse(
+      response.data,
+      response.text
+    );
+
+  return {
+    ...parsed,
+    operator:
+      selectedProviderIds ||
+      parsed.operator ||
+      "any",
+  };
 }
 async function getOrder(orderId) {
   const normalizedOrderId =
@@ -1105,6 +1452,7 @@ module.exports = {
   getBalance,
   getServices,
   getCountries,
+  getOperators,
   getPrice,
   buyNumber,
   getOrder,

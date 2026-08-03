@@ -1,261 +1,281 @@
-const axios = require("axios");
+const providerManager = require(
+  "../services/providers/providerManager"
+);
+const pricingService = require(
+  "../services/pricingService"
+);
 
-const FIVE_SIM_PRICES_URL = "https://5sim.net/v1/guest/prices";
+const VALID_SERVERS = new Set(["server1", "server2"]);
+const CACHE_TTL_MS = Number(
+  process.env.CATALOG_CACHE_TTL_MS || 5 * 60 * 1000
+);
+const catalogCache = new Map();
 
-const CACHE_DURATION_MS = 60 * 1000;
+const META_KEYS = new Set([
+  "success",
+  "server",
+  "provider",
+  "providerName",
+  "currency",
+  "updatedAt",
+  "raw",
+  "message",
+  "status",
+]);
 
-let catalogCache = null;
-let catalogCacheExpiresAt = 0;
-
-const countryNames = {
-  usa: "United States",
-  england: "United Kingdom",
-  nigeria: "Nigeria",
-  canada: "Canada",
-  germany: "Germany",
-  france: "France",
-  india: "India",
-  brazil: "Brazil",
-  southafrica: "South Africa",
-  indonesia: "Indonesia",
-  philippines: "Philippines",
-  netherlands: "Netherlands",
-  poland: "Poland",
-  spain: "Spain",
-  italy: "Italy",
-  mexico: "Mexico",
-  argentina: "Argentina",
-  australia: "Australia",
-  turkey: "Turkey",
-  ukraine: "Ukraine",
-};
-
-const countryFlags = {
-  usa: "🇺🇸",
-  england: "🇬🇧",
-  nigeria: "🇳🇬",
-  canada: "🇨🇦",
-  germany: "🇩🇪",
-  france: "🇫🇷",
-  india: "🇮🇳",
-  brazil: "🇧🇷",
-  southafrica: "🇿🇦",
-  indonesia: "🇮🇩",
-  philippines: "🇵🇭",
-  netherlands: "🇳🇱",
-  poland: "🇵🇱",
-  spain: "🇪🇸",
-  italy: "🇮🇹",
-  mexico: "🇲🇽",
-  argentina: "🇦🇷",
-  australia: "🇦🇺",
-  turkey: "🇹🇷",
-  ukraine: "🇺🇦",
-};
-
-function formatName(value) {
-  return String(value || "")
-    .replace(/[-_]/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+function createCatalogError(
+  message,
+  { code = "CATALOG_ERROR", status = 502 } = {}
+) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
 }
 
-function calculateCustomerPrice(providerPrice) {
-  const exchangeRate = Number(process.env.NGN_PER_USD);
-  const markupPercent = Number(
-    process.env.PRICE_MARKUP_PERCENT || 0
+function normalizeServer(value) {
+  const server = String(value || "").trim().toLowerCase();
+
+  if (!VALID_SERVERS.has(server)) {
+    throw createCatalogError("Please select a valid server", {
+      code: "INVALID_SERVER",
+      status: 400,
+    });
+  }
+
+  return server;
+}
+
+function hasOwn(object, key) {
+  return (
+    object &&
+    typeof object === "object" &&
+    Object.prototype.hasOwnProperty.call(object, key)
   );
+}
 
-  const numericProviderPrice = Number(providerPrice);
+function unwrapCollection(response, possibleKeys) {
+  const containers = [
+    response,
+    response?.data,
+    response?.result,
+    response?.response,
+  ];
 
-  if (
-    !Number.isFinite(numericProviderPrice) ||
-    numericProviderPrice <= 0
-  ) {
-    throw new Error("5SIM returned an invalid price");
+  for (const container of containers) {
+    if (!container || typeof container !== "object") {
+      continue;
+    }
+
+    for (const key of possibleKeys) {
+      if (hasOwn(container, key)) {
+        return container[key];
+      }
+    }
   }
 
-  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) {
-    throw new Error("NGN_PER_USD is not configured correctly");
+  for (const candidate of [
+    response?.data,
+    response?.result,
+    response?.response,
+    response,
+  ]) {
+    if (
+      Array.isArray(candidate) ||
+      (candidate && typeof candidate === "object")
+    ) {
+      return candidate;
+    }
   }
 
-  if (!Number.isFinite(markupPercent) || markupPercent < 0) {
-    throw new Error(
-      "PRICE_MARKUP_PERCENT is not configured correctly"
+  return [];
+}
+
+function collectionEntries(collection) {
+  if (Array.isArray(collection)) {
+    return collection.map((item, index) => [String(index), item]);
+  }
+
+  if (collection && typeof collection === "object") {
+    return Object.entries(collection).filter(
+      ([key]) => !META_KEYS.has(key)
     );
   }
 
-  const convertedPrice = numericProviderPrice * exchangeRate;
-  const markup = convertedPrice * (markupPercent / 100);
-
-  return Math.ceil(convertedPrice + markup);
+  return [];
 }
 
-function getAvailableOperatorEntries(operators) {
-  if (!operators || typeof operators !== "object") {
-    return [];
-  }
+function removeDuplicates(collection, getKey) {
+  const usedKeys = new Set();
 
-  return Object.entries(operators)
-    .map(([operator, details]) => ({
-      operator,
-      ...details,
-    }))
-    .filter((entry) => {
-      return (
-        entry &&
-        Number(entry.count) > 0 &&
-        Number(entry.cost) > 0
-      );
-    });
-}
+  return collection.filter((item) => {
+    const key = String(getKey(item) || "").toLowerCase();
 
-function summarizeProduct(operators) {
-  const entries = getAvailableOperatorEntries(operators);
+    if (!key || usedKeys.has(key)) {
+      return false;
+    }
 
-  if (entries.length === 0) {
-    return null;
-  }
-
-  const available = entries.reduce(
-    (total, entry) => total + Number(entry.count || 0),
-    0
-  );
-
-  const cheapestEntry = entries.reduce((cheapest, entry) => {
-    if (!cheapest) return entry;
-
-    return Number(entry.cost) < Number(cheapest.cost)
-      ? entry
-      : cheapest;
-  }, null);
-
-  const validRates = entries
-    .map((entry) => Number(entry.rate))
-    .filter((rate) => Number.isFinite(rate));
-
-  const bestRate = validRates.length
-    ? Math.max(...validRates)
-    : null;
-
-  return {
-    available,
-    providerPrice: Number(cheapestEntry.cost),
-    priceNgn: calculateCustomerPrice(cheapestEntry.cost),
-    preferredOperator: cheapestEntry.operator,
-    deliveryRate: bestRate,
-  };
-}
-
-async function buildCatalog() {
-  const { data } = await axios.get(FIVE_SIM_PRICES_URL, {
-    headers: {
-      Accept: "application/json",
-    },
-    timeout: 15000,
+    usedKeys.add(key);
+    return true;
   });
+}
 
-  if (!data || typeof data !== "object") {
-    throw new Error("5SIM returned an invalid catalog response");
-  }
+function normalizeCountries(response) {
+  const rawCountries = unwrapCollection(response, [
+    "countries",
+    "country",
+    "countryList",
+    "items",
+  ]);
 
-  const countries = [];
-  const servicesMap = new Map();
+  const normalized = collectionEntries(rawCountries)
+    .map(([key, item]) => {
+      const objectItem =
+        item && typeof item === "object" && !Array.isArray(item)
+          ? item
+          : {};
 
-  for (const [countryCode, products] of Object.entries(data)) {
-    if (!products || typeof products !== "object") {
-      continue;
-    }
+      const primitiveName =
+        typeof item === "string" ? item.trim() : "";
 
-    const countryServices = [];
-    let totalAvailable = 0;
-    let lowestPrice = Infinity;
+      const id = String(
+        objectItem.id ??
+          objectItem.code ??
+          objectItem.iso2 ??
+          objectItem.iso ??
+          objectItem.country ??
+          key
+      ).trim();
 
-    for (const [serviceId, operators] of Object.entries(products)) {
-      const summary = summarizeProduct(operators);
+      const code = String(
+        objectItem.code ??
+          objectItem.iso2 ??
+          objectItem.iso ??
+          objectItem.countryCode ??
+          id
+      ).trim();
 
-      if (!summary) {
-        continue;
+      const eng = String(
+        objectItem.eng ??
+          objectItem.name ??
+          objectItem.title ??
+          objectItem.label ??
+          objectItem.countryName ??
+          objectItem.country_name ??
+          primitiveName ??
+          key
+      ).trim();
+
+      if (!id || !eng) {
+        return null;
       }
 
-      totalAvailable += summary.available;
-      lowestPrice = Math.min(
-        lowestPrice,
-        summary.priceNgn
-      );
-
-      const service = {
-        id: serviceId,
-        name: formatName(serviceId),
-        available: summary.available,
-        price: summary.priceNgn,
-        providerPrice: summary.providerPrice,
-        preferredOperator: summary.preferredOperator,
-        deliveryRate: summary.deliveryRate,
+      return {
+        ...objectItem,
+        id,
+        code,
+        eng,
+        name: objectItem.name || eng,
       };
+    })
+    .filter(Boolean);
 
-      countryServices.push(service);
+  return removeDuplicates(normalized, (country) => country.id).sort(
+    (first, second) => first.eng.localeCompare(second.eng)
+  );
+}
 
-      const existingService = servicesMap.get(serviceId);
+function normalizeServices(response) {
+  const rawServices = unwrapCollection(response, [
+    "services",
+    "service",
+    "serviceList",
+    "items",
+  ]);
 
-      if (!existingService) {
-        servicesMap.set(serviceId, {
-          id: serviceId,
-          name: formatName(serviceId),
-          available: summary.available,
-          fromPrice: summary.priceNgn,
-          deliveryRate: summary.deliveryRate,
-        });
-      } else {
-        existingService.available += summary.available;
-        existingService.fromPrice = Math.min(
-          existingService.fromPrice,
-          summary.priceNgn
-        );
+  const normalized = collectionEntries(rawServices)
+    .map(([key, item]) => {
+      const objectItem =
+        item && typeof item === "object" && !Array.isArray(item)
+          ? item
+          : {};
 
-        if (
-          summary.deliveryRate !== null &&
-          (
-            existingService.deliveryRate === null ||
-            summary.deliveryRate > existingService.deliveryRate
-          )
-        ) {
-          existingService.deliveryRate =
-            summary.deliveryRate;
-        }
+      const primitiveName =
+        typeof item === "string" ? item.trim() : "";
+
+      const id = String(
+        objectItem.id ??
+          objectItem.code ??
+          objectItem.service ??
+          objectItem.slug ??
+          key
+      ).trim();
+
+      const code = String(
+        objectItem.code ?? objectItem.service ?? objectItem.id ?? id
+      ).trim();
+
+      const name = String(
+        objectItem.name ??
+          objectItem.serviceName ??
+          objectItem.title ??
+          objectItem.label ??
+          primitiveName ??
+          key
+      ).trim();
+
+      if (!id || !name) {
+        return null;
       }
-    }
 
-    if (countryServices.length === 0) {
-      continue;
-    }
+      return {
+        ...objectItem,
+        id,
+        code,
+        name,
+      };
+    })
+    .filter(Boolean);
 
-    countryServices.sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
+  return removeDuplicates(normalized, (service) => service.id).sort(
+    (first, second) => first.name.localeCompare(second.name)
+  );
+}
 
-    countries.push({
-      code: countryCode,
-      name:
-        countryNames[countryCode] ||
-        formatName(countryCode),
-      flag: countryFlags[countryCode] || "🌍",
-      available: totalAvailable,
-      fromPrice:
-        lowestPrice === Infinity ? 0 : lowestPrice,
-      services: countryServices,
+async function buildCatalog(server) {
+  const [countriesResponse, servicesResponse] = await Promise.all([
+    providerManager.getCountries({ server }),
+    providerManager.getServices({ server }),
+  ]);
+
+  const countries = normalizeCountries(countriesResponse);
+  const services = normalizeServices(servicesResponse);
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("CATALOG DEBUG", {
+      server,
+      countriesLength: countries.length,
+      servicesLength: services.length,
+      firstCountry: countries[0] || null,
+      firstService: services[0] || null,
     });
   }
 
-  countries.sort((a, b) =>
-    a.name.localeCompare(b.name)
-  );
+  if (!countries.length) {
+    throw createCatalogError(`${server} returned no countries`, {
+      code: "EMPTY_COUNTRIES_CATALOG",
+    });
+  }
 
-  const services = Array.from(
-    servicesMap.values()
-  ).sort((a, b) => a.name.localeCompare(b.name));
+  if (!services.length) {
+    throw createCatalogError(`${server} returned no services`, {
+      code: "EMPTY_SERVICES_CATALOG",
+    });
+  }
 
   return {
     success: true,
+    server,
     currency: "NGN",
     updatedAt: new Date().toISOString(),
     countries,
@@ -265,45 +285,147 @@ async function buildCatalog() {
 
 exports.getCatalog = async (req, res) => {
   try {
-    const now = Date.now();
-    const forceRefresh = req.query.refresh === "true";
+    const server = normalizeServer(req.query.server || "server1");
+    const refresh = ["true", "1", "yes"].includes(
+      String(req.query.refresh || "").toLowerCase()
+    );
 
-    if (
-      !forceRefresh &&
-      catalogCache &&
-      now < catalogCacheExpiresAt
-    ) {
-      return res.json({
-        ...catalogCache,
-        cached: true,
+    const cached = catalogCache.get(server);
+    const cacheIsValid =
+      cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
+
+    if (!refresh && cacheIsValid) {
+      return res.json(cached.catalog);
+    }
+
+    const catalog = await buildCatalog(server);
+
+    catalogCache.set(server, {
+      cachedAt: Date.now(),
+      catalog,
+    });
+
+    return res.json(catalog);
+  } catch (error) {
+    console.error("Catalog request failed:", {
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      server: req.query.server,
+    });
+
+    return res.status(Number(error.status) || 500).json({
+      success: false,
+      message: error.message || "Unable to load catalog",
+      code: error.code || "CATALOG_LOAD_FAILED",
+    });
+  }
+};
+
+exports.getPrice = async (req, res) => {
+  try {
+    const server = normalizeServer(req.query.server);
+    const country = String(req.query.country || "").trim();
+    const service = String(req.query.service || "").trim();
+    const countryName = String(
+      req.query.countryName || ""
+    ).trim();
+    const serviceName = String(
+      req.query.serviceName || ""
+    ).trim();
+    const requestedOperator =
+      String(
+        req.query.operator ||
+        "any"
+      ).trim();
+
+    if (!country || !service) {
+      return res.status(400).json({
+        success: false,
+        message: "Country and service are required",
       });
     }
 
-    const catalog = await buildCatalog();
+    const operator =
+      await pricingService
+        .resolveEffectiveOperator({
+          server,
+          country,
+          service,
+          countryName,
+          serviceName,
+          requestedOperator,
+        });
 
-    catalogCache = catalog;
-    catalogCacheExpiresAt =
-      now + CACHE_DURATION_MS;
+    const quote =
+      await providerManager.getPrice({
+        server,
+        country,
+        service,
+        operator,
+      });
+
+    const pricing =
+      await pricingService
+        .resolveCustomerPricing({
+          server,
+          country,
+          service,
+          countryName,
+          serviceName,
+          operator,
+          providerPrice:
+            quote.price,
+          providerCurrency:
+            quote.currency,
+        });
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Pricing] customer live price:", {
+        server,
+        country,
+        countryName,
+        service,
+        serviceName,
+        operator,
+        providerPrice: quote.price,
+        providerCurrency: quote.currency,
+        sellingPrice: pricing.sellingPrice,
+        pricingSource: pricing.pricingSource,
+        pricingRuleMatched:
+          pricing.pricingRuleMatched,
+      });
+    }
 
     return res.json({
-      ...catalog,
-      cached: false,
+      success: true,
+      server,
+      country,
+      service,
+      operator,
+      price: pricing.sellingPrice,
+      stock: Number.isFinite(Number(quote.stock))
+        ? Number(quote.stock)
+        : 0,
+      currency: "NGN",
+      pricingMode: pricing.pricingMode,
+      pricingSource: pricing.pricingSource,
+      pricingRuleMatched:
+        pricing.pricingRuleMatched,
     });
   } catch (error) {
-    console.error(
-      "Catalog error:",
-      error.response?.data || error.message
-    );
+    console.error("Live-price request failed:", {
+      message: error.message,
+      code: error.code,
+      server: req.query.server,
+      country: req.query.country,
+      service: req.query.service,
+    });
 
-    return res.status(
-      error.response ? 502 : 500
-    ).json({
+    return res.status(Number(error.status) || 500).json({
       success: false,
-      message:
-        error.response?.data?.message ||
-        error.response?.data ||
-        error.message ||
-        "Unable to load live catalog",
+      message: error.message || "Unable to retrieve live price",
+      code: error.code || "PRICE_LOOKUP_FAILED",
     });
   }
 };

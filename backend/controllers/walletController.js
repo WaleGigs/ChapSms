@@ -32,44 +32,46 @@ exports.getWallet = async (req, res) => {
 
 exports.verifyFlutterwavePayment = async (req, res) => {
   try {
-    const { transactionId, expectedAmount, reference } = req.body;
+    const { transactionId, reference } = req.body;
 
-    const numericTransactionId = Number(transactionId);
-    const numericExpectedAmount = Number(expectedAmount);
+    const numericTransactionId =
+      Number(transactionId);
+
+    const normalizedReference =
+      String(reference || "")
+        .trim()
+        .toUpperCase();
 
     if (
-      !Number.isInteger(numericTransactionId) ||
+      !Number.isInteger(
+        numericTransactionId
+      ) ||
       numericTransactionId <= 0
     ) {
       return res.status(400).json({
         success: false,
-        message: "A valid Flutterwave transaction ID is required",
+        message:
+          "A valid Flutterwave transaction ID is required",
       });
     }
 
-    if (
-      !Number.isFinite(numericExpectedAmount) ||
-      numericExpectedAmount <= 0
-    ) {
+    if (!normalizedReference) {
       return res.status(400).json({
         success: false,
-        message: "A valid expected amount is required",
-      });
-    }
-
-    if (!reference || typeof reference !== "string") {
-      return res.status(400).json({
-        success: false,
-        message: "Payment reference is required",
+        message:
+          "Payment reference is required",
       });
     }
 
     if (!process.env.FLW_SECRET_KEY) {
-      console.error("FLW_SECRET_KEY is missing");
+      console.error(
+        "FLW_SECRET_KEY is missing"
+      );
 
       return res.status(500).json({
         success: false,
-        message: "Payment verification is not configured",
+        message:
+          "Payment verification is not configured",
       });
     }
 
@@ -84,33 +86,46 @@ exports.verifyFlutterwavePayment = async (req, res) => {
       });
     }
 
+    const normalizedTransactionId =
+      String(numericTransactionId);
+
     const existingTransaction =
       wallet.transactions.find(
         (transaction) =>
-          transaction.transactionId === numericTransactionId ||
-          transaction.reference === reference
+          String(
+            transaction.transactionId || ""
+          ) === normalizedTransactionId ||
+          String(
+            transaction.reference || ""
+          )
+            .trim()
+            .toUpperCase() ===
+            normalizedReference
       );
 
     if (existingTransaction) {
       return res.status(200).json({
         success: true,
-        message: "Payment has already been processed",
+        message:
+          "Payment has already been processed",
         alreadyProcessed: true,
         wallet,
       });
     }
 
-    const flutterwaveResponse = await fetch(
-      `${FLUTTERWAVE_VERIFY_URL}/${numericTransactionId}/verify`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-      }
-    );
+    const flutterwaveResponse =
+      await fetch(
+        `${FLUTTERWAVE_VERIFY_URL}/${numericTransactionId}/verify`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${process.env.FLW_SECRET_KEY}`,
+            "Content-Type":
+              "application/json",
+            Accept: "application/json",
+          },
+        }
+      );
 
     const verificationResult =
       await flutterwaveResponse.json();
@@ -129,32 +144,59 @@ exports.verifyFlutterwavePayment = async (req, res) => {
       });
     }
 
-    const payment = verificationResult?.data;
+    const payment =
+      verificationResult?.data;
+
+    const verifiedAmount =
+      Number(payment?.amount);
+
+    const paymentReference =
+      String(payment?.tx_ref || "")
+        .trim()
+        .toUpperCase();
+
+    const paymentCurrency =
+      String(payment?.currency || "")
+        .trim()
+        .toUpperCase();
+
+    const paymentStatus =
+      String(payment?.status || "")
+        .trim()
+        .toLowerCase();
 
     const paymentIsValid =
       payment &&
-      payment.status === "successful" &&
-      payment.currency === "NGN" &&
-      Number(payment.amount) >= numericExpectedAmount &&
-      payment.tx_ref === reference;
+      paymentStatus === "successful" &&
+      paymentCurrency === "NGN" &&
+      Number.isFinite(verifiedAmount) &&
+      verifiedAmount > 0 &&
+      paymentReference ===
+        normalizedReference;
 
     if (!paymentIsValid) {
       return res.status(400).json({
         success: false,
-        message: "Payment verification failed",
+        message:
+          "Payment verification failed",
       });
     }
 
     const customerEmail =
-      payment.customer?.email?.trim().toLowerCase();
+      payment.customer?.email
+        ?.trim()
+        .toLowerCase();
 
     const authenticatedEmail =
-      req.user.email?.trim().toLowerCase();
+      req.user.email
+        ?.trim()
+        .toLowerCase();
 
     if (
       customerEmail &&
       authenticatedEmail &&
-      customerEmail !== authenticatedEmail
+      customerEmail !==
+        authenticatedEmail
     ) {
       return res.status(400).json({
         success: false,
@@ -163,27 +205,32 @@ exports.verifyFlutterwavePayment = async (req, res) => {
       });
     }
 
-    const amountToCredit = numericExpectedAmount;
-
-    wallet.balance += amountToCredit;
+    wallet.balance += verifiedAmount;
 
     wallet.transactions.unshift({
       type: "deposit",
-      amount: amountToCredit,
-      description: "Wallet funding via Flutterwave",
+      amount: verifiedAmount,
+      description:
+        "Wallet funding via Flutterwave",
       status: "completed",
-      reference: payment.tx_ref,
-      transactionId: payment.id,
-      paymentGateway: "flutterwave",
-      currency: payment.currency,
-      paymentMethod: payment.payment_type || "",
+      reference:
+        normalizedReference,
+      transactionId:
+        String(payment.id),
+      paymentGateway:
+        "flutterwave",
+      currency:
+        paymentCurrency,
+      paymentMethod:
+        payment.payment_type || "",
     });
 
     await wallet.save();
 
     return res.status(200).json({
       success: true,
-      message: "Wallet funded successfully",
+      message:
+        "Wallet funded successfully",
       wallet,
     });
   } catch (error) {
@@ -194,12 +241,16 @@ exports.verifyFlutterwavePayment = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Unable to verify payment",
+      message:
+        "Unable to verify payment",
     });
   }
 };
 
-exports.getTransactions = async (req, res) => {
+exports.getTransactions = async (
+  req,
+  res
+) => {
   try {
     const wallet = await Wallet.findOne({
       user: req.user._id,
@@ -214,14 +265,19 @@ exports.getTransactions = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      transactions: wallet.transactions,
+      transactions:
+        wallet.transactions,
     });
   } catch (error) {
-    console.error("Get transactions error:", error);
+    console.error(
+      "Get transactions error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Unable to retrieve transactions",
+      message:
+        "Unable to retrieve transactions",
     });
   }
 };

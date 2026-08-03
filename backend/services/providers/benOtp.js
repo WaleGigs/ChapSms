@@ -1,5 +1,6 @@
 const axios = require("axios");
 const https = require("https");
+const dns = require("dns");
 
 const PROVIDER_NAME = "benotp";
 
@@ -13,22 +14,46 @@ function getApiKey() {
   return apiKey;
 }
 
+function ipv4Lookup(hostname, options, callback) {
+  const lookupOptions =
+    typeof options === "number"
+      ? { family: options }
+      : { ...options };
+
+  dns.lookup(
+    hostname,
+    {
+      ...lookupOptions,
+      family: 4,
+      all: false,
+    },
+    callback
+  );
+}
+
 const httpsAgent = new https.Agent({
-  keepAlive: false,
+  keepAlive: true,
+  maxSockets: 10,
+  maxFreeSockets: 5,
   maxCachedSessions: 0,
+  minVersion: "TLSv1.2",
   rejectUnauthorized: true,
+  lookup: ipv4Lookup,
 });
 
+const BENOTP_BASE_URL = String(
+  process.env.BENOTP_BASE_URL ||
+    "https://benotp.com/stubs/handler.php"
+).trim();
+
 const api = axios.create({
-  baseURL:
-    process.env.BENOTP_BASE_URL ||
-    "https://benotp.com/stubs/handler.php",
-  timeout: 20000,
+  baseURL: BENOTP_BASE_URL,
+  timeout: 30000,
   httpsAgent,
+  family: 4,
   headers: {
     Accept: "application/json, text/plain, */*",
-    "User-Agent": "ChapsSmS/1.0",
-    Connection: "close",
+    "User-Agent": "Mozilla/5.0 ChapsSmS/1.0",
   },
 });
 
@@ -106,17 +131,35 @@ function createProviderError(message, options = {}) {
 }
 
 function isRetryableNetworkError(error) {
-  const code = String(error.code || "").toUpperCase();
+  const code = String(
+    error?.code || ""
+  ).toUpperCase();
 
-  return new Set([
+  const message = String(
+    error?.message || ""
+  ).toLowerCase();
+
+  const retryableCodes = new Set([
     "ECONNRESET",
     "ETIMEDOUT",
     "ECONNABORTED",
+    "ECONNREFUSED",
     "EPIPE",
     "ENETUNREACH",
+    "EHOSTUNREACH",
     "EAI_AGAIN",
     "ERR_NETWORK",
-  ]).has(code);
+    "ERR_SSL_BAD_RECORD_MAC",
+    "ERR_TLS_HANDSHAKE_TIMEOUT",
+    "UND_ERR_CONNECT_TIMEOUT",
+  ]);
+
+  return (
+    retryableCodes.has(code) ||
+    message.includes("socket disconnected") ||
+    message.includes("before secure tls connection") ||
+    message.includes("tls handshake")
+  );
 }
 
 function classifyProviderError(responseText) {
@@ -207,50 +250,153 @@ function classifyProviderError(responseText) {
   return null;
 }
 
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 async function request(params, options = {}) {
-  try {
-    const response = await api.get("", {
-      params: {
-        api_key: getApiKey(),
-        ...params,
-      },
-    });
+  const maximumAttempts =
+    options.retryable === false ? 1 : 3;
 
-    const responseText = getResponseText(response.data);
-    const providerError = classifyProviderError(responseText);
+  let finalError = null;
 
-    if (providerError) {
-      throw providerError;
+  for (
+    let attempt = 1;
+    attempt <= maximumAttempts;
+    attempt += 1
+  ) {
+    try {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[BenOTP] outgoing request:", {
+          baseURL: BENOTP_BASE_URL,
+          action: params.action,
+          attempt,
+          params: {
+            ...params,
+            api_key: "***hidden***",
+          },
+        });
+      }
+
+      const response = await api.get("", {
+        params: {
+          api_key: getApiKey(),
+          ...params,
+        },
+        family: 4,
+      });
+
+      const responseText = getResponseText(
+        response.data
+      );
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[BenOTP] incoming response:", {
+          action: params.action,
+          attempt,
+          status: response.status,
+          contentType:
+            response.headers?.["content-type"],
+          data: response.data,
+        });
+      }
+
+      const providerError =
+        classifyProviderError(responseText);
+
+      if (providerError) {
+        throw providerError;
+      }
+
+      return {
+        data: response.data,
+        text: responseText,
+      };
+    } catch (error) {
+      if (error?.provider === PROVIDER_NAME) {
+        const retryableProviderError =
+          options.retryable !== false &&
+          Boolean(error.retryable);
+
+        finalError = error;
+
+        if (
+          !retryableProviderError ||
+          attempt === maximumAttempts
+        ) {
+          throw error;
+        }
+      } else {
+        const responseText = getResponseText(
+          error?.response?.data
+        );
+
+        const status = Number(
+          error?.response?.status
+        );
+
+        const retryable =
+          options.retryable !== false &&
+          (
+            isRetryableNetworkError(error) ||
+            (
+              Number.isFinite(status) &&
+              status >= 500
+            )
+          );
+
+        finalError = createProviderError(
+          responseText ||
+            error?.message ||
+            "BenOTP request failed",
+          {
+            status: status || 502,
+            code:
+              error?.code ||
+              "BENOTP_REQUEST_FAILED",
+            retryable,
+            rawResponse: responseText,
+          }
+        );
+
+        console.error("[BenOTP] request failed:", {
+          baseURL: BENOTP_BASE_URL,
+          action: params.action,
+          attempt,
+          maximumAttempts,
+          code: error?.code,
+          message: error?.message,
+          status: error?.response?.status,
+          retryable,
+        });
+
+        if (
+          !retryable ||
+          attempt === maximumAttempts
+        ) {
+          throw finalError;
+        }
+      }
+
+      const delay =
+        750 * 2 ** (attempt - 1);
+
+      await wait(delay);
     }
-
-    return {
-      data: response.data,
-      text: responseText,
-    };
-  } catch (error) {
-    if (error.provider === PROVIDER_NAME) {
-      throw error;
-    }
-
-    const responseText = getResponseText(error.response?.data);
-
-    const errorMessage =
-      responseText ||
-      error.message ||
-      "BenOTP request failed";
-
-   throw createProviderError(errorMessage, {
-  status: error.response?.status || 502,
-  code: error.code || "BENOTP_REQUEST_FAILED",
-  retryable:
-    options.retryable ??
-    (
-      isRetryableNetworkError(error) ||
-      Number(error.response?.status) >= 500
-    ),
-  rawResponse: responseText,
-});
   }
+
+  throw (
+    finalError ||
+    createProviderError(
+      "BenOTP request failed",
+      {
+        code: "BENOTP_REQUEST_FAILED",
+        retryable: true,
+      }
+    )
+  );
 }
 
 function parseBalance(responseText) {
@@ -505,6 +651,68 @@ async function getBalance() {
   };
 }
 
+function parseJsonResponse(
+  value,
+  responseText,
+  collectionName
+) {
+  let parsed = value;
+
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      throw createProviderError(
+        `Unable to parse BenOTP ${collectionName} response: ${responseText}`,
+        {
+          code: `INVALID_${collectionName.toUpperCase()}_RESPONSE`,
+          retryable: true,
+          rawResponse: responseText,
+        }
+      );
+    }
+  }
+
+  return parsed;
+}
+
+function getCollectionSize(value) {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+
+  if (
+    value &&
+    typeof value === "object"
+  ) {
+    return Object.keys(value).length;
+  }
+
+  return 0;
+}
+
+function unwrapProviderCollection(
+  payload,
+  keys = []
+) {
+  const candidates = [
+    ...keys.map((key) => payload?.[key]),
+    ...keys.map((key) => payload?.data?.[key]),
+    ...keys.map((key) => payload?.result?.[key]),
+    payload?.data,
+    payload?.result,
+    payload?.response,
+    payload,
+  ];
+
+  return (
+    candidates.find(
+      (candidate) =>
+        getCollectionSize(candidate) > 0
+    ) ?? null
+  );
+}
+
 async function getServices() {
   const response = await request(
     {
@@ -515,30 +723,41 @@ async function getServices() {
     }
   );
 
-  let services = response.data;
+  const parsedResponse = parseJsonResponse(
+    response.data,
+    response.text,
+    "services"
+  );
 
-  if (typeof services === "string") {
-    try {
-      services = JSON.parse(services);
-    } catch {
-      throw createProviderError(
-        `Unable to parse BenOTP services response: ${response.text}`,
-        {
-          code: "INVALID_SERVICES_RESPONSE",
-          retryable: true,
-          rawResponse: response.text,
-        }
-      );
-    }
+  const services = unwrapProviderCollection(
+    parsedResponse,
+    [
+      "services",
+      "service",
+      "serviceList",
+      "items",
+    ]
+  );
+
+  const serviceCount =
+    getCollectionSize(services);
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log(
+      "[BenOTP] resolved service count:",
+      serviceCount
+    );
   }
 
-  if (!services || typeof services !== "object") {
+  if (serviceCount === 0) {
     throw createProviderError(
-      "BenOTP returned an invalid services response",
+      "BenOTP returned an empty services catalog",
       {
-        code: "INVALID_SERVICES_RESPONSE",
+        code: "EMPTY_SERVICES_RESPONSE",
         retryable: true,
-        rawResponse: response.text,
+        rawResponse:
+          response.text ||
+          JSON.stringify(response.data),
       }
     );
   }
@@ -556,44 +775,72 @@ async function getCountries() {
     }
   );
 
-  let countries = response.data;
+  const parsedResponse = parseJsonResponse(
+    response.data,
+    response.text,
+    "countries"
+  );
 
-  if (typeof countries === "string") {
-    try {
-      countries = JSON.parse(countries);
-    } catch {
-      throw createProviderError(
-        `Unable to parse BenOTP countries response: ${response.text}`,
-        {
-          code: "INVALID_COUNTRIES_RESPONSE",
-          retryable: true,
-          rawResponse: response.text,
-        }
-      );
-    }
+  const countries = unwrapProviderCollection(
+    parsedResponse,
+    [
+      "countries",
+      "country",
+      "countryList",
+      "items",
+    ]
+  );
+
+  const countryCount =
+    getCollectionSize(countries);
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log(
+      "[BenOTP] resolved country count:",
+      countryCount
+    );
   }
 
-  if (!countries || typeof countries !== "object") {
+  if (countryCount === 0) {
     throw createProviderError(
-      "BenOTP returned an invalid countries response",
+      "BenOTP returned an empty countries catalog",
       {
-        code: "INVALID_COUNTRIES_RESPONSE",
+        code: "EMPTY_COUNTRIES_RESPONSE",
         retryable: true,
-        rawResponse: response.text,
+        rawResponse:
+          response.text ||
+          JSON.stringify(response.data),
       }
     );
   }
 
   return countries;
 }
+
 async function getPrice({
   service,
   country,
+  operator = "default",
   areaCode,
   pool,
 }) {
   const normalizedCountry =
     normalizeBenOtpCountry(country);
+
+  const normalizedOperator =
+    String(operator || "default")
+      .trim()
+      .toLowerCase() ||
+    "default";
+
+  const effectivePool =
+    pool ||
+    (
+      normalizedOperator !==
+      "default"
+        ? normalizedOperator
+        : ""
+    );
 
   const response = await request(
     {
@@ -610,9 +857,11 @@ async function getPrice({
             ).trim(),
           }
         : {}),
-      ...(pool
+      ...(effectivePool
         ? {
-            pool: String(pool).trim(),
+            pool: String(
+              effectivePool
+            ).trim(),
           }
         : {}),
     },
@@ -625,12 +874,137 @@ async function getPrice({
     provider: PROVIDER_NAME,
     service: String(service).trim(),
     country: normalizedCountry,
+    operator:
+      effectivePool ||
+      normalizedOperator ||
+      "default",
     ...parsePrice(response.text),
   };
 }
+
+async function getOperators({
+  service,
+  country,
+}) {
+  const configuredPools =
+    String(
+      process.env.BENOTP_POOLS ||
+      ""
+    )
+      .split(",")
+      .map((value) =>
+        value.trim()
+      )
+      .filter(Boolean);
+
+  const pools =
+    configuredPools.length
+      ? configuredPools
+      : ["default"];
+
+  const results =
+    await Promise.allSettled(
+      pools.map(
+        async (poolId) => {
+          const quote =
+            await getPrice({
+              service,
+              country,
+              operator:
+                poolId,
+              pool:
+                poolId ===
+                "default"
+                  ? ""
+                  : poolId,
+            });
+
+          return {
+            id: poolId,
+            operator:
+              poolId,
+            name:
+              poolId ===
+              "default"
+                ? "Default BenOTP pool"
+                : `Pool ${poolId}`,
+            price:
+              quote.price,
+            stock:
+              quote.stock,
+            currency:
+              quote.currency,
+          };
+        }
+      )
+    );
+
+  const operators =
+    results
+      .filter(
+        (result) =>
+          result.status ===
+          "fulfilled"
+      )
+      .map(
+        (result) =>
+          result.value
+      )
+      .sort(
+        (
+          first,
+          second
+        ) =>
+          first.price -
+          second.price
+      );
+
+  if (!operators.length) {
+    const firstFailure =
+      results.find(
+        (result) =>
+          result.status ===
+          "rejected"
+      );
+
+    throw (
+      firstFailure?.reason ||
+      createProviderError(
+        "No BenOTP pools are currently available",
+        {
+          status: 409,
+          code:
+            "NO_OPERATORS",
+          retryable: true,
+        }
+      )
+    );
+  }
+
+  return {
+    provider:
+      PROVIDER_NAME,
+    service:
+      String(
+        service
+      ).trim(),
+    country:
+      normalizeBenOtpCountry(
+        country
+      ),
+    currency:
+      operators[0]
+        .currency,
+    operators,
+    raw:
+      operators,
+  };
+}
+
 async function buyNumber({
   service,
   country,
+  operator = "default",
   areaCode,
   quantity = 1,
   pool,
@@ -658,6 +1032,21 @@ async function buyNumber({
   const normalizedCountry =
     normalizeBenOtpCountry(country);
 
+  const normalizedOperator =
+    String(operator || "default")
+      .trim()
+      .toLowerCase() ||
+    "default";
+
+  const effectivePool =
+    pool ||
+    (
+      normalizedOperator !==
+      "default"
+        ? normalizedOperator
+        : ""
+    );
+
   const response = await request(
     {
       action: "getNumber",
@@ -674,9 +1063,11 @@ async function buyNumber({
             ).trim(),
           }
         : {}),
-      ...(pool
+      ...(effectivePool
         ? {
-            pool: String(pool).trim(),
+            pool: String(
+              effectivePool
+            ).trim(),
           }
         : {}),
     },
@@ -692,9 +1083,18 @@ async function buyNumber({
     return bulkResult;
   }
 
-  return parseSingleNumber(
-    response.text
-  );
+  const parsed =
+    parseSingleNumber(
+      response.text
+    );
+
+  return {
+    ...parsed,
+    operator:
+      effectivePool ||
+      normalizedOperator ||
+      "default",
+  };
 }
 
 async function getOrder(orderId) {
@@ -801,6 +1201,7 @@ module.exports = {
   getBalance,
   getServices,
   getCountries,
+  getOperators,
   getPrice,
   buyNumber,
   getOrder,

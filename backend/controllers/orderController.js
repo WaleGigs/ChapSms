@@ -1,8 +1,13 @@
-const axios = require("axios");
-
 const Order = require("../models/Order");
 const Wallet = require("../models/Wallet");
-const providerManager = require("../services/providers/providerManager");
+const providerManager = require(
+  "../services/providers/providerManager"
+);
+const pricingService = require(
+  "../services/pricingService"
+);
+
+const VALID_SERVERS = ["server1", "server2"];
 
 function normalizeCountry(value) {
   return String(value || "")
@@ -19,118 +24,187 @@ function normalizeService(value) {
 }
 
 function normalizeOperator(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+  return String(value || "any").trim().toLowerCase() || "any";
 }
 
-function calculateCustomerPrice(
-  providerPrice,
-  currency = "USD"
-) {
-  const exchangeRate =
-    currency === "NGN"
-      ? 1
-      : Number(process.env.NGN_PER_USD);
-
-  const markup =
-    Number(process.env.PRICE_MARKUP_PERCENT || 0);
-
-  const amount =
-    Number(providerPrice) * exchangeRate;
-
-  return Math.ceil(
-    amount + amount * markup / 100
-  );
+function normalizeServer(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function extractProviderError(error) {
   return (
-    error.message ||
-    error.response?.data?.message ||
-    error.response?.data?.error ||
+    error?.message ||
+    error?.response?.data?.message ||
+    error?.response?.data?.error ||
     "Provider request failed"
   );
-}exports.createOrder = async (req, res) => {
+}
+
+function sanitizeOrder(order) {
+  if (!order) {
+    return order;
+  }
+
+  const data =
+    typeof order.toObject === "function"
+      ? order.toObject()
+      : { ...order };
+
+  delete data.provider;
+  delete data.providerResponse;
+  delete data.providerPrice;
+  delete data.providerCurrency;
+  delete data.providerCostNgn;
+  delete data.profit;
+  delete data.financialStatus;
+  delete data.pricingRule;
+  delete data.pricingSnapshot;
+
+  return data;
+}
+
+function sanitizeOrders(orders = []) {
+  return orders.map(sanitizeOrder);
+}
+
+async function refundWalletAfterSaveFailure({
+  userId,
+  amount,
+  service,
+  country,
+}) {
+  try {
+    await Wallet.findOneAndUpdate(
+      { user: userId },
+      {
+        $inc: { balance: amount },
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type: "refund",
+                amount,
+                description: `Automatic refund for failed ${service} order (${country})`,
+                status: "completed",
+              },
+            ],
+            $position: 0,
+          },
+        },
+      },
+      {
+        returnDocument: "after",
+        runValidators: true,
+      }
+    );
+  } catch (walletError) {
+    console.error("Automatic wallet rollback failed:", walletError);
+  }
+}
+
+exports.createOrder = async (req, res) => {
+  let purchasedProviderOrder = null;
+  let walletWasDebited = false;
+  let debitedAmount = 0;
+
   try {
     const {
       country,
       service,
+      countryName,
+      serviceName,
       operator,
-      provider,
+      server,
     } = req.body;
 
     if (!country || !service) {
       return res.status(400).json({
         success: false,
-        message:
-          "Country and service are required",
+        message: "Country and service are required",
       });
     }
 
-    const normalizedCountry =
-      normalizeCountry(country);
-
-    const normalizedService =
-      normalizeService(service);
-
-    const normalizedOperator =
+    const normalizedCountry = normalizeCountry(country);
+    const normalizedService = normalizeService(service);
+    const normalizedCountryName = String(
+      countryName || ""
+    ).trim();
+    const normalizedServiceName = String(
+      serviceName || ""
+    ).trim();
+    const requestedOperator =
       normalizeOperator(operator);
 
-    const normalizedProvider = String(provider || "")
-      .trim()
-      .toLowerCase();
+    const normalizedServer =
+      normalizeServer(server);
 
-    if (!["benotp", "smsbower"].includes(normalizedProvider)) {
+    if (!VALID_SERVERS.includes(normalizedServer)) {
       return res.status(400).json({
         success: false,
         message: "Select a valid SMS server",
       });
     }
 
-    /*
-     * Get a quote only for the wallet pre-check.
-     *
-     * providerManager.buyNumber() will later
-     * obtain a quote and purchase from the same
-     * provider, so this initial quote is not used
-     * for final billing.
-     */
+    const normalizedOperator =
+      await pricingService
+        .resolveEffectiveOperator({
+          server:
+            normalizedServer,
+          country:
+            normalizedCountry,
+          service:
+            normalizedService,
+          countryName:
+            normalizedCountryName,
+          serviceName:
+            normalizedServiceName,
+          requestedOperator,
+        });
 
     const preliminaryQuote =
       await providerManager.getPrice({
-        provider: normalizedProvider,
-        country: normalizedCountry,
-        service: normalizedService,
+        server:
+          normalizedServer,
+        country:
+          normalizedCountry,
+        service:
+          normalizedService,
+        operator:
+          normalizedOperator,
       });
 
-    const preliminaryCustomerPrice =
-      calculateCustomerPrice(
-        preliminaryQuote.price,
-        preliminaryQuote.currency
-      );
+    const preliminaryPricing =
+      await pricingService.resolveCustomerPricing({
+        server: normalizedServer,
+        country: normalizedCountry,
+        service: normalizedService,
+        countryName: normalizedCountryName,
+        serviceName: normalizedServiceName,
+        operator: normalizedOperator,
+        providerPrice: preliminaryQuote.price,
+        providerCurrency: preliminaryQuote.currency,
+      });
 
-    if (
-      !Number.isFinite(
-        preliminaryCustomerPrice
-      ) ||
-      preliminaryCustomerPrice <= 0
-    ) {
-      return res.status(502).json({
-        success: false,
-        message:
-          "The provider returned an invalid price",
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Pricing] purchase pre-check:", {
+        server: normalizedServer,
+        country: normalizedCountry,
+        countryName: normalizedCountryName,
+        service: normalizedService,
+        serviceName: normalizedServiceName,
+        operator: normalizedOperator,
+        providerPrice: preliminaryQuote.price,
+        providerCurrency: preliminaryQuote.currency,
+        sellingPrice: preliminaryPricing.sellingPrice,
+        pricingSource: preliminaryPricing.pricingSource,
+        pricingRuleMatched:
+          preliminaryPricing.pricingRuleMatched,
       });
     }
 
-    /*
-     * Wallet pre-check.
-     */
-
-    const walletBefore =
-      await Wallet.findOne({
-        user: req.user._id,
-      }).select("balance");
+    const walletBefore = await Wallet.findOne({
+      user: req.user._id,
+    }).select("balance");
 
     if (!walletBefore) {
       return res.status(404).json({
@@ -141,301 +215,189 @@ function extractProviderError(error) {
 
     if (
       Number(walletBefore.balance) <
-      preliminaryCustomerPrice
+      preliminaryPricing.sellingPrice
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Insufficient wallet balance",
-        walletBalance:
-          walletBefore.balance,
-        requiredAmount:
-          preliminaryCustomerPrice,
+        message: "Insufficient wallet balance",
+        walletBalance: walletBefore.balance,
+        requiredAmount: preliminaryPricing.sellingPrice,
       });
     }
 
-    /*
-     * Purchase the number.
-     *
-     * The updated providerManager.buyNumber()
-     * performs the price lookup and purchase
-     * against the same provider.
-     */
-
-    const providerOrder =
-      await providerManager.buyNumber({
-        provider: normalizedProvider,
-        country: normalizedCountry,
-        service: normalizedService,
-        operator:
-          normalizedOperator,
-      });
+    purchasedProviderOrder = await providerManager.buyNumber({
+      server: normalizedServer,
+      country: normalizedCountry,
+      service: normalizedService,
+      operator: normalizedOperator,
+    });
 
     const providerPrice = Number(
-      providerOrder.providerPrice
+      purchasedProviderOrder.providerPrice
     );
 
-    if (
-      !Number.isFinite(providerPrice) ||
-      providerPrice <= 0
-    ) {
-      /*
-       * A number may already have been created,
-       * so cancel it before returning an error.
-       */
-
+    if (!Number.isFinite(providerPrice) || providerPrice <= 0) {
       try {
         await providerManager.cancelOrder(
-          providerOrder.provider,
-          providerOrder.providerOrderId
+          purchasedProviderOrder.internalProvider,
+          purchasedProviderOrder.providerOrderId
         );
       } catch (cancelError) {
-        console.error(
-          "Unable to cancel activation after invalid provider price:",
-          cancelError
-        );
+        console.error("Invalid-price cancellation failed:", cancelError);
       }
 
       return res.status(502).json({
         success: false,
-        message:
-          "The provider did not return a valid purchase price",
+        message: "Provider returned an invalid purchase price",
       });
     }
 
     const providerCurrency =
-      providerOrder.providerCurrency ||
+      purchasedProviderOrder.providerCurrency ||
       preliminaryQuote.currency;
 
-    const finalCustomerPrice =
-      calculateCustomerPrice(
-        providerPrice,
-        providerCurrency
-      );
+    const actualOperator = normalizeOperator(
+      purchasedProviderOrder.operator || normalizedOperator
+    );
 
-    if (
-      !Number.isFinite(
-        finalCustomerPrice
-      ) ||
-      finalCustomerPrice <= 0
-    ) {
-      try {
-        await providerManager.cancelOrder(
-          providerOrder.provider,
-          providerOrder.providerOrderId
-        );
-      } catch (cancelError) {
-        console.error(
-          "Unable to cancel activation after invalid customer price:",
-          cancelError
-        );
+    const finalPricing = await pricingService.resolveCustomerPricing({
+      server: normalizedServer,
+      country: normalizedCountry,
+      service: normalizedService,
+      countryName: normalizedCountryName,
+      serviceName: normalizedServiceName,
+      operator: actualOperator,
+      providerPrice,
+      providerCurrency,
+    });
+
+    debitedAmount = finalPricing.sellingPrice;
+
+    const wallet = await Wallet.findOneAndUpdate(
+      {
+        user: req.user._id,
+        balance: { $gte: debitedAmount },
+      },
+      {
+        $inc: { balance: -debitedAmount },
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type: "purchase",
+                amount: debitedAmount,
+                description: `${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
+                status: "completed",
+              },
+            ],
+            $position: 0,
+          },
+        },
+      },
+      {
+        returnDocument: "after",
+        runValidators: true,
       }
-
-      return res.status(502).json({
-        success: false,
-        message:
-          "Unable to calculate the final order price",
-      });
-    }
-
-    /*
-     * Atomic wallet deduction using the actual
-     * price of the provider that created the
-     * activation.
-     */
-
-    const wallet =
-      await Wallet.findOneAndUpdate(
-        {
-          user: req.user._id,
-          balance: {
-            $gte:
-              finalCustomerPrice,
-          },
-        },
-        {
-          $inc: {
-            balance:
-              -finalCustomerPrice,
-          },
-          $push: {
-            transactions: {
-              $each: [
-                {
-                  type: "purchase",
-                  amount:
-                    finalCustomerPrice,
-                  description: `${normalizedService} (${normalizedCountry})`,
-                  status: "completed",
-                },
-              ],
-              $position: 0,
-            },
-          },
-        },
-        {
-          returnDocument: "after",
-          runValidators: true,
-        }
-      );
+    );
 
     if (!wallet) {
       try {
         await providerManager.cancelOrder(
-          providerOrder.provider,
-          providerOrder.providerOrderId
+          purchasedProviderOrder.internalProvider,
+          purchasedProviderOrder.providerOrderId
         );
       } catch (cancelError) {
-        console.error(
-          "Unable to cancel activation after wallet deduction failure:",
-          cancelError
-        );
+        console.error("Insufficient-balance cancellation failed:", cancelError);
       }
 
       return res.status(400).json({
         success: false,
-        message:
-          "Insufficient wallet balance after provider purchase.",
-        requiredAmount:
-          finalCustomerPrice,
+        message: "Insufficient wallet balance",
       });
     }
+
+    walletWasDebited = true;
 
     let order;
 
     try {
       order = await Order.create({
         user: req.user._id,
-
-        country:
-          normalizedCountry,
-
-        service:
-          normalizedService,
-
-        operator:
-          providerOrder.operator ||
-          normalizedOperator ||
-          "any",
-
-        phoneNumber:
-          providerOrder.phoneNumber,
-
-        price:
-          finalCustomerPrice,
-
+        customerEmail: req.user.email || "",
+        customerName: [req.user.firstName, req.user.lastName]
+          .filter(Boolean)
+          .join(" "),
+        country: normalizedCountry,
+        service: normalizedService,
+        operator: actualOperator,
+        phoneNumber: purchasedProviderOrder.phoneNumber,
+        price: finalPricing.sellingPrice,
+        sellingPrice: finalPricing.sellingPrice,
         providerPrice,
-
-        providerCurrency,
-
-        provider:
-          providerOrder.provider,
-
-        providerOrderId:
-          String(
-            providerOrder.providerOrderId
-          ),
-
+        providerCurrency: finalPricing.providerCurrency,
+        providerCostNgn: finalPricing.providerCostNgn,
+        profit: finalPricing.profit,
+        financialStatus: "charged",
+        pricingRule: finalPricing.pricingRuleId,
+        pricingSnapshot: finalPricing.pricingSnapshot,
+        server: purchasedProviderOrder.server || normalizedServer,
+        provider: purchasedProviderOrder.internalProvider,
+        providerOrderId: String(
+          purchasedProviderOrder.providerOrderId
+        ),
         providerStatus:
-          providerOrder.providerStatus ||
+          purchasedProviderOrder.providerStatus ||
           "STATUS_WAIT_CODE",
-
-        providerResponse:
-          providerOrder.raw,
-
+        providerResponse: purchasedProviderOrder.raw,
         status: "waiting",
-
         refunded: false,
       });
-    } catch (error) {
-      /*
-       * Roll back both the provider activation
-       * and the wallet deduction.
-       */
-
+    } catch (saveError) {
       try {
         await providerManager.cancelOrder(
-          providerOrder.provider,
-          providerOrder.providerOrderId
+          purchasedProviderOrder.internalProvider,
+          purchasedProviderOrder.providerOrderId
         );
       } catch (cancelError) {
-        console.error(
-          "Provider cancellation failed during order rollback:",
-          cancelError
-        );
+        console.error("Order-save cancellation failed:", cancelError);
       }
 
-      try {
-        await Wallet.findOneAndUpdate(
-          {
-            user: req.user._id,
-          },
-          {
-            $inc: {
-              balance:
-                finalCustomerPrice,
-            },
-            $push: {
-              transactions: {
-                $each: [
-                  {
-                    type: "refund",
-                    amount:
-                      finalCustomerPrice,
-                    description:
-                      "Automatic refund for failed order creation",
-                    status:
-                      "completed",
-                  },
-                ],
-                $position: 0,
-              },
-            },
-          },
-          {
-            runValidators: true,
-          }
-        );
-      } catch (refundError) {
-        console.error(
-          "Wallet rollback failed after order creation error:",
-          refundError
-        );
-      }
+      await refundWalletAfterSaveFailure({
+        userId: req.user._id,
+        amount: debitedAmount,
+        service: normalizedService,
+        country: normalizedCountry,
+      });
 
-      throw error;
+      walletWasDebited = false;
+      throw saveError;
     }
 
     return res.status(201).json({
       success: true,
-      order,
-      walletBalance:
-        wallet.balance,
+      order: sanitizeOrder(order),
+      walletBalance: wallet.balance,
     });
   } catch (error) {
-    console.error(
-      "Create order error:",
-      {
-        message: error.message,
-        code: error.code,
-        status: error.status,
-        provider:
-          error.provider,
-      }
-    );
-
-    return res
-      .status(error.status || 500)
-      .json({
-        success: false,
-        message:
-          extractProviderError(
-            error
-          ) ||
-          "Unable to create order",
+    if (walletWasDebited && debitedAmount > 0) {
+      await refundWalletAfterSaveFailure({
+        userId: req.user._id,
+        amount: debitedAmount,
+        service: String(req.body.service || "service"),
+        country: String(req.body.country || "country"),
       });
+    }
+
+    console.error("Create order error:", error);
+
+    return res.status(error.status || 500).json({
+      success: false,
+      message: extractProviderError(error),
+      code: error.code || "ORDER_CREATION_FAILED",
+    });
   }
 };
+
 exports.checkOrder = async (req, res) => {
   try {
     const order = await Order.findOne({
@@ -450,58 +412,27 @@ exports.checkOrder = async (req, res) => {
       });
     }
 
-    if (
-      !order.provider ||
-      !order.providerOrderId
-    ) {
+    if (!order.provider || !order.providerOrderId) {
       return res.status(400).json({
         success: false,
-        message:
-          "Order has no valid provider reference",
+        message: "Order has no valid provider reference",
       });
     }
 
-    /*
-     * Do not poll completed orders again.
-     */
-
-    if (
-      [
-        "received",
-        "expired",
-        "cancelled",
-      ].includes(
-        String(order.status || "")
-          .trim()
-          .toLowerCase()
-      )
-    ) {
+    if (["received", "expired", "cancelled"].includes(order.status)) {
       return res.json({
         success: true,
-        order,
+        order: sanitizeOrder(order),
       });
     }
 
-    /*
-     * Always check the same provider that
-     * originally created this activation.
-     */
-
-    const providerOrder =
-      await providerManager.getOrder(
-        order.provider,
-        order.providerOrderId
-      );
-
-    console.log(
-      `[${order.provider}] check order response:`,
-      providerOrder
+    const providerOrder = await providerManager.getOrder(
+      order.provider,
+      order.providerOrderId
     );
 
     const providerStatus = String(
-      providerOrder.providerStatus ||
-        providerOrder.status ||
-        ""
+      providerOrder.providerStatus || providerOrder.status || ""
     )
       .trim()
       .toUpperCase();
@@ -520,53 +451,24 @@ exports.checkOrder = async (req, res) => {
     ];
 
     order.providerStatus =
-      providerStatus ||
-      order.providerStatus ||
-      "STATUS_WAIT_CODE";
+      providerStatus || order.providerStatus || "STATUS_WAIT_CODE";
+    order.status = allowedStatuses.includes(normalizedStatus)
+      ? normalizedStatus
+      : "waiting";
+    order.providerLastCheckedAt = new Date();
 
-    order.status =
-      allowedStatuses.includes(
-        normalizedStatus
-      )
-        ? normalizedStatus
-        : "waiting";
-
-    order.providerLastCheckedAt =
-      new Date();
-
-    if (
-      providerOrder.raw !== undefined
-    ) {
-      order.providerResponse =
-        providerOrder.raw;
+    if (providerOrder.raw !== undefined) {
+      order.providerResponse = providerOrder.raw;
     }
 
     if (providerOrder.operator) {
-      order.operator =
-        providerOrder.operator;
+      order.operator = normalizeOperator(providerOrder.operator);
     }
 
-    const smsText = String(
-      providerOrder.sms || ""
-    ).trim();
-
-    const directOtp = String(
-      providerOrder.otpCode || ""
-    ).trim();
-
-    /*
-     * Fallback extraction in case a provider
-     * returns the OTP only inside the SMS text.
-     */
-
-    const otpMatch = smsText.match(
-      /\b\d{4,8}\b/
-    );
-
-    const otpCode =
-      directOtp ||
-      otpMatch?.[0] ||
-      "";
+    const smsText = String(providerOrder.sms || "").trim();
+    const directOtp = String(providerOrder.otpCode || "").trim();
+    const otpMatch = smsText.match(/\b\d{4,8}\b/);
+    const otpCode = directOtp || otpMatch?.[0] || "";
 
     if (smsText) {
       order.sms = smsText;
@@ -575,71 +477,42 @@ exports.checkOrder = async (req, res) => {
     if (otpCode) {
       order.otpCode = otpCode;
       order.status = "received";
-
-      /*
-       * Some providers support explicitly
-       * finishing an activation after OTP receipt.
-       * BenOTP may not support this operation,
-       * so failure here must not hide the OTP.
-       */
+      order.financialStatus = "earned";
+      order.otpReceivedAt = order.otpReceivedAt || new Date();
 
       try {
-        const finishedOrder =
-          await providerManager.finishOrder(
-            order.provider,
-            order.providerOrderId
-          );
+        const finishedOrder = await providerManager.finishOrder(
+          order.provider,
+          order.providerOrderId
+        );
 
-        if (
-          finishedOrder?.providerStatus
-        ) {
+        if (finishedOrder?.providerStatus) {
           order.providerStatus = String(
             finishedOrder.providerStatus
           ).toUpperCase();
         }
 
-        order.providerFinishedAt =
-          new Date();
+        order.providerFinishedAt = new Date();
       } catch (finishError) {
-        if (
-          finishError.code !==
-          "OPERATION_NOT_SUPPORTED"
-        ) {
-          console.error(
-            `[${order.provider}] finish order failed:`,
-            extractProviderError(
-              finishError
-            )
-          );
+        if (finishError.code !== "OPERATION_NOT_SUPPORTED") {
+          console.error("Finish activation failed:", finishError);
         }
       }
     }
 
-    if (
-      order.status === "cancelled"
-    ) {
+    if (order.status === "cancelled") {
       order.providerCancelledAt =
-        order.providerCancelledAt ||
-        new Date();
+        order.providerCancelledAt || new Date();
     }
 
     await order.save();
 
     return res.json({
       success: true,
-      order,
+      order: sanitizeOrder(order),
     });
   } catch (error) {
-    console.error(
-      "Check order error:",
-      {
-        message: error.message,
-        code: error.code,
-        status: error.status,
-        provider:
-          error.provider,
-      }
-    );
+    console.error("Check order error:", error);
 
     const temporaryFailure =
       Boolean(error.retryable) ||
@@ -650,31 +523,23 @@ exports.checkOrder = async (req, res) => {
         "EPIPE",
         "EAI_AGAIN",
         "ERR_NETWORK",
-      ].includes(
-        String(error.code || "")
-          .toUpperCase()
-      );
+      ].includes(String(error.code || "").toUpperCase());
 
     return res
-      .status(
-        temporaryFailure
-          ? 503
-          : error.status || 502
-      )
+      .status(temporaryFailure ? 503 : error.status || 502)
       .json({
         success: false,
-        temporary:
-          temporaryFailure,
+        temporary: temporaryFailure,
         message: temporaryFailure
-          ? "The SMS provider connection was interrupted. The order is still active and will be checked again."
-          : extractProviderError(
-              error
-            ) ||
-            "Failed to check order status",
+          ? "The SMS server is temporarily unavailable. Please try again."
+          : extractProviderError(error),
       });
   }
 };
+
 exports.cancelOrder = async (req, res) => {
+  let claimedOrder = null;
+
   try {
     const order = await Order.findOne({
       _id: req.params.id,
@@ -689,22 +554,17 @@ exports.cancelOrder = async (req, res) => {
     }
 
     if (order.refunded) {
-      const wallet = await Wallet.findOne({
-        user: req.user._id,
-      });
+      const wallet = await Wallet.findOne({ user: req.user._id });
 
       return res.json({
         success: true,
         refunded: true,
         walletBalance: wallet?.balance ?? 0,
-        order,
+        order: sanitizeOrder(order),
       });
     }
 
-    if (
-      order.status === "received" ||
-      order.otpCode
-    ) {
+    if (order.status === "received" || order.otpCode) {
       return res.status(400).json({
         success: false,
         message:
@@ -712,197 +572,141 @@ exports.cancelOrder = async (req, res) => {
       });
     }
 
-    const refundAmount = Number(order.price);
+    const refundAmount = Number(order.sellingPrice || order.price);
 
-    if (
-      !Number.isFinite(refundAmount) ||
-      refundAmount <= 0
-    ) {
+    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
       return res.status(500).json({
         success: false,
-        message:
-          "Invalid refund amount.",
+        message: "Invalid refund amount.",
       });
     }
 
-    /*
-     * Lock the order.
-     */
-
-    const claimedOrder =
-      await Order.findOneAndUpdate(
-        {
-          _id: order._id,
-          user: req.user._id,
-          refunded: {
-            $ne: true,
-          },
-          status: "waiting",
-        },
-        {
-          $set: {
-            status: "cancelling",
-          },
-        },
-        {
-          returnDocument: "after",
-        }
-      );
+    claimedOrder = await Order.findOneAndUpdate(
+      {
+        _id: order._id,
+        user: req.user._id,
+        refunded: { $ne: true },
+        status: "waiting",
+      },
+      { $set: { status: "cancelling" } },
+      { returnDocument: "after" }
+    );
 
     if (!claimedOrder) {
       return res.status(409).json({
         success: false,
-        message:
-          "Order is already being processed.",
+        message: "Order is already being processed.",
       });
     }
 
-    /*
-     * Cancel using the provider that
-     * created the activation.
-     */
+    const providerResponse = await providerManager.cancelOrder(
+      claimedOrder.provider,
+      claimedOrder.providerOrderId
+    );
 
-    const providerResponse =
-      await providerManager.cancelOrder(
-        claimedOrder.provider,
-        claimedOrder.providerOrderId
-      );
-
-    /*
-     * Refund wallet.
-     */
-
-    const wallet =
-      await Wallet.findOneAndUpdate(
-        {
-          user: req.user._id,
-        },
-        {
-          $inc: {
-            balance: refundAmount,
-          },
-          $push: {
-            transactions: {
-              $each: [
-                {
-                  type: "refund",
-                  amount: refundAmount,
-                  description: `Refund for cancelled ${claimedOrder.service} activation`,
-                  status: "completed",
-                },
-              ],
-              $position: 0,
-            },
+    const wallet = await Wallet.findOneAndUpdate(
+      { user: req.user._id },
+      {
+        $inc: { balance: refundAmount },
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type: "refund",
+                amount: refundAmount,
+                description: `Refund for cancelled ${claimedOrder.service} activation`,
+                status: "completed",
+              },
+            ],
+            $position: 0,
           },
         },
-        {
-          returnDocument: "after",
-          runValidators: true,
-        }
-      );
+      },
+      {
+        returnDocument: "after",
+        runValidators: true,
+      }
+    );
 
     if (!wallet) {
-      /*
-       * Provider already cancelled.
-       * Preserve retry state.
-       */
-
-      await Order.findByIdAndUpdate(
-        claimedOrder._id,
-        {
-          status: "cancelled",
-          refunded: false,
-          providerStatus:
-            providerResponse.providerStatus,
-          providerCancelledAt:
-            new Date(),
-        }
-      );
+      await Order.findByIdAndUpdate(claimedOrder._id, {
+        status: "cancelled",
+        refunded: false,
+        financialStatus: "charged",
+        providerStatus: providerResponse.providerStatus,
+        providerCancelledAt: new Date(),
+      });
 
       return res.status(404).json({
         success: false,
-        message:
-          "Provider cancelled successfully but wallet was not found.",
+        message: "Provider cancelled successfully but wallet was not found.",
       });
     }
 
-    const updatedOrder =
-      await Order.findByIdAndUpdate(
-        claimedOrder._id,
-        {
-          $set: {
-            status: "cancelled",
-            refunded: true,
-            refundedAt: new Date(),
-            providerStatus:
-              providerResponse.providerStatus,
-            providerCancelledAt:
-              new Date(),
-            providerResponse:
-              providerResponse.raw,
-          },
+    const updatedOrder = await Order.findByIdAndUpdate(
+      claimedOrder._id,
+      {
+        $set: {
+          status: "cancelled",
+          refunded: true,
+          refundedAt: new Date(),
+          financialStatus: "refunded",
+          providerStatus: providerResponse.providerStatus,
+          providerCancelledAt: new Date(),
+          providerResponse: providerResponse.raw,
         },
-        {
-          returnDocument: "after",
-        }
-      );
+      },
+      { returnDocument: "after" }
+    );
 
     return res.json({
       success: true,
       refunded: true,
       refundAmount,
-      walletBalance:
-        wallet.balance,
-      wallet,
-      order: updatedOrder,
-      message:
-        "Order cancelled and wallet refunded.",
+      walletBalance: wallet.balance,
+      order: sanitizeOrder(updatedOrder),
+      message: "Order cancelled and wallet refunded.",
     });
   } catch (error) {
-    console.error(
-      "Cancel order error:",
-      error
-    );
+    if (claimedOrder?._id) {
+      await Order.findOneAndUpdate(
+        {
+          _id: claimedOrder._id,
+          status: "cancelling",
+          refunded: { $ne: true },
+        },
+        { $set: { status: "waiting" } }
+      ).catch(() => null);
+    }
 
-    return res
-      .status(error.status || 500)
-      .json({
-        success: false,
-        message:
-          extractProviderError(error),
-      });
+    console.error("Cancel order error:", error);
+
+    return res.status(error.status || 500).json({
+      success: false,
+      message: extractProviderError(error),
+    });
   }
 };
 
-exports.getOrders = async (
-  req,
-  res
-) => {
+exports.getOrders = async (req, res) => {
   try {
-    const orders = await Order.find({
-      user: req.user._id,
-    }).sort({
+    const orders = await Order.find({ user: req.user._id }).sort({
       createdAt: -1,
     });
 
     return res.json({
       success: true,
-      orders,
+      orders: sanitizeOrders(orders),
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Unable to load orders",
+      message: error.message || "Unable to load orders",
     });
   }
 };
 
-exports.getOrder = async (
-  req,
-  res
-) => {
+exports.getOrder = async (req, res) => {
   try {
     const order = await Order.findOne({
       _id: req.params.id,
@@ -918,14 +722,12 @@ exports.getOrder = async (
 
     return res.json({
       success: true,
-      order,
+      order: sanitizeOrder(order),
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Unable to load order",
+      message: error.message || "Unable to load order",
     });
   }
 };

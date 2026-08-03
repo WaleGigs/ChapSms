@@ -14,9 +14,7 @@ exports.protect = async (req, res, next) => {
       });
     }
 
-    const token = authorization
-      .slice(7)
-      .trim();
+    const token = authorization.slice(7).trim();
 
     if (!token) {
       return res.status(401).json({
@@ -34,9 +32,7 @@ exports.protect = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(
-      decoded.id
-    ).select("-password");
+    const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
       return res.status(401).json({
@@ -48,13 +44,11 @@ exports.protect = async (req, res, next) => {
     if (user.suspended) {
       return res.status(403).json({
         success: false,
-        message:
-          "Your account has been suspended. Contact support.",
+        message: "Your account has been suspended. Contact support.",
       });
     }
 
     req.user = user;
-
     return next();
   } catch (error) {
     console.error("Auth middleware error:", {
@@ -65,8 +59,7 @@ exports.protect = async (req, res, next) => {
     if (error.name === "TokenExpiredError") {
       return res.status(401).json({
         success: false,
-        message:
-          "Your session has expired. Please log in again.",
+        message: "Your session has expired. Please log in again.",
       });
     }
 

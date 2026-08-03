@@ -39,7 +39,7 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: function () {
+      required() {
         return this.authProvider === "local";
       },
       select: false,
@@ -55,11 +55,13 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ["user", "admin"],
       default: "user",
+      index: true,
     },
 
     suspended: {
       type: Boolean,
       default: false,
+      index: true,
     },
 
     isVerified: {
@@ -109,7 +111,5 @@ const userSchema = new mongoose.Schema(
     versionKey: false,
   }
 );
-
-
 
 module.exports = mongoose.model("User", userSchema);
