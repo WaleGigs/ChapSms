@@ -1,14 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Mail } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { useAuth } from "@/context/AuthContext";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
+import PasswordField from "@/components/auth/PasswordField";
+import {
+  normalizeEmail,
+  validateLoginField,
+  validateLoginForm,
+} from "@/lib/formValidation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,54 +27,137 @@ export default function LoginPage() {
     rememberMe: true,
   });
 
+  const [touched, setTouched] = useState({});
+  const [errors, setErrors] = useState({});
+  const [submitError, setSubmitError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function updateField(e) {
-    const { name, value, type, checked } = e.target;
+  const currentErrors = useMemo(
+    () => validateLoginForm(form),
+    [form]
+  );
 
-    setForm((currentForm) => ({
-      ...currentForm,
-      [name]:
-        type === "checkbox"
-          ? checked
-          : value,
+  const canSubmit =
+    Object.keys(currentErrors).length === 0 &&
+    !loading;
+
+  function updateField(event) {
+    const {
+      name,
+      value,
+      type,
+      checked,
+    } = event.target;
+
+    const nextValue =
+      type === "checkbox"
+        ? checked
+        : value;
+
+    setForm((current) => ({
+      ...current,
+      [name]: nextValue,
+    }));
+
+    setSubmitError("");
+
+    if (touched[name]) {
+      const message =
+        validateLoginField(
+          name,
+          nextValue
+        );
+
+      setErrors((current) => ({
+        ...current,
+        [name]: message,
+      }));
+    }
+  }
+
+  function handleBlur(event) {
+    const {
+      name,
+      value,
+    } = event.target;
+
+    const message =
+      validateLoginField(
+        name,
+        value
+      );
+
+    setTouched((current) => ({
+      ...current,
+      [name]: true,
+    }));
+
+    setErrors((current) => ({
+      ...current,
+      [name]: message,
     }));
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  async function handleSubmit(event) {
+    event.preventDefault();
 
     if (loading) {
       return;
     }
 
-    const email = form.email
-      .trim()
-      .toLowerCase();
+    const validationErrors =
+      validateLoginForm(form);
 
-    if (!email || !form.password) {
-      toast.error(
-        "Email and password are required"
-      );
+    setTouched({
+      email: true,
+      password: true,
+    });
+
+    setErrors(validationErrors);
+    setSubmitError("");
+
+    if (
+      Object.keys(validationErrors)
+        .length > 0
+    ) {
       return;
     }
+
+    const email =
+      normalizeEmail(form.email);
 
     try {
       setLoading(true);
 
-     const response = await login({
-  email,
-  password: form.password,
-  rememberMe: form.rememberMe,
-});
+      const response =
+        await login({
+          email,
+          password: form.password,
+          rememberMe:
+            form.rememberMe,
+        });
 
-toast.success(
-  response?.message ||
-    "Login successful"
-);
+      toast.success(
+        response?.message ||
+          "Login successful"
+      );
 
-router.replace("/dashboard");
+      /*
+       * Admins still enter the admin panel.
+       * Regular users go directly to Buy Number.
+       */
+      const destination =
+        response?.user?.role ===
+        "admin"
+          ? "/admin"
+          : "/buy-number";
+
+      router.replace(destination);
     } catch (error) {
+      const message =
+        error?.message ||
+        "Login failed. Please try again.";
+
       const errorCode =
         error?.data?.code;
 
@@ -75,10 +165,7 @@ router.replace("/dashboard");
         errorCode ===
         "EMAIL_NOT_VERIFIED"
       ) {
-        toast.error(
-          error?.message ||
-            "Please verify your email before logging in."
-        );
+        toast.error(message);
 
         router.push(
           `/verify-email?email=${encodeURIComponent(
@@ -89,61 +176,95 @@ router.replace("/dashboard");
         return;
       }
 
-      toast.error(
-        error?.message || "Login failed"
-      );
+      setSubmitError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <Card className="rounded-3xl p-8 shadow-xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-black text-[var(--foreground)]">
+    <Card className="rounded-[26px] p-5 shadow-xl sm:p-8">
+      <div className="mb-7 sm:mb-8">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
+          Account access
+        </p>
+
+        <h1 className="mt-3 text-3xl font-black tracking-tight text-[var(--foreground)] sm:text-4xl">
           Welcome back
         </h1>
 
-        <p className="mt-2 text-[var(--muted-foreground)]">
-          Login to manage your wallet,
-          orders, and API keys.
+        <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
+          Login to manage your
+          wallet, orders, pricing
+          access, and API keys.
         </p>
       </div>
+
+      {submitError ? (
+        <div
+          role="alert"
+          className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+        >
+          {submitError}
+        </div>
+      ) : null}
 
       <form
         onSubmit={handleSubmit}
         className="space-y-5"
+        noValidate
       >
         <Input
-          label="Email Address"
+          label="Email address"
           name="email"
           type="email"
           placeholder="you@example.com"
           autoComplete="email"
+          inputMode="email"
+          autoCapitalize="none"
+          spellCheck={false}
+          maxLength={254}
           value={form.email}
           onChange={updateField}
+          onBlur={handleBlur}
+          error={
+            touched.email
+              ? errors.email
+              : ""
+          }
+          leftIcon={Mail}
           required
         />
 
-        <Input
+        <PasswordField
           label="Password"
           name="password"
-          type="password"
-          placeholder="Enter password"
+          placeholder="Enter your password"
           autoComplete="current-password"
           value={form.password}
           onChange={updateField}
+          onBlur={handleBlur}
+          error={
+            touched.password
+              ? errors.password
+              : ""
+          }
           required
         />
 
-        <div className="flex items-center justify-between gap-4 text-sm">
-          <label className="flex items-center gap-2 text-[var(--muted-foreground)]">
+        <div className="flex flex-col gap-3 text-sm min-[380px]:flex-row min-[380px]:items-center min-[380px]:justify-between">
+          <label className="flex cursor-pointer items-center gap-2.5 text-[var(--muted-foreground)]">
             <input
               name="rememberMe"
               type="checkbox"
-              checked={form.rememberMe}
-              onChange={updateField}
-              className="h-4 w-4"
+              checked={
+                form.rememberMe
+              }
+              onChange={
+                updateField
+              }
+              className="h-4 w-4 rounded border-[var(--input)] accent-blue-600"
             />
 
             Remember me
@@ -151,7 +272,7 @@ router.replace("/dashboard");
 
           <Link
             href="/forgot-password"
-            className="font-bold text-blue-600"
+            className="focus-ring w-fit rounded-md font-bold text-blue-600 hover:text-blue-700"
           >
             Forgot password?
           </Link>
@@ -161,19 +282,21 @@ router.replace("/dashboard");
           type="submit"
           className="w-full"
           size="lg"
-          disabled={loading}
+          disabled={!canSubmit}
+          aria-busy={loading}
         >
           {loading
             ? "Logging in..."
-            : "Login"}
+            : "Login securely"}
         </Button>
       </form>
 
       <p className="mt-6 text-center text-sm text-[var(--muted-foreground)]">
-        Don&apos;t have an account?{" "}
+        Don&apos;t have an
+        account?{" "}
         <Link
           href="/signup"
-          className="font-bold text-blue-600"
+          className="focus-ring rounded-md font-bold text-blue-600 hover:text-blue-700"
         >
           Create account
         </Link>

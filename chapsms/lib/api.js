@@ -143,9 +143,9 @@ export async function api(
       }
     );
   } catch (error) {
-    const networkError = new Error(
-      "Unable to connect to the backend server"
-    );
+   const networkError = new Error(
+  "Unable to connect. Please check your internet connection and try again."
+);
 
     networkError.cause = error;
     networkError.status = 0;

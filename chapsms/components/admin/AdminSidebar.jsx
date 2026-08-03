@@ -1,26 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  Users,
-  ShoppingCart,
-  WalletCards,
+  ArrowLeft,
+  BadgeDollarSign,
   CreditCard,
+  LayoutDashboard,
+  ReceiptText,
   Settings,
-  LogOut,
+  ShieldCheck,
+  Users,
+  WalletCards,
   X,
 } from "lucide-react";
-
-import { useAuth } from "@/context/AuthContext";
-import toast from "react-hot-toast";
 
 const links = [
   {
     href: "/admin/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
+    exact: true,
   },
   {
     href: "/admin/users",
@@ -30,7 +30,7 @@ const links = [
   {
     href: "/admin/orders",
     label: "Orders",
-    icon: ShoppingCart,
+    icon: ReceiptText,
   },
   {
     href: "/admin/wallets",
@@ -41,6 +41,11 @@ const links = [
     href: "/admin/payments",
     label: "Payments",
     icon: CreditCard,
+  },
+  {
+    href: "/admin/pricing",
+    label: "Pricing Rules",
+    icon: BadgeDollarSign,
   },
   {
     href: "/admin/settings",
@@ -54,102 +59,137 @@ export default function AdminSidebar({
   onClose,
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const { logout } = useAuth();
 
-  function isActive(href) {
-    return pathname === href || pathname.startsWith(`${href}/`);
-  }
-
-  async function handleLogout() {
-    try {
-      await logout();
-      toast.success("Logged out successfully");
-      router.push("/login");
-    } catch (error) {
-      toast.error(error.message || "Logout failed");
+  function isActive(item) {
+    if (item.exact) {
+      return pathname === item.href;
     }
+
+    return (
+      pathname === item.href ||
+      pathname.startsWith(`${item.href}/`)
+    );
   }
 
   const content = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-full flex-col">
+      <div className="sticky top-0 z-20 -mx-4 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 pb-4 pt-1 min-[375px]:-mx-5 min-[375px]:px-5">
         <Link
           href="/admin/dashboard"
           onClick={onClose}
-          className="text-xl font-black tracking-tight text-[var(--foreground)]"
+          className="flex items-center gap-3"
         >
-          Chaps<span className="text-blue-600">SmS</span>
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
+            <ShieldCheck size={21} />
+          </div>
 
-          <span className="ml-2 text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Admin
-          </span>
+          <div>
+            <p className="text-lg font-black tracking-tight text-[var(--foreground)]">
+              Chaps<span className="text-blue-600">SmS</span>
+            </p>
+
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
+              Admin Console
+            </p>
+          </div>
         </Link>
 
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close sidebar"
-          className="rounded-lg p-2 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] lg:hidden"
+          aria-label="Close admin navigation"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] lg:hidden"
         >
           <X size={20} />
         </button>
       </div>
 
-      <nav className="mt-8 space-y-1.5">
+      <nav
+        className="mt-6 space-y-1.5"
+        aria-label="Admin navigation"
+      >
         {links.map((item) => {
           const Icon = item.icon;
-          const active = isActive(item.href);
+          const active = isActive(item);
 
           return (
             <Link
               key={item.href}
               href={item.href}
               onClick={onClose}
-              className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition ${
+              aria-current={
                 active
-                  ? "bg-blue-600 text-white shadow-sm"
+                  ? "page"
+                  : undefined
+              }
+              className={`flex min-h-12 items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition active:scale-[0.98] ${
+                active
+                  ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
                   : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
               }`}
             >
-              <Icon size={18} />
-              {item.label}
+              <Icon
+                size={18}
+                className="shrink-0"
+              />
+
+              <span>{item.label}</span>
             </Link>
           );
         })}
       </nav>
 
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="mt-auto flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-red-500 transition hover:bg-red-50 dark:hover:bg-red-950/30"
-      >
-        <LogOut size={18} />
-        Log out
-      </button>
+      <div className="sticky bottom-0 z-20 -mx-4 mt-auto border-t border-[var(--border)] bg-[var(--card)] px-4 pb-3 pt-5 min-[375px]:-mx-5 min-[375px]:px-5">
+        <Link
+          href="/buy-number"
+          onClick={onClose}
+          className="flex min-h-12 items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          <ArrowLeft size={18} />
+          Customer dashboard
+        </Link>
+      </div>
     </div>
   );
 
   return (
     <>
-      <aside className="sticky top-0 hidden h-screen border-r border-[var(--border)] bg-[var(--card)] p-5 lg:block">
-        {content}
+      <aside className="sticky top-0 hidden h-screen overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] lg:block">
+        <div className="min-h-full px-5 py-4">
+          {content}
+        </div>
       </aside>
 
-      {open && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close sidebar overlay"
-            className="absolute inset-0 bg-slate-950/55"
-          />
+      <div
+        className={`fixed inset-0 z-50 transition-opacity duration-300 lg:hidden ${
+          open
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0"
+        }`}
+        aria-hidden={!open}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close admin navigation overlay"
+          className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        />
 
-          <aside className="relative h-full w-[280px] border-r border-[var(--border)] bg-[var(--card)] p-5 text-[var(--foreground)] shadow-2xl">
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label="Admin navigation"
+          className={`relative h-full w-[86vw] max-w-[330px] overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] shadow-2xl transition-transform duration-300 ease-out ${
+            open
+              ? "translate-x-0"
+              : "-translate-x-full"
+          }`}
+        >
+          <div className="min-h-full px-4 py-4 min-[375px]:px-5">
             {content}
-          </aside>
-        </div>
-      )}
+          </div>
+        </aside>
+      </div>
     </>
   );
 }

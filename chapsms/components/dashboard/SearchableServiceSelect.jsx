@@ -1,7 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import {
+  useState,
+} from "react";
+
+import {
+  Check,
+  ChevronsUpDown,
+} from "lucide-react";
 
 import {
   Command,
@@ -11,16 +17,43 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-function formatNaira(value) {
-  return `₦${Number(value || 0).toLocaleString("en-NG", {
-    maximumFractionDigits: 0,
-  })}`;
+function getServiceId(service) {
+  return String(
+    service?.id ??
+      service?.code ??
+      service?.service ??
+      ""
+  );
+}
+
+function getServiceName(service) {
+  return String(
+    service?.name ??
+      service?.serviceName ??
+      service?.title ??
+      service?.code ??
+      service?.id ??
+      "Unknown service"
+  );
+}
+
+function getServiceStock(service) {
+  const stock = Number(
+    service?.available ??
+      service?.stock ??
+      service?.count
+  );
+
+  return Number.isFinite(stock)
+    ? stock
+    : null;
 }
 
 export default function SearchableServiceSelect({
@@ -29,15 +62,31 @@ export default function SearchableServiceSelect({
   onChange,
   disabled = false,
 }) {
-  const [open, setOpen] = useState(false);
+  const [
+    open,
+    setOpen,
+  ] = useState(false);
+
+  const normalizedValue =
+    String(value || "");
 
   const selectedService =
-    services.find((service) => service.id === value) || null;
+    services.find(
+      (service) =>
+        getServiceId(service) ===
+        normalizedValue
+    ) || null;
 
   return (
     <Popover
-      open={disabled ? false : open}
-      onOpenChange={setOpen}
+      open={
+        disabled ? false : open
+      }
+      onOpenChange={(nextOpen) => {
+        if (!disabled) {
+          setOpen(nextOpen);
+        }
+      }}
     >
       <PopoverTrigger
         type="button"
@@ -46,23 +95,21 @@ export default function SearchableServiceSelect({
         disabled={disabled}
         className="flex h-12 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 outline-none transition hover:bg-slate-50 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
       >
-        {selectedService ? (
-          <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-            <span className="truncate">
-              {selectedService.name}
-            </span>
-
-            <span className="shrink-0 text-blue-600">
-              {formatNaira(selectedService.price)}
-            </span>
-          </span>
-        ) : (
-          <span className="text-slate-400">
-            {disabled
+        <span
+          className={
+            selectedService
+              ? "truncate"
+              : "text-slate-400"
+          }
+        >
+          {selectedService
+            ? getServiceName(
+                selectedService
+              )
+            : disabled
               ? "Select a country first"
               : "Choose a service"}
-          </span>
-        )}
+        </span>
 
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 text-slate-400" />
       </PopoverTrigger>
@@ -76,44 +123,67 @@ export default function SearchableServiceSelect({
 
           <CommandList>
             <CommandEmpty>
-              No available service found for this country.
+              No available service found.
             </CommandEmpty>
 
             <CommandGroup>
-              {services.map((service) => (
-                <CommandItem
-                  key={service.id}
-                  value={`${service.name} ${service.id}`}
-                  onSelect={() => {
-                    onChange(service.id);
-                    setOpen(false);
-                  }}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">
-                      {service.name}
-                    </p>
+              {services.map(
+                (
+                  service,
+                  index
+                ) => {
+                  const serviceId =
+                    getServiceId(
+                      service
+                    );
 
-                    <p className="text-xs text-slate-400">
-                      {Number(
-                        service.available || 0
-                      ).toLocaleString()}{" "}
-                      available
-                    </p>
-                  </div>
+                  const serviceName =
+                    getServiceName(
+                      service
+                    );
 
-                  <div className="flex shrink-0 items-center gap-3">
-                    <span className="text-sm font-bold text-blue-600">
-                      {formatNaira(service.price)}
-                    </span>
+                  const stock =
+                    getServiceStock(
+                      service
+                    );
 
-                    {value === service.id && (
-                      <Check className="h-4 w-4 text-blue-600" />
-                    )}
-                  </div>
-                </CommandItem>
-              ))}
+                  return (
+                    <CommandItem
+                      key={
+                        serviceId ||
+                        `${serviceName}-${index}`
+                      }
+                      value={`${serviceName} ${serviceId}`}
+                      onSelect={() => {
+                        onChange(
+                          serviceId
+                        );
+
+                        setOpen(false);
+                      }}
+                      className="flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">
+                          {serviceName}
+                        </p>
+
+                        <p className="text-xs text-slate-400">
+                          {stock !== null &&
+                          stock > 0
+                            ? `${stock.toLocaleString()} available`
+                            : "Live price checked after selection"}
+                        </p>
+                      </div>
+
+                      {normalizedValue ===
+                        serviceId && (
+                        <Check className="h-4 w-4 shrink-0 text-blue-600" />
+                      )}
+                    </CommandItem>
+                  );
+                }
+              )}
             </CommandGroup>
           </CommandList>
         </Command>

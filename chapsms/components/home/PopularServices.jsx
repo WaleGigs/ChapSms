@@ -1,67 +1,73 @@
-// components/home/PopularServices.jsx
 import {
-  MessageCircle,
-  Send,
-  Music2,
   Gamepad2,
   Mail,
+  MessageCircle,
+  Music2,
+  Send,
   ShoppingBag,
-  Video,
   Users,
+  Video,
 } from "lucide-react";
+
 import Section from "@/components/ui/Section";
 import Card from "@/components/ui/Card";
 import SectionHeader from "@/components/ui/SectionHeader";
 import Button from "@/components/ui/Button";
 
 const services = [
-  { name: "WhatsApp", icon: MessageCircle, price: "$0.25" },
-  { name: "Telegram", icon: Send, price: "$0.20" },
-  { name: "TikTok", icon: Music2, price: "$0.30" },
-  { name: "Discord", icon: Gamepad2, price: "$0.22" },
-  { name: "Google", icon: Mail, price: "$0.35" },
-  { name: "Amazon", icon: ShoppingBag, price: "$0.28" },
-  { name: "Netflix", icon: Video, price: "$0.32" },
-  { name: "Facebook", icon: Users, price: "$0.24" },
+  { name: "WhatsApp", icon: MessageCircle },
+  { name: "Telegram", icon: Send },
+  { name: "TikTok", icon: Music2 },
+  { name: "Discord", icon: Gamepad2 },
+  { name: "Google", icon: Mail },
+  { name: "Amazon", icon: ShoppingBag },
+  { name: "Netflix", icon: Video },
+  { name: "Facebook", icon: Users },
 ];
 
 export default function PopularServices() {
   return (
     <Section className="bg-[var(--background)]" id="services">
-      <SectionHeader
-        badge="Popular Services"
-        title="Get OTP codes for platforms people use every day"
-        text="Choose a service, select a country, purchase a number, and receive your verification code in one place."
-      />
+      <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+        <SectionHeader
+          badge="Popular services"
+          title="Use virtual numbers across familiar platforms"
+          text="Availability and final pricing are checked live when you select a server, country, service, and operator."
+          className="mb-0"
+        />
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <Button
+          href="/buy-number"
+          variant="secondary"
+          className="relative z-10 w-full lg:w-auto"
+        >
+          View all services
+        </Button>
+      </div>
+
+      <div className="mt-10 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4 lg:mt-12">
         {services.map((service) => {
           const Icon = service.icon;
 
           return (
             <Card
               key={service.name}
-              className="group transition hover:-translate-y-1 hover:shadow-xl"
+              className="group min-w-0 p-4 transition duration-300 hover:-translate-y-1 hover:border-blue-300 hover:shadow-xl dark:hover:border-blue-900 sm:p-5"
             >
-              <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                <Icon size={22} />
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-700 transition group-hover:bg-blue-600 group-hover:text-white dark:bg-blue-950/70 dark:text-blue-300">
+                <Icon size={20} />
               </div>
 
-              <h3 className="text-lg font-bold text-[var(--foreground)]">
+              <h3 className="mt-4 truncate text-base font-black text-[var(--foreground)] sm:text-lg">
                 {service.name}
               </h3>
 
-              <p className="mt-2 text-sm text-[var(--muted-foreground)]">
-                Starting from{" "}
-                <span className="font-bold text-blue-600">{service.price}</span>
+              <p className="mt-1.5 text-xs font-semibold text-blue-600 sm:text-sm">
+                Live pricing
               </p>
             </Card>
           );
         })}
-      </div>
-
-      <div className="mt-10">
-        <Button href="/signup">View All Services</Button>
       </div>
     </Section>
   );

@@ -11,6 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+
 import {
   Popover,
   PopoverContent,
@@ -25,7 +26,9 @@ export default function SearchableCountrySelect({
   const [open, setOpen] = useState(false);
 
   const selectedCountry =
-    countries.find((country) => country.code === value) || null;
+    countries.find(
+      (country) => String(country.id) === String(value)
+    ) || null;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -33,14 +36,11 @@ export default function SearchableCountrySelect({
         type="button"
         role="combobox"
         aria-expanded={open}
-        className="flex h-12 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-950 outline-none transition hover:bg-slate-50 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+        className="flex h-12 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold"
       >
         {selectedCountry ? (
-          <span className="flex min-w-0 items-center gap-2">
-            <span>{selectedCountry.flag}</span>
-            <span className="truncate">
-              {selectedCountry.name}
-            </span>
+          <span className="truncate">
+            {selectedCountry.eng}
           </span>
         ) : (
           <span className="text-slate-400">
@@ -48,7 +48,7 @@ export default function SearchableCountrySelect({
           </span>
         )}
 
-        <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400" />
+        <ChevronsUpDown className="h-4 w-4 text-slate-400" />
       </PopoverTrigger>
 
       <PopoverContent
@@ -59,38 +59,25 @@ export default function SearchableCountrySelect({
           <CommandInput placeholder="Search countries..." />
 
           <CommandList>
-            <CommandEmpty>No available country found.</CommandEmpty>
+            <CommandEmpty>
+              No available country found.
+            </CommandEmpty>
 
             <CommandGroup>
               {countries.map((country) => (
                 <CommandItem
-                  key={country.code}
-                  value={`${country.name} ${country.code}`}
+                  key={country.id}
+                  value={country.eng}
                   onSelect={() => {
-                    onChange(country.code);
+                    onChange(String(country.id));
                     setOpen(false);
                   }}
-                  className="flex items-center justify-between gap-3"
+                  className="flex items-center justify-between"
                 >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span>{country.flag}</span>
+                  <span>{country.eng}</span>
 
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">
-                        {country.name}
-                      </p>
-
-                      <p className="text-xs text-slate-400">
-                        {Number(
-                          country.available || 0
-                        ).toLocaleString()}{" "}
-                        available
-                      </p>
-                    </div>
-                  </div>
-
-                  {value === country.code && (
-                    <Check className="h-4 w-4 shrink-0 text-blue-600" />
+                  {String(value) === String(country.id) && (
+                    <Check className="h-4 w-4 text-blue-600" />
                   )}
                 </CommandItem>
               ))}

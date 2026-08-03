@@ -18,6 +18,7 @@ import {
 import { useCatalog } from "@/hooks/useCatalog";
 import { useOrders } from "@/hooks/useOrders";
 import { useWallet } from "@/hooks/useWallet";
+import { catalogService } from "@/services/catalogService";
 import { orderService } from "@/services/orderService";
 
 import SearchableCountrySelect from "@/components/dashboard/SearchableCountrySelect";
@@ -71,16 +72,23 @@ export default function BuyNumberPage() {
     refreshWallet,
   } = useWallet();
 
+  const [selectedServer, setSelectedServer] = useState("server1");
+
   const {
     countries,
+    services,
     loading: catalogLoading,
     error: catalogError,
     reload: reloadCatalog,
-  } = useCatalog();
+  } = useCatalog(selectedServer);
 
-  const [selectedServer, setSelectedServer] = useState("benotp");
   const [selectedCountryCode, setSelectedCountryCode] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState("");
+
+  const [livePrice, setLivePrice] = useState(null);
+  const [liveStock, setLiveStock] = useState(null);
+  const [priceLoading, setPriceLoading] = useState(false);
+  const [priceError, setPriceError] = useState("");
 
   const [currentOrder, setCurrentOrder] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
@@ -94,19 +102,29 @@ export default function BuyNumberPage() {
   const selectedCountry = useMemo(() => {
     return (
       countries.find(
-        (country) => country.code === selectedCountryCode
+        (country) => String(country.id) === String(selectedCountryCode)
       ) || null
     );
   }, [countries, selectedCountryCode]);
 
   const availableServices = useMemo(() => {
-    return selectedCountry?.services || [];
-  }, [selectedCountry]);
+    if (!selectedCountry) {
+      return [];
+    }
+
+    return services;
+  }, [selectedCountry, services]);
 
   const selectedService = useMemo(() => {
     return (
       availableServices.find(
-        (service) => service.id === selectedServiceId
+        (service) =>
+          String(
+            service.id ||
+              service.code ||
+              service.service ||
+              ""
+          ) === String(selectedServiceId)
       ) || null
     );
   }, [availableServices, selectedServiceId]);
@@ -117,19 +135,19 @@ export default function BuyNumberPage() {
 
   const otpCode = currentOrder?.otpCode || "";
 
-  const estimatedPrice = Number(
-    selectedService?.price || 0
-  );
+  const estimatedPrice = Number(livePrice || 0);
 
-  const serviceStock = Number(
-    selectedService?.available || 0
-  );
+  const serviceStock =
+    liveStock === null || liveStock === undefined
+      ? null
+      : Number(liveStock);
 
   const serviceIsAvailable =
+    Boolean(selectedCountry) &&
     Boolean(selectedService) &&
+    !priceLoading &&
     Number.isFinite(estimatedPrice) &&
-    estimatedPrice > 0 &&
-    serviceStock > 0;
+    estimatedPrice > 0;
 
   const orderIsClosed = [
     "received",
@@ -174,33 +192,113 @@ export default function BuyNumberPage() {
   );
 
   useEffect(() => {
-    if (!countries.length || selectedCountryCode) {
+    if (!selectedCountryCode) {
       return;
     }
 
-    setSelectedCountryCode(countries[0].code);
+    const countryStillExists = countries.some(
+      (country) =>
+        String(country.id) === String(selectedCountryCode)
+    );
+
+    if (!countryStillExists) {
+      setSelectedCountryCode("");
+      setSelectedServiceId("");
+    }
   }, [countries, selectedCountryCode]);
 
   useEffect(() => {
-    if (!selectedCountry) {
-      setSelectedServiceId("");
+    if (!selectedServiceId) {
       return;
     }
 
-    const currentServiceStillExists = availableServices.some(
-      (service) => service.id === selectedServiceId
+    const serviceStillExists = availableServices.some(
+      (service) =>
+        String(
+          service.id ||
+            service.code ||
+            service.service ||
+            ""
+        ) === String(selectedServiceId)
     );
 
-    if (!currentServiceStillExists) {
-      setSelectedServiceId(
-        availableServices[0]?.id || ""
-      );
+    if (!serviceStillExists) {
+      setSelectedServiceId("");
     }
-  }, [
-    selectedCountry,
-    availableServices,
-    selectedServiceId,
-  ]);
+  }, [availableServices, selectedServiceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setLivePrice(null);
+    setLiveStock(null);
+    setPriceError("");
+
+    if (!selectedCountry || !selectedService) {
+      setPriceLoading(false);
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setPriceLoading(true);
+
+        const response = await catalogService.getPrice({
+          server: selectedServer,
+          country: selectedCountry.id,
+          countryName:
+            selectedCountry.eng ||
+            selectedCountry.name ||
+            selectedCountry.label ||
+            "",
+          service:
+            selectedService.id ||
+            selectedService.code ||
+            selectedService.service,
+          serviceName:
+            selectedService.name ||
+            selectedService.title ||
+            selectedService.label ||
+            "",
+          operator:
+            selectedService.preferredOperator || "any",
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const price = Number(response?.price);
+        const stock = Number(response?.stock);
+
+        if (!Number.isFinite(price) || price <= 0) {
+          throw new Error("A live price is not available");
+        }
+
+        setLivePrice(price);
+        setLiveStock(Number.isFinite(stock) ? stock : null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setLivePrice(null);
+        setLiveStock(null);
+        setPriceError(
+          error.message || "Unable to retrieve live price"
+        );
+      } finally {
+        if (!cancelled) {
+          setPriceLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [selectedServer, selectedCountry, selectedService]);
 
   useEffect(() => {
     async function restoreActiveOrder() {
@@ -337,13 +435,6 @@ export default function BuyNumberPage() {
       return;
     }
 
-    if (serviceStock <= 0) {
-      toast.error(
-        "This service is currently out of stock"
-      );
-      return;
-    }
-
     if (
       !Number.isFinite(estimatedPrice) ||
       estimatedPrice <= 0
@@ -358,12 +449,24 @@ export default function BuyNumberPage() {
       setPurchasing(true);
 
       const response = await createOrder({
-        provider: selectedServer,
-        country: selectedCountry.code,
-        service: selectedService.id,
+        server: selectedServer,
+        country: selectedCountry.id,
+        countryName:
+          selectedCountry.eng ||
+          selectedCountry.name ||
+          selectedCountry.label ||
+          "",
+        service:
+          selectedService.id ||
+          selectedService.code ||
+          selectedService.service,
+        serviceName:
+          selectedService.name ||
+          selectedService.title ||
+          selectedService.label ||
+          "",
         operator:
-          selectedService.preferredOperator ||
-          "any",
+          selectedService.preferredOperator || "any",
       });
 
       if (!response?.order) {
@@ -515,7 +618,38 @@ async function handleCancel() {
       toast.error("Could not copy");
     }
   }
+  function resetLivePrice() {
+    setLivePrice(null);
+    setLiveStock(null);
+    setPriceError("");
+    setPriceLoading(false);
+  }
 
+  function handleServerChange(server) {
+    if (
+      purchasing ||
+      checkingOrder ||
+      cancellingOrder
+    ) {
+      return;
+    }
+
+    setSelectedServer(server);
+    setSelectedCountryCode("");
+    setSelectedServiceId("");
+    resetLivePrice();
+  }
+
+  function handleCountryChange(countryId) {
+    setSelectedCountryCode(String(countryId || ""));
+    setSelectedServiceId("");
+    resetLivePrice();
+  }
+
+  function handleServiceChange(serviceId) {
+    setSelectedServiceId(String(serviceId || ""));
+    resetLivePrice();
+  }
   function startNewOrder() {
     clearActiveOrder();
     setCurrentOrder(null);
@@ -608,47 +742,13 @@ async function handleCancel() {
 
       {!currentOrder ? (
         <>
-          <div className="mb-5 flex justify-center sm:mb-6">
+          {/* <div className="mb-5 flex justify-center sm:mb-6">
             <div className="grid w-full max-w-md grid-cols-2 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm sm:w-auto">
-              <button
-                type="button"
-                onClick={() => setSelectedServer("benotp")}
-                className={`min-w-0 rounded-xl px-3 py-3 text-sm font-black transition sm:min-w-32 sm:px-5 ${
-                  selectedServer === "benotp"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"
-                }`}
-              >
-                {/* <span className="block">Server 1</span> */}
-                <span className={`mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                  selectedServer === "benotp"
-                    ? "text-blue-100"
-                    : "text-slate-400"
-                }`}>
-                 Server 1
-                </span>
-              </button>
+             
 
-              <button
-                type="button"
-                onClick={() => setSelectedServer("smsbower")}
-                className={`min-w-0 rounded-xl px-3 py-3 text-sm font-black transition sm:min-w-32 sm:px-5 ${
-                  selectedServer === "smsbower"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"
-                }`}
-              >
-                {/* <span className="block">Server 2</span> */}
-                <span className={`mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                  selectedServer === "smsbower"
-                    ? "text-blue-100"
-                    : "text-slate-400"
-                }`}>
-                 Server 2
-                </span>
-              </button>
+            
             </div>
-          </div>
+          </div> */}
 
           <div className="grid min-w-0 items-stretch gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_310px]">
           <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
@@ -662,7 +762,57 @@ async function handleCancel() {
                   <h2 className="text-lg font-black text-slate-950 sm:text-xl">
                     Buy a number
                   </h2>
+<div className="rounded-2xl border border-gray-200 bg-white p-1.5 shadow-sm dark:border-gray-800 dark:bg-gray-950">
+  <div className="relative grid grid-cols-2">
+    <div
+      aria-hidden="true"
+      className={`absolute inset-y-0 w-1/2 rounded-xl bg-blue-600 shadow-sm transition-transform duration-300 ease-out ${
+        selectedServer === "server2"
+          ? "translate-x-full"
+          : "translate-x-0"
+      }`}
+    />
 
+    {[
+      {
+        id: "server1",
+        label: "Server 1",
+      },
+      {
+        id: "server2",
+        label: "Server 2",
+      },
+    ].map((server) => {
+      const isActive =
+        selectedServer === server.id;
+
+      return (
+        <button
+          key={server.id}
+          type="button"
+          onClick={() =>
+            handleServerChange(
+              server.id
+            )
+          }
+          disabled={
+            purchasing ||
+            checkingOrder ||
+            cancellingOrder
+          }
+          aria-pressed={isActive}
+          className={`relative z-10 min-h-11 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
+            isActive
+              ? "text-white"
+              : "text-gray-600 hover:text-gray-950 dark:text-gray-400 dark:hover:text-white"
+          }`}
+        >
+          {server.label}
+        </button>
+      );
+    })}
+  </div>
+</div>
                   <p className="mt-1 text-sm text-slate-500">
                     Select a country and service to continue.
                   </p>
@@ -724,7 +874,7 @@ async function handleCancel() {
                   <SearchableCountrySelect
                     countries={countries}
                     value={selectedCountryCode}
-                    onChange={setSelectedCountryCode}
+                    onChange={handleCountryChange}
                   />
                 </div>
 
@@ -736,7 +886,7 @@ async function handleCancel() {
                   <SearchableServiceSelect
                     services={availableServices}
                     value={selectedServiceId}
-                    onChange={setSelectedServiceId}
+                    onChange={handleServiceChange}
                     disabled={!selectedCountryCode}
                   />
                 </div>
@@ -748,16 +898,24 @@ async function handleCancel() {
                     </p>
 
                     <p className="mt-1 text-2xl font-black text-slate-950">
-                      {selectedService
-                        ? formatNaira(estimatedPrice)
-                        : "—"}
+                      {priceLoading
+                        ? "Checking..."
+                        : selectedService && estimatedPrice > 0
+                          ? formatNaira(estimatedPrice)
+                          : "—"}
                     </p>
+
+                    {priceError && (
+                      <p className="mt-1 max-w-xs text-xs font-semibold text-red-600">
+                        {priceError}
+                      </p>
+                    )}
                   </div>
 
                   <div className="min-w-0 text-left min-[420px]:text-right">
                     <p className="truncate text-sm font-bold text-slate-800">
-                      {selectedCountry?.flag}{" "}
-                      {selectedCountry?.name ||
+                    
+                      {selectedCountry?.eng ||
                         "Select country"}
                     </p>
 
@@ -767,16 +925,11 @@ async function handleCancel() {
                     </p>
 
                     {selectedService && (
-                      <p
-                        className={`mt-1 text-xs font-semibold ${
-                          serviceStock > 0
-                            ? "text-green-600"
-                            : "text-red-600"
-                        }`}
-                      >
-                        {serviceStock > 0
+                      <p className="mt-1 text-xs font-semibold text-slate-500">
+                        {Number.isFinite(serviceStock) &&
+                        serviceStock > 0
                           ? `${serviceStock.toLocaleString()} available`
-                          : "Out of stock"}
+                          : "Availability checked at purchase"}
                       </p>
                     )}
                   </div>
@@ -788,6 +941,7 @@ async function handleCancel() {
                   disabled={
                     purchasing ||
                     catalogLoading ||
+                    priceLoading ||
                     !selectedCountry ||
                     !serviceIsAvailable
                   }
@@ -801,11 +955,13 @@ async function handleCancel() {
                       />
                       Purchasing...
                     </>
-                  ) : serviceStock <= 0 &&
-                    selectedService ? (
+                  ) : priceLoading ? (
                     <>
-                      <XCircle size={18} />
-                      Out of Stock
+                      <LoaderCircle
+                        className="animate-spin"
+                        size={18}
+                      />
+                      Checking price...
                     </>
                   ) : (
                     <>
@@ -908,7 +1064,7 @@ async function handleCancel() {
               <p className="mt-3 text-sm text-slate-500">
                 {selectedCountry?.flag ||
                   currentOrder.country}{" "}
-                {selectedCountry?.name ||
+                {selectedCountry?.eng ||
                   formatName(currentOrder.country)}
 
                 <span className="mx-2">•</span>
@@ -925,8 +1081,7 @@ async function handleCancel() {
 
               <p className="mt-1 font-black text-slate-950">
                 {formatNaira(
-                  currentOrder.price ||
-                    estimatedPrice
+                  currentOrder.price ?? estimatedPrice
                 )}
               </p>
             </div>
@@ -958,21 +1113,19 @@ async function handleCancel() {
               </button>
             </div>
 
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                Provider
-              </p>
+          <div className="rounded-2xl bg-slate-50 p-4">
+  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+    Server
+  </p>
 
-              <p className="mt-2 text-sm font-bold text-slate-800">
-                {currentOrder.provider === "benotp"
-                  ? "SERVER 1 · BENOTP"
-                  : currentOrder.provider === "smsbower"
-                    ? "SERVER 2 · SMSBOWER"
-                    : String(
-                        currentOrder.provider || "Unknown"
-                      ).toUpperCase()}
-              </p>
-            </div>
+  <p className="mt-2 text-sm font-bold text-slate-800">
+    {currentOrder.server === "server1"
+      ? "SERVER 1"
+      : currentOrder.server === "server2"
+      ? "SERVER 2"
+      : "UNKNOWN"}
+  </p>
+</div>
 
             <div className="rounded-2xl bg-slate-50 p-4">
               <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">

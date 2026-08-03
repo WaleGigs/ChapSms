@@ -1,4 +1,3 @@
-// app/page.jsx
 import Navbar from "@/components/public/Navbar";
 import Hero from "@/components/public/Hero";
 import Stats from "@/components/home/Stats";
@@ -15,7 +14,7 @@ import Footer from "@/components/public/Footer";
 
 export default function Home() {
   return (
-    <main>
+    <main id="top" className="overflow-x-clip">
       <Navbar />
       <Hero />
       <Stats />
