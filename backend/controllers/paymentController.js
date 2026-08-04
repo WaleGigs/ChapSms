@@ -351,8 +351,8 @@ exports.handleWebhook = async (req, res) => {
 };
 
 /*
- * Compatibility alias:
- * Some route versions import flutterwaveWebhook while the controller's
- * original exported name is handleWebhook.
+ * Compatibility alias for route files that use the older handler name.
  */
-exports.flutterwaveWebhook = exports.handleWebhook;
+exports.flutterwaveWebhook =
+  exports.handleWebhook;
+
