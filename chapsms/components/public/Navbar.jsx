@@ -1,28 +1,58 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRight, Menu, X } from "lucide-react";
+import {
+  ArrowRight,
+  Menu,
+  X,
+} from "lucide-react";
 
 import ThemeToggle from "@/components/ui/ThemeToggle";
 import Button from "@/components/ui/Button";
 import { useAuth } from "@/context/AuthContext";
 
-const links = [
-  { href: "#services", label: "Services" },
-  { href: "#countries", label: "Countries" },
-  { href: "#features", label: "Features" },
-  { href: "#api", label: "API" },
-  { href: "#faq", label: "FAQ" },
+const navigationLinks = [
+  {
+    href: "/#services",
+    label: "Services",
+  },
+  {
+    href: "/#countries",
+    label: "Countries",
+  },
+  {
+    href: "/#features",
+    label: "Features",
+  },
+  {
+    href: "/#api",
+    label: "API",
+  },
+  {
+    href: "/#faq",
+    label: "FAQ",
+  },
 ];
 
 export default function Navbar() {
   const pathname = usePathname();
-  const { user, authLoading } = useAuth();
-
   const headerRef = useRef(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+
+  const {
+    user,
+    authLoading,
+  } = useAuth();
+
+  const [
+    menuOpen,
+    setMenuOpen,
+  ] = useState(false);
+
+  const dashboardHref =
+    user?.role === "admin"
+      ? "/admin"
+      : "/buy-number";
 
   function closeMenu() {
     setMenuOpen(false);
@@ -33,6 +63,17 @@ export default function Navbar() {
   }, [pathname]);
 
   useEffect(() => {
+    if (!menuOpen) {
+      document.body.style.overflow = "";
+      return undefined;
+    }
+
+    const previousOverflow =
+      document.body.style.overflow;
+
+    document.body.style.overflow =
+      "hidden";
+
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         closeMenu();
@@ -45,161 +86,272 @@ export default function Navbar() {
       }
     }
 
-    function handlePointerDown(event) {
-      if (
-        menuOpen &&
-        headerRef.current &&
-        !headerRef.current.contains(event.target)
-      ) {
-        closeMenu();
-      }
-    }
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", handleResize);
-    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener(
+      "resize",
+      handleResize
+    );
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", handleResize);
-      document.removeEventListener("pointerdown", handlePointerDown);
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+
+      window.removeEventListener(
+        "resize",
+        handleResize
+      );
     };
   }, [menuOpen]);
-
-  const dashboardHref =
-    user?.role === "admin" ? "/admin" : "/dashboard";
 
   return (
     <header
       ref={headerRef}
-      className="sticky top-0 z-[100] border-b border-[var(--border)] bg-white shadow-sm dark:bg-slate-950"
+      className="
+        sticky
+        top-0
+        z-[200]
+        border-b
+        border-[var(--border)]
+        bg-[var(--background)]
+        shadow-sm
+      "
     >
       <nav className="site-container flex h-16 items-center justify-between gap-3 sm:h-[72px]">
-        <Link
+        <a
           href="/"
           onClick={closeMenu}
-          className="focus-ring rounded-lg text-xl font-black tracking-tight text-[var(--foreground)] sm:text-2xl"
           aria-label="ChapsSmS homepage"
+          className="focus-ring rounded-lg text-xl font-black tracking-tight text-[var(--foreground)] sm:text-2xl"
         >
-          Chaps<span className="text-blue-600">SmS</span>
-        </Link>
+          Chaps
+          <span className="text-blue-600">
+            SmS
+          </span>
+        </a>
 
         <div className="hidden items-center gap-1 lg:flex">
-          {links.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="focus-ring rounded-lg px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-            >
-              {link.label}
-            </Link>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2 sm:gap-3">
-          <ThemeToggle />
-
-          {!authLoading && user ? (
-            <Button
-              href={dashboardHref}
-              size="sm"
-              className="hidden sm:inline-flex"
-            >
-              Open dashboard
-              <ArrowRight size={16} />
-            </Button>
-          ) : (
-            <>
-              <Link
-                href="/login"
-                className="focus-ring hidden rounded-lg px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] sm:block"
-              >
-                Login
-              </Link>
-
-              <Button
-                href="/signup"
-                size="sm"
-                className="hidden sm:inline-flex"
-              >
-                Get started
-              </Button>
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setMenuOpen((current) => !current)}
-            aria-label={
-              menuOpen
-                ? "Close navigation menu"
-                : "Open navigation menu"
-            }
-            aria-expanded={menuOpen}
-            aria-controls="mobile-navigation"
-            className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-sm transition hover:bg-[var(--muted)] lg:hidden"
-          >
-            {menuOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
-        </div>
-      </nav>
-
-      <div
-        id="mobile-navigation"
-        aria-hidden={!menuOpen}
-        className={`absolute inset-x-0 top-full z-[110] max-h-[calc(100dvh-4rem)] overflow-y-auto border-b border-[var(--border)] bg-white shadow-2xl transition-all duration-200 dark:bg-slate-950 sm:max-h-[calc(100dvh-72px)] lg:hidden ${
-          menuOpen
-            ? "pointer-events-auto visible translate-y-0 opacity-100"
-            : "pointer-events-none invisible -translate-y-2 opacity-0"
-        }`}
-      >
-        <div className="site-container py-5">
-          <div className="grid gap-1">
-            {links.map((link) => (
-              <Link
+          {navigationLinks.map(
+            (link) => (
+              <a
                 key={link.href}
                 href={link.href}
-                onClick={closeMenu}
-                className="focus-ring flex min-h-12 items-center rounded-xl px-4 py-3 text-base font-semibold text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+                className="focus-ring rounded-lg px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
               >
                 {link.label}
-              </Link>
-            ))}
-          </div>
+              </a>
+            )
+          )}
+        </div>
 
-          <div className="mt-5 border-t border-[var(--border)] pt-5">
-            {!authLoading && user ? (
-              <Button
-                href={dashboardHref}
-                className="w-full"
-                onClick={closeMenu}
-              >
-                Open dashboard
-                <ArrowRight size={16} />
-              </Button>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
+     <div className="flex items-center gap-2 sm:gap-3">
+  <ThemeToggle />
+
+  {!authLoading && user ? (
+    <a
+      href={dashboardHref}
+      className="
+        focus-ring
+        hidden
+        min-h-10
+        items-center
+        justify-center
+        gap-2
+        rounded-xl
+        bg-blue-600
+        px-4
+        py-2
+        text-sm
+        font-semibold
+        text-white
+        shadow-sm
+        transition
+        hover:bg-blue-700
+        active:scale-[0.98]
+        sm:inline-flex
+      "
+    >
+      Open dashboard
+      <ArrowRight size={16} />
+    </a>
+  ) : (
+    <>
+      <a
+        href="/login"
+        className="
+          focus-ring
+          hidden
+          rounded-lg
+          px-3
+          py-2
+          text-sm
+          font-semibold
+          text-[var(--muted-foreground)]
+          transition
+          hover:text-[var(--foreground)]
+          sm:block
+        "
+      >
+        Login
+      </a>
+
+      <a
+        href="/signup"
+        className="
+          focus-ring
+          hidden
+          min-h-10
+          items-center
+          justify-center
+          rounded-xl
+          bg-blue-600
+          px-4
+          py-2
+          text-sm
+          font-semibold
+          text-white
+          shadow-sm
+          transition
+          hover:bg-blue-700
+          active:scale-[0.98]
+          sm:inline-flex
+        "
+      >
+        Get started
+      </a>
+    </>
+  )}
+
+  <button
+    type="button"
+    onClick={() =>
+      setMenuOpen(
+        (current) => !current
+      )
+    }
+    aria-label={
+      menuOpen
+        ? "Close navigation menu"
+        : "Open navigation menu"
+    }
+    aria-expanded={menuOpen}
+    aria-controls="mobile-navigation"
+    className="
+      focus-ring
+      flex
+      h-11
+      w-11
+      items-center
+      justify-center
+      rounded-xl
+      border
+      border-[var(--border)]
+      bg-[var(--card)]
+      text-[var(--foreground)]
+      shadow-sm
+      transition
+      active:scale-95
+      lg:hidden
+    "
+  >
+    {menuOpen ? (
+      <X size={21} />
+    ) : (
+      <Menu size={21} />
+    )}
+  </button>
+</div>
+      </nav>
+
+      {menuOpen ? (
+        <div
+          id="mobile-navigation"
+          className="
+            fixed
+            inset-x-0
+            bottom-0
+            top-16
+            z-[210]
+            overflow-y-auto
+            overscroll-contain
+            border-t
+            border-[var(--border)]
+            bg-[var(--background)]
+            lg:hidden
+            sm:top-[72px]
+          "
+        >
+          <div className="site-container flex min-h-full flex-col py-6">
+            <div className="space-y-2">
+              {navigationLinks.map(
+                (link) => (
+                  <a
+                    key={link.href}
+                    href={link.href}
+                    onClick={closeMenu}
+                    className="
+                      focus-ring
+                      flex
+                      min-h-14
+                      items-center
+                      rounded-2xl
+                      px-5
+                      py-3
+                      text-lg
+                      font-bold
+                      text-[var(--foreground)]
+                      transition
+                      active:bg-[var(--muted)]
+                    "
+                  >
+                    {link.label}
+                  </a>
+                )
+              )}
+            </div>
+
+            <div className="mt-auto border-t border-[var(--border)] pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6">
+              {!authLoading && user ? (
                 <Button
-                  href="/signup"
+                  href={dashboardHref}
                   className="w-full"
                   onClick={closeMenu}
                 >
-                  Create free account
+                  Open dashboard
+                  <ArrowRight size={17} />
                 </Button>
+              ) : (
+                <div className="grid gap-3">
+                  <Button
+                    href="/signup"
+                    className="w-full"
+                    onClick={closeMenu}
+                  >
+                    Create free account
+                  </Button>
 
-                <Button
-                  href="/login"
-                  variant="secondary"
-                  className="w-full"
-                  onClick={closeMenu}
-                >
-                  Login
-                </Button>
-              </div>
-            )}
+                  <Button
+                    href="/login"
+                    variant="secondary"
+                    className="w-full"
+                    onClick={closeMenu}
+                  >
+                    Login
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </header>
   );
 }

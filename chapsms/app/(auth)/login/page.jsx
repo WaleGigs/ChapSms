@@ -1,9 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import {
+  useMemo,
+  useState,
+} from "react";
+import {
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import Link from "next/link";
-import { Mail } from "lucide-react";
+import {
+  Mail,
+} from "lucide-react";
 import toast from "react-hot-toast";
 
 import { useAuth } from "@/context/AuthContext";
@@ -17,28 +25,73 @@ import {
   validateLoginForm,
 } from "@/lib/formValidation";
 
+function getSafeNextPath(
+  value
+) {
+  const path =
+    String(value || "").trim();
+
+  if (
+    !path.startsWith("/") ||
+    path.startsWith("//")
+  ) {
+    return "";
+  }
+
+  return path;
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuth();
+  const searchParams =
+    useSearchParams();
 
-  const [form, setForm] = useState({
+  const {
+    login,
+  } = useAuth();
+
+  const [
+    form,
+    setForm,
+  ] = useState({
     email: "",
     password: "",
     rememberMe: true,
   });
 
-  const [touched, setTouched] = useState({});
-  const [errors, setErrors] = useState({});
-  const [submitError, setSubmitError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [
+    touched,
+    setTouched,
+  ] = useState({});
 
-  const currentErrors = useMemo(
-    () => validateLoginForm(form),
-    [form]
-  );
+  const [
+    errors,
+    setErrors,
+  ] = useState({});
+
+  const [
+    submitError,
+    setSubmitError,
+  ] = useState("");
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(false);
+
+  const currentErrors =
+    useMemo(
+      () =>
+        validateLoginForm(
+          form
+        ),
+      [form]
+    );
 
   const canSubmit =
-    Object.keys(currentErrors).length === 0 &&
+    Object.keys(
+      currentErrors
+    ).length === 0 &&
     !loading;
 
   function updateField(event) {
@@ -68,10 +121,12 @@ export default function LoginPage() {
           nextValue
         );
 
-      setErrors((current) => ({
-        ...current,
-        [name]: message,
-      }));
+      setErrors(
+        (current) => ({
+          ...current,
+          [name]: message,
+        })
+      );
     }
   }
 
@@ -87,23 +142,27 @@ export default function LoginPage() {
         value
       );
 
-    setTouched((current) => ({
-      ...current,
-      [name]: true,
-    }));
+    setTouched(
+      (current) => ({
+        ...current,
+        [name]: true,
+      })
+    );
 
-    setErrors((current) => ({
-      ...current,
-      [name]: message,
-    }));
+    setErrors(
+      (current) => ({
+        ...current,
+        [name]: message,
+      })
+    );
   }
 
-  async function handleSubmit(event) {
+  async function handleSubmit(
+    event
+  ) {
     event.preventDefault();
 
-    if (loading) {
-      return;
-    }
+    if (loading) return;
 
     const validationErrors =
       validateLoginForm(form);
@@ -113,18 +172,24 @@ export default function LoginPage() {
       password: true,
     });
 
-    setErrors(validationErrors);
+    setErrors(
+      validationErrors
+    );
+
     setSubmitError("");
 
     if (
-      Object.keys(validationErrors)
-        .length > 0
+      Object.keys(
+        validationErrors
+      ).length > 0
     ) {
       return;
     }
 
     const email =
-      normalizeEmail(form.email);
+      normalizeEmail(
+        form.email
+      );
 
     try {
       setLoading(true);
@@ -132,7 +197,8 @@ export default function LoginPage() {
       const response =
         await login({
           email,
-          password: form.password,
+          password:
+            form.password,
           rememberMe:
             form.rememberMe,
         });
@@ -142,24 +208,51 @@ export default function LoginPage() {
           "Login successful"
       );
 
-      /*
-       * Admins still enter the admin panel.
-       * Regular users go directly to Buy Number.
-       */
+      const requestedPath =
+        getSafeNextPath(
+          searchParams.get(
+            "next"
+          )
+        );
+
       const destination =
         response?.user?.role ===
         "admin"
           ? "/admin"
-          : "/buy-number";
+          : requestedPath ||
+            "/buy-number";
 
-      router.replace(destination);
+      router.replace(
+        destination
+      );
+
+      router.refresh();
     } catch (error) {
-      const message =
+      const errorCode =
+        error?.code ||
+        error?.data?.code;
+
+      let message =
         error?.message ||
         "Login failed. Please try again.";
 
-      const errorCode =
-        error?.data?.code;
+      if (
+        errorCode ===
+        "API_URL_MISSING"
+      ) {
+        message =
+          "The website API is not configured. Add NEXT_PUBLIC_API_URL in Vercel and redeploy.";
+      }
+
+      if (
+        errorCode ===
+        "NETWORK_ERROR" ||
+        errorCode ===
+        "REQUEST_TIMEOUT"
+      ) {
+        message =
+          "Unable to reach the ChapsSmS server. Please try again shortly.";
+      }
 
       if (
         errorCode ===
@@ -176,8 +269,13 @@ export default function LoginPage() {
         return;
       }
 
-      setSubmitError(message);
-      toast.error(message);
+      setSubmitError(
+        message
+      );
+
+      toast.error(
+        message
+      );
     } finally {
       setLoading(false);
     }
@@ -194,10 +292,9 @@ export default function LoginPage() {
           Welcome back
         </h1>
 
-        <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
-          Login to manage your
-          wallet, orders, pricing
-          access, and API keys.
+        <p className="mt-3 text-sm leading-7 text-[var(--muted-foreground)] sm:text-base">
+          Login to manage your wallet, orders,
+          pricing access, and API keys.
         </p>
       </div>
 
@@ -211,7 +308,9 @@ export default function LoginPage() {
       ) : null}
 
       <form
-        onSubmit={handleSubmit}
+        onSubmit={
+          handleSubmit
+        }
         className="space-y-5"
         noValidate
       >
@@ -226,8 +325,12 @@ export default function LoginPage() {
           spellCheck={false}
           maxLength={254}
           value={form.email}
-          onChange={updateField}
-          onBlur={handleBlur}
+          onChange={
+            updateField
+          }
+          onBlur={
+            handleBlur
+          }
           error={
             touched.email
               ? errors.email
@@ -243,8 +346,12 @@ export default function LoginPage() {
           placeholder="Enter your password"
           autoComplete="current-password"
           value={form.password}
-          onChange={updateField}
-          onBlur={handleBlur}
+          onChange={
+            updateField
+          }
+          onBlur={
+            handleBlur
+          }
           error={
             touched.password
               ? errors.password
@@ -282,8 +389,12 @@ export default function LoginPage() {
           type="submit"
           className="w-full"
           size="lg"
-          disabled={!canSubmit}
-          aria-busy={loading}
+          disabled={
+            !canSubmit
+          }
+          aria-busy={
+            loading
+          }
         >
           {loading
             ? "Logging in..."
@@ -292,8 +403,8 @@ export default function LoginPage() {
       </form>
 
       <p className="mt-6 text-center text-sm text-[var(--muted-foreground)]">
-        Don&apos;t have an
-        account?{" "}
+        Don&apos;t have an account?{" "}
+
         <Link
           href="/signup"
           className="focus-ring rounded-md font-bold text-blue-600 hover:text-blue-700"

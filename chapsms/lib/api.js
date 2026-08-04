@@ -1,119 +1,180 @@
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.trim() ||
+const LOCAL_API_URL =
   "http://127.0.0.1:5050/api";
 
-function cleanToken(value) {
-  if (!value) {
-    return null;
+const REQUEST_TIMEOUT_MS = 30000;
+
+function createApiError(
+  message,
+  options = {}
+) {
+  const error = new Error(message);
+
+  error.status =
+    options.status || 0;
+
+  error.code =
+    options.code ||
+    "API_ERROR";
+
+  error.data =
+    options.data || null;
+
+  error.url =
+    options.url || "";
+
+  return error;
+}
+
+export function getApiBaseUrl() {
+  const configuredUrl =
+    String(
+      process.env
+        .NEXT_PUBLIC_API_URL || ""
+    )
+      .trim()
+      .replace(/\/+$/, "");
+
+  if (configuredUrl) {
+    return configuredUrl.endsWith(
+      "/api"
+    )
+      ? configuredUrl
+      : `${configuredUrl}/api`;
   }
 
-  let token = String(value).trim();
-
-  /*
-   * Fix tokens previously stored with:
-   * JSON.stringify(token)
-   *
-   * Example:
-   * "eyJhbGciOi..."
-   */
   if (
-    token.startsWith('"') &&
-    token.endsWith('"')
+    process.env.NODE_ENV ===
+    "development"
   ) {
-    try {
-      token = JSON.parse(token);
-    } catch {
-      token = token.slice(1, -1);
-    }
+    return LOCAL_API_URL;
   }
 
-  token = String(token)
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-
-  return token || null;
+  throw createApiError(
+    "The ChapsSmS API URL is not configured for this deployment.",
+    {
+      code:
+        "API_URL_MISSING",
+    }
+  );
 }
 
-function getStoredToken() {
-  if (typeof window === "undefined") {
-    return null;
+export function getStoredToken() {
+  if (
+    typeof window === "undefined"
+  ) {
+    return "";
   }
 
-  const rawToken =
-    localStorage.getItem("chapsms-token") ||
-    sessionStorage.getItem("chapsms-token");
-
-  const token = cleanToken(rawToken);
-
-  /*
-   * Rewrite an incorrectly stored token
-   * into the correct raw-token format.
-   */
-  if (token && rawToken !== token) {
-    if (
-      localStorage.getItem("chapsms-token")
-    ) {
-      localStorage.setItem(
-        "chapsms-token",
-        token
-      );
-    }
-
-    if (
-      sessionStorage.getItem(
-        "chapsms-token"
-      )
-    ) {
-      sessionStorage.setItem(
-        "chapsms-token",
-        token
-      );
-    }
-  }
-
-  return token;
+  return (
+    localStorage.getItem(
+      "chapsms-token"
+    ) ||
+    sessionStorage.getItem(
+      "chapsms-token"
+    ) ||
+    ""
+  );
 }
 
-function clearStoredSession() {
-  if (typeof window === "undefined") {
+export function clearStoredSession() {
+  if (
+    typeof window === "undefined"
+  ) {
     return;
   }
 
-  localStorage.removeItem(
-    "chapsms-token"
-  );
+  [
+    localStorage,
+    sessionStorage,
+  ].forEach((storage) => {
+    storage.removeItem(
+      "chapsms-token"
+    );
 
-  localStorage.removeItem(
-    "chapsms-user"
-  );
+    storage.removeItem(
+      "chapsms-user"
+    );
+  });
+}
 
-  sessionStorage.removeItem(
-    "chapsms-token"
-  );
+function buildApiUrl(path) {
+  const baseUrl =
+    getApiBaseUrl();
 
-  sessionStorage.removeItem(
-    "chapsms-user"
-  );
+  const normalizedPath =
+    String(path || "").startsWith(
+      "/"
+    )
+      ? String(path)
+      : `/${String(path || "")}`;
+
+  return `${baseUrl}${normalizedPath}`;
+}
+
+async function parseResponse(
+  response
+) {
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) || "";
+
+  if (
+    contentType.includes(
+      "application/json"
+    )
+  ) {
+    return response.json();
+  }
+
+  const text =
+    await response.text();
+
+  return text
+    ? {
+        message: text,
+      }
+    : {};
 }
 
 export async function api(
-  endpoint,
+  path,
   options = {}
 ) {
-  const token = getStoredToken();
+  const url = buildApiUrl(path);
 
-  const headers = new Headers(
-    options.headers || {}
-  );
+  const controller =
+    new AbortController();
 
-  const isFormData =
-    typeof FormData !== "undefined" &&
+  const timeoutId =
+    window.setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
+
+  const token =
+    getStoredToken();
+
+  const headers =
+    new Headers(
+      options.headers || {}
+    );
+
+  const hasBody =
+    options.body !== undefined &&
+    options.body !== null;
+
+  const bodyIsFormData =
+    typeof FormData !==
+      "undefined" &&
     options.body instanceof FormData;
 
   if (
-    options.body !== undefined &&
-    !isFormData &&
-    !headers.has("Content-Type")
+    hasBody &&
+    !bodyIsFormData &&
+    !headers.has(
+      "Content-Type"
+    )
   ) {
     headers.set(
       "Content-Type",
@@ -122,8 +183,19 @@ export async function api(
   }
 
   if (
+    !headers.has("Accept")
+  ) {
+    headers.set(
+      "Accept",
+      "application/json"
+    );
+  }
+
+  if (
     token &&
-    !headers.has("Authorization")
+    !headers.has(
+      "Authorization"
+    )
   ) {
     headers.set(
       "Authorization",
@@ -131,93 +203,77 @@ export async function api(
     );
   }
 
-  let response;
-
   try {
-    response = await fetch(
-      `${API_URL}${endpoint}`,
-      {
+    const response =
+      await fetch(url, {
         ...options,
         headers,
-        cache: "no-store",
-      }
-    );
-  } catch (error) {
-   const networkError = new Error(
-  "Unable to connect. Please check your internet connection and try again."
-);
+        credentials: "include",
+        signal:
+          options.signal ||
+          controller.signal,
+      });
 
-    networkError.cause = error;
-    networkError.status = 0;
+    const data =
+      await parseResponse(
+        response
+      );
 
-    throw networkError;
-  }
-
-  const contentType =
-    response.headers.get(
-      "content-type"
-    ) || "";
-
-  let data = {};
-
-  try {
-    if (
-      contentType.includes(
-        "application/json"
-      )
-    ) {
-      data = await response.json();
-    } else {
-      const text =
-        await response.text();
-
-      data = text
-        ? { message: text }
-        : {};
-    }
-  } catch {
-    data = {};
-  }
-
-  if (!response.ok) {
-    const requestError = new Error(
-      data?.message ||
-        (response.status === 401
-          ? "Your session is invalid or has expired"
-          : `Request failed with status ${response.status}`)
-    );
-
-    requestError.status =
-      response.status;
-
-    requestError.data = data;
-
-    /*
-     * Do not use console.error here.
-     * Next.js treats console.error as a
-     * development error overlay.
-     */
-    if (
-      process.env.NODE_ENV ===
-      "development"
-    ) {
-      console.warn(
-        `API request failed: ${endpoint}`,
+    if (!response.ok) {
+      throw createApiError(
+        data?.message ||
+          `Request failed with status ${response.status}`,
         {
-          status: response.status,
+          status:
+            response.status,
+          code:
+            data?.code ||
+            "API_REQUEST_FAILED",
           data,
+          url,
         }
       );
     }
 
-    throw requestError;
+    return data;
+  } catch (error) {
+    if (
+      error?.name ===
+      "AbortError"
+    ) {
+      throw createApiError(
+        "The server took too long to respond. Please try again.",
+        {
+          code:
+            "REQUEST_TIMEOUT",
+          url,
+        }
+      );
+    }
+
+    if (
+      error?.code
+    ) {
+      throw error;
+    }
+
+    throw createApiError(
+      "Unable to reach the ChapsSmS server. Please try again shortly.",
+      {
+        code:
+          "NETWORK_ERROR",
+        data: {
+          apiUrl:
+            getApiBaseUrl(),
+          originalMessage:
+            error?.message || "",
+        },
+        url,
+      }
+    );
+  } finally {
+    window.clearTimeout(
+      timeoutId
+    );
   }
-
-  return data;
 }
-
-export {
-  API_URL,
-  getStoredToken,
-  clearStoredSession,
-};

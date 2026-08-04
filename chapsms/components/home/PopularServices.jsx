@@ -15,19 +15,46 @@ import SectionHeader from "@/components/ui/SectionHeader";
 import Button from "@/components/ui/Button";
 
 const services = [
-  { name: "WhatsApp", icon: MessageCircle },
-  { name: "Telegram", icon: Send },
-  { name: "TikTok", icon: Music2 },
-  { name: "Discord", icon: Gamepad2 },
-  { name: "Google", icon: Mail },
-  { name: "Amazon", icon: ShoppingBag },
-  { name: "Netflix", icon: Video },
-  { name: "Facebook", icon: Users },
+  {
+    name: "WhatsApp",
+    icon: MessageCircle,
+  },
+  {
+    name: "Telegram",
+    icon: Send,
+  },
+  {
+    name: "TikTok",
+    icon: Music2,
+  },
+  {
+    name: "Discord",
+    icon: Gamepad2,
+  },
+  {
+    name: "Google",
+    icon: Mail,
+  },
+  {
+    name: "Amazon",
+    icon: ShoppingBag,
+  },
+  {
+    name: "Netflix",
+    icon: Video,
+  },
+  {
+    name: "Facebook",
+    icon: Users,
+  },
 ];
 
 export default function PopularServices() {
   return (
-    <Section className="bg-[var(--background)]" id="services">
+    <Section
+      className="bg-[var(--background)]"
+      id="services"
+    >
       <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
         <SectionHeader
           badge="Popular services"
@@ -36,13 +63,35 @@ export default function PopularServices() {
           className="mb-0"
         />
 
-        <Button
-          href="/buy-number"
-          variant="secondary"
-          className="relative z-10 w-full lg:w-auto"
-        >
-          View all services
-        </Button>
+        <a
+  href="/login?next=%2Fbuy-number"
+  className="
+    relative
+    z-20
+    inline-flex
+    min-h-11
+    w-full
+    items-center
+    justify-center
+    rounded-xl
+    border
+    border-[var(--border)]
+    bg-[var(--card)]
+    px-5
+    py-3
+    text-sm
+    font-semibold
+    text-[var(--foreground)]
+    shadow-sm
+    transition
+    hover:border-blue-300
+    hover:bg-[var(--muted)]
+    active:scale-[0.98]
+    lg:w-auto
+  "
+>
+  View all services
+</a>
       </div>
 
       <div className="mt-10 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4 lg:mt-12">

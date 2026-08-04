@@ -1,3 +1,7 @@
+"use client";
+
+import Link from "next/link";
+
 import { cn } from "@/lib/utils";
 
 export default function Button({
@@ -7,23 +11,22 @@ export default function Button({
   size = "md",
   className = "",
   disabled = false,
+  onClick,
   type = "button",
   ...props
 }) {
-  const base =
-    "relative z-10 inline-flex min-h-11 cursor-pointer select-none items-center justify-center gap-2 rounded-xl font-semibold transition duration-200 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]";
+  const baseClasses =
+    "focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-xl font-semibold transition duration-200 active:scale-[0.98]";
 
   const variants = {
     primary:
-      "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/20",
+      "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700",
     secondary:
-      "border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-sm hover:border-blue-300 hover:bg-[var(--muted)] dark:hover:border-blue-800",
+      "border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--muted)]",
     ghost:
       "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]",
     danger:
-      "bg-red-600 text-white shadow-sm hover:bg-red-700",
-    white:
-      "bg-white text-blue-700 shadow-lg hover:bg-blue-50",
+      "bg-red-600 text-white hover:bg-red-700",
   };
 
   const sizes = {
@@ -33,31 +36,26 @@ export default function Button({
   };
 
   const classes = cn(
-    base,
+    baseClasses,
     variants[variant] || variants.primary,
     sizes[size] || sizes.md,
     disabled
-      ? "pointer-events-none cursor-not-allowed opacity-55"
-      : "pointer-events-auto",
+      ? "pointer-events-none cursor-not-allowed opacity-50"
+      : "",
     className
   );
 
-  /*
-   * Use a plain HTML anchor for navigation.
-   * Do not preventDefault and do not use window.location.assign.
-   * The browser will navigate even if React hydration has a problem.
-   */
   if (href) {
     return (
-      <a
+      <Link
         href={href}
         className={classes}
+        onClick={onClick}
         aria-disabled={disabled || undefined}
-        tabIndex={disabled ? -1 : undefined}
         {...props}
       >
         {children}
-      </a>
+      </Link>
     );
   }
 
@@ -66,6 +64,7 @@ export default function Button({
       type={type}
       className={classes}
       disabled={disabled}
+      onClick={onClick}
       {...props}
     >
       {children}
