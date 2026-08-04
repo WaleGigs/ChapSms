@@ -15,7 +15,14 @@ const app = express();
 const isProduction =
   process.env.NODE_ENV === "production";
 
-const configuredOrigins = String(
+const defaultOrigins = [
+  "https://chapssms.com",
+  "https://www.chapssms.com",
+  "https://chapsms-web.vercel.app",
+  "http://localhost:3000",
+];
+
+const environmentOrigins = String(
   process.env.CORS_ORIGINS ||
     process.env.CLIENT_URL ||
     ""
@@ -27,6 +34,18 @@ const configuredOrigins = String(
       .replace(/\/+$/, "")
   )
   .filter(Boolean);
+
+const configuredOrigins = [
+  ...new Set([
+    ...defaultOrigins,
+    ...environmentOrigins,
+  ]),
+];
+
+console.log(
+  "Allowed CORS origins:",
+  configuredOrigins
+);
 
 const corsOptions = {
   origin(origin, callback) {
@@ -64,7 +83,8 @@ const corsOptions = {
     );
 
     error.status = 403;
-    error.code = "CORS_ORIGIN_BLOCKED";
+    error.code =
+      "CORS_ORIGIN_BLOCKED";
 
     return callback(error);
   },
@@ -91,7 +111,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
 /*
  * Keep this section. It captures the original
  * Flutterwave webhook request body.
