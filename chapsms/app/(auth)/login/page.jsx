@@ -6,7 +6,6 @@ import {
 } from "react";
 import {
   useRouter,
-  useSearchParams,
 } from "next/navigation";
 import Link from "next/link";
 import {
@@ -14,20 +13,21 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
-import { useAuth } from "@/context/AuthContext";
+import {
+  useAuth,
+} from "@/context/AuthContext";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import PasswordField from "@/components/auth/PasswordField";
+
 import {
   normalizeEmail,
   validateLoginField,
   validateLoginForm,
 } from "@/lib/formValidation";
 
-function getSafeNextPath(
-  value
-) {
+function getSafeNextPath(value) {
   const path =
     String(value || "").trim();
 
@@ -41,10 +41,27 @@ function getSafeNextPath(
   return path;
 }
 
-export default function LoginPage() {
-  const router = useRouter();
+function getRequestedPath() {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return "";
+  }
+
   const searchParams =
-    useSearchParams();
+    new URLSearchParams(
+      window.location.search
+    );
+
+  return getSafeNextPath(
+    searchParams.get("next")
+  );
+}
+
+export default function LoginPage() {
+  const router =
+    useRouter();
 
   const {
     login,
@@ -80,13 +97,11 @@ export default function LoginPage() {
   ] = useState(false);
 
   const currentErrors =
-    useMemo(
-      () =>
-        validateLoginForm(
-          form
-        ),
-      [form]
-    );
+    useMemo(() => {
+      return validateLoginForm(
+        form
+      );
+    }, [form]);
 
   const canSubmit =
     Object.keys(
@@ -121,12 +136,10 @@ export default function LoginPage() {
           nextValue
         );
 
-      setErrors(
-        (current) => ({
-          ...current,
-          [name]: message,
-        })
-      );
+      setErrors((current) => ({
+        ...current,
+        [name]: message,
+      }));
     }
   }
 
@@ -142,19 +155,15 @@ export default function LoginPage() {
         value
       );
 
-    setTouched(
-      (current) => ({
-        ...current,
-        [name]: true,
-      })
-    );
+    setTouched((current) => ({
+      ...current,
+      [name]: true,
+    }));
 
-    setErrors(
-      (current) => ({
-        ...current,
-        [name]: message,
-      })
-    );
+    setErrors((current) => ({
+      ...current,
+      [name]: message,
+    }));
   }
 
   async function handleSubmit(
@@ -162,7 +171,9 @@ export default function LoginPage() {
   ) {
     event.preventDefault();
 
-    if (loading) return;
+    if (loading) {
+      return;
+    }
 
     const validationErrors =
       validateLoginForm(form);
@@ -209,11 +220,7 @@ export default function LoginPage() {
       );
 
       const requestedPath =
-        getSafeNextPath(
-          searchParams.get(
-            "next"
-          )
-        );
+        getRequestedPath();
 
       const destination =
         response?.user?.role ===
@@ -246,9 +253,9 @@ export default function LoginPage() {
 
       if (
         errorCode ===
-        "NETWORK_ERROR" ||
+          "NETWORK_ERROR" ||
         errorCode ===
-        "REQUEST_TIMEOUT"
+          "REQUEST_TIMEOUT"
       ) {
         message =
           "Unable to reach the ChapsSmS server. Please try again shortly.";
@@ -258,7 +265,9 @@ export default function LoginPage() {
         errorCode ===
         "EMAIL_NOT_VERIFIED"
       ) {
-        toast.error(message);
+        toast.error(
+          message
+        );
 
         router.push(
           `/verify-email?email=${encodeURIComponent(
@@ -293,8 +302,9 @@ export default function LoginPage() {
         </h1>
 
         <p className="mt-3 text-sm leading-7 text-[var(--muted-foreground)] sm:text-base">
-          Login to manage your wallet, orders,
-          pricing access, and API keys.
+          Login to manage your
+          wallet, orders, pricing
+          access, and API keys.
         </p>
       </div>
 
@@ -345,7 +355,9 @@ export default function LoginPage() {
           name="password"
           placeholder="Enter your password"
           autoComplete="current-password"
-          value={form.password}
+          value={
+            form.password
+          }
           onChange={
             updateField
           }
@@ -403,7 +415,8 @@ export default function LoginPage() {
       </form>
 
       <p className="mt-6 text-center text-sm text-[var(--muted-foreground)]">
-        Don&apos;t have an account?{" "}
+        Don&apos;t have an
+        account?{" "}
 
         <Link
           href="/signup"
