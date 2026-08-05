@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import toast from "react-hot-toast";
 import {
   CheckCircle2,
@@ -18,6 +19,7 @@ import {
 import { useCatalog } from "@/hooks/useCatalog";
 import { useOrders } from "@/hooks/useOrders";
 import { useWallet } from "@/hooks/useWallet";
+import { useAuth } from "@/context/AuthContext";
 import { catalogService } from "@/services/catalogService";
 import { orderService } from "@/services/orderService";
 
@@ -64,13 +66,39 @@ function getOrderId(order) {
   return order?._id || order?.id || "";
 }
 
+function readWalletBalance(walletState, user) {
+  const candidates = [
+    walletState?.balance,
+    walletState?.walletBalance,
+    walletState?.wallet?.balance,
+    walletState?.wallet,
+    walletState?.data?.balance,
+    walletState?.data?.wallet,
+    user?.wallet,
+    user?.walletBalance,
+  ];
+
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return 0;
+}
+
 export default function BuyNumberPage() {
   const { createOrder } = useOrders();
+  const { user } = useAuth();
+
+  const walletState = useWallet();
 
   const {
     updateWalletBalance,
     refreshWallet,
-  } = useWallet();
+  } = walletState;
 
   const [selectedServer, setSelectedServer] = useState("server1");
 
@@ -137,6 +165,17 @@ export default function BuyNumberPage() {
 
   const estimatedPrice = Number(livePrice || 0);
 
+  const walletBalance =
+    readWalletBalance(
+      walletState,
+      user
+    );
+
+  const hasEnoughWalletBalance =
+    Number.isFinite(estimatedPrice) &&
+    estimatedPrice > 0 &&
+    walletBalance >= estimatedPrice;
+
   const serviceStock =
     liveStock === null || liveStock === undefined
       ? null
@@ -190,6 +229,29 @@ export default function BuyNumberPage() {
     },
     [clearActiveOrder, saveActiveOrder]
   );
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadWallet() {
+      try {
+        await refreshWallet();
+      } catch (error) {
+        if (active) {
+          console.error(
+            "Wallet refresh failed:",
+            error
+          );
+        }
+      }
+    }
+
+    loadWallet();
+
+    return () => {
+      active = false;
+    };
+  }, [refreshWallet]);
 
   useEffect(() => {
     if (!selectedCountryCode) {
@@ -445,6 +507,17 @@ export default function BuyNumberPage() {
       return;
     }
 
+    if (!hasEnoughWalletBalance) {
+      toast.error(
+        `Insufficient wallet balance. You need ${formatNaira(
+          estimatedPrice
+        )} but your ChapsSmS wallet has ${formatNaira(
+          walletBalance
+        )}.`
+      );
+      return;
+    }
+
     try {
       setPurchasing(true);
 
@@ -491,6 +564,21 @@ export default function BuyNumberPage() {
       toast.success("Number purchased successfully");
     } catch (error) {
       console.error("Purchase failed:", error);
+
+      const errorCode =
+        error?.code ||
+        error?.data?.code;
+
+      if (
+        errorCode ===
+        "INSUFFICIENT_WALLET_BALANCE"
+      ) {
+        try {
+          await refreshWallet();
+        } catch {
+          // Keep the original purchase error.
+        }
+      }
 
       toast.error(
         error.message ||
@@ -910,6 +998,17 @@ async function handleCancel() {
                         {priceError}
                       </p>
                     )}
+
+                    <p
+                      className={`mt-2 text-xs font-bold ${
+                        hasEnoughWalletBalance ||
+                        estimatedPrice <= 0
+                          ? "text-[var(--muted-foreground)]"
+                          : "text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      Wallet: {formatNaira(walletBalance)}
+                    </p>
                   </div>
 
                   <div className="min-w-0 text-left min-[420px]:text-right">
@@ -937,6 +1036,28 @@ async function handleCancel() {
                   </div>
                 </div>
 
+                {selectedService &&
+                  estimatedPrice > 0 &&
+                  !hasEnoughWalletBalance && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+                      <p className="font-bold text-amber-800 dark:text-amber-300">
+                        Fund your wallet before buying this number.
+                      </p>
+
+                      <p className="mt-1 text-amber-700 dark:text-amber-400">
+                        Required: {formatNaira(estimatedPrice)} · Available:{" "}
+                        {formatNaira(walletBalance)}
+                      </p>
+
+                      <Link
+                        href="/wallet"
+                        className="mt-3 inline-flex font-black text-blue-600 hover:text-blue-700"
+                      >
+                        Fund wallet
+                      </Link>
+                    </div>
+                  )}
+
                 <Button
                   type="button"
                   onClick={handlePurchase}
@@ -945,7 +1066,8 @@ async function handleCancel() {
                     catalogLoading ||
                     priceLoading ||
                     !selectedCountry ||
-                    !serviceIsAvailable
+                    !serviceIsAvailable ||
+                    !hasEnoughWalletBalance
                   }
                   className="h-12 w-full"
                 >
@@ -964,6 +1086,12 @@ async function handleCancel() {
                         size={18}
                       />
                       Checking price...
+                    </>
+                  ) : !hasEnoughWalletBalance &&
+                    estimatedPrice > 0 ? (
+                    <>
+                      <Phone size={18} />
+                      Fund Wallet First
                     </>
                   ) : (
                     <>

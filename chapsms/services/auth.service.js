@@ -1,71 +1,219 @@
-import { api } from "@/lib/api";
+"use client";
 
-export function registerUser(data) {
-  return api("/auth/register", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+const configuredApiUrl = String(
+  process.env.NEXT_PUBLIC_API_URL || ""
+)
+  .trim()
+  .replace(/\/+$/, "");
+
+function getApiUrl() {
+  if (!configuredApiUrl) {
+    const error = new Error(
+      "NEXT_PUBLIC_API_URL is not configured"
+    );
+
+    error.code = "API_URL_MISSING";
+    throw error;
+  }
+
+  return configuredApiUrl;
 }
 
-export function verifyUserEmail(data) {
-  return api("/auth/verify-email", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+function createApiError(response, data) {
+  const error = new Error(
+    data?.message ||
+      `Request failed with status ${response.status}`
+  );
+
+  error.status = response.status;
+
+  error.code =
+    data?.code ||
+    "API_REQUEST_FAILED";
+
+  error.data = data || {};
+
+  return error;
 }
 
-export function resendVerificationCode(data) {
-  return api("/auth/resend-verification", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-export function loginUser(data) {
-  const body =
-    typeof data === "object"
-      ? {
-          email: String(data.email || "")
-            .trim()
-            .toLowerCase(),
-          password: String(data.password || ""),
-        }
-      : {};
+async function request(
+  path,
+  {
+    method = "GET",
+    body,
+    token,
+    signal,
+  } = {}
+) {
+  const headers = {
+    Accept: "application/json",
+  };
 
-  return api("/auth/login", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-export function forgotPassword(data) {
-  const email =
-    typeof data === "string"
-      ? data.trim().toLowerCase()
-      : String(data?.email || "")
-          .trim()
-          .toLowerCase();
+  if (body !== undefined) {
+    headers["Content-Type"] =
+      "application/json";
+  }
 
-  return api("/auth/forgot-password", {
-    method: "POST",
-    body: JSON.stringify({
-      email,
-    }),
-  });
+  if (token) {
+    headers.Authorization =
+      `Bearer ${token}`;
+  }
+
+  let response;
+
+  try {
+    response = await fetch(
+      `${getApiUrl()}${path}`,
+      {
+        method,
+        headers,
+        body:
+          body === undefined
+            ? undefined
+            : JSON.stringify(body),
+        cache: "no-store",
+        credentials: "include",
+        signal,
+      }
+    );
+  } catch (cause) {
+    const error = new Error(
+      "Unable to reach the ChapsSmS server"
+    );
+
+    error.code =
+      cause?.name === "AbortError"
+        ? "REQUEST_TIMEOUT"
+        : "NETWORK_ERROR";
+
+    error.cause = cause;
+
+    throw error;
+  }
+
+  const contentType =
+    response.headers.get(
+      "content-type"
+    ) || "";
+
+  const data =
+    contentType.includes(
+      "application/json"
+    )
+      ? await response
+          .json()
+          .catch(() => ({}))
+      : {
+          message:
+            await response.text(),
+        };
+
+  if (!response.ok) {
+    throw createApiError(
+      response,
+      data
+    );
+  }
+
+  return data;
 }
 
-export function resetPassword(data) {
-  return api("/auth/reset-password", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
+export const authService = {
+  register(payload) {
+    return request(
+      "/auth/register",
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  },
 
-export function changePassword(data) {
-  return api("/auth/change-password", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
+  login(payload) {
+    return request(
+      "/auth/login",
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  },
 
-export function getCurrentUser() {
-  return api("/auth/me");
-}
+  google(credential) {
+    return request(
+      "/auth/google",
+      {
+        method: "POST",
+        body: {
+          credential,
+        },
+      }
+    );
+  },
+
+  verifyEmail(payload) {
+    return request(
+      "/auth/verify-email",
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  },
+
+  resendVerification(email) {
+    return request(
+      "/auth/resend-verification",
+      {
+        method: "POST",
+        body: {
+          email,
+        },
+      }
+    );
+  },
+
+  forgotPassword(email) {
+    return request(
+      "/auth/forgot-password",
+      {
+        method: "POST",
+        body: {
+          email,
+        },
+      }
+    );
+  },
+
+  resetPassword(payload) {
+    return request(
+      "/auth/reset-password",
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  },
+
+  changePassword(payload, token) {
+    return request(
+      "/auth/change-password",
+      {
+        method: "POST",
+        body: payload,
+        token,
+      }
+    );
+  },
+
+  getMe(token) {
+    return request(
+      "/auth/me",
+      {
+        token,
+      }
+    );
+  },
+};
+
+export default authService;

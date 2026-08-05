@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import toast from "react-hot-toast";
-
+import ChapsSmsLogo from "@/components/brand/ChapsSmsLogo";
 import { useWallet } from "@/hooks/useWallet";
 import { useAuth } from "@/context/AuthContext";
 

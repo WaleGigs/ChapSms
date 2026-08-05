@@ -20,6 +20,7 @@ import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import PasswordField from "@/components/auth/PasswordField";
+import GoogleAuthButton from "@/components/auth/GoogleAuthButton";
 
 import {
   normalizeEmail,
@@ -49,13 +50,23 @@ function getRequestedPath() {
     return "";
   }
 
-  const searchParams =
+  return getSafeNextPath(
     new URLSearchParams(
       window.location.search
-    );
+    ).get("next")
+  );
+}
 
-  return getSafeNextPath(
-    searchParams.get("next")
+function getDestination(user) {
+  if (
+    user?.role === "admin"
+  ) {
+    return "/admin";
+  }
+
+  return (
+    getRequestedPath() ||
+    "/buy-number"
   );
 }
 
@@ -65,49 +76,50 @@ export default function LoginPage() {
 
   const {
     login,
+    googleLogin,
   } = useAuth();
 
-  const [
-    form,
-    setForm,
-  ] = useState({
-    email: "",
-    password: "",
-    rememberMe: true,
-  });
+  const [form, setForm] =
+    useState({
+      email: "",
+      password: "",
+      rememberMe: true,
+    });
 
-  const [
-    touched,
-    setTouched,
-  ] = useState({});
+  const [touched, setTouched] =
+    useState({});
 
-  const [
-    errors,
-    setErrors,
-  ] = useState({});
+  const [errors, setErrors] =
+    useState({});
 
   const [
     submitError,
     setSubmitError,
   ] = useState("");
 
+  const [loading, setLoading] =
+    useState(false);
+
   const [
-    loading,
-    setLoading,
+    googleLoading,
+    setGoogleLoading,
   ] = useState(false);
 
   const currentErrors =
-    useMemo(() => {
-      return validateLoginForm(
-        form
-      );
-    }, [form]);
+    useMemo(
+      () =>
+        validateLoginForm(
+          form
+        ),
+      [form]
+    );
 
   const canSubmit =
     Object.keys(
       currentErrors
     ).length === 0 &&
-    !loading;
+    !loading &&
+    !googleLoading;
 
   function updateField(event) {
     const {
@@ -166,12 +178,32 @@ export default function LoginPage() {
     }));
   }
 
+  function completeLogin(
+    response
+  ) {
+    toast.success(
+      response?.message ||
+        "Login successful"
+    );
+
+    router.replace(
+      getDestination(
+        response?.user
+      )
+    );
+
+    router.refresh();
+  }
+
   async function handleSubmit(
     event
   ) {
     event.preventDefault();
 
-    if (loading) {
+    if (
+      loading ||
+      googleLoading
+    ) {
       return;
     }
 
@@ -214,60 +246,21 @@ export default function LoginPage() {
             form.rememberMe,
         });
 
-      toast.success(
-        response?.message ||
-          "Login successful"
-      );
-
-      const requestedPath =
-        getRequestedPath();
-
-      const destination =
-        response?.user?.role ===
-        "admin"
-          ? "/admin"
-          : requestedPath ||
-            "/buy-number";
-
-      router.replace(
-        destination
-      );
-
-      router.refresh();
+      completeLogin(response);
     } catch (error) {
-      const errorCode =
-        error?.code ||
-        error?.data?.code;
-
-      let message =
+      const message =
         error?.message ||
         "Login failed. Please try again.";
 
-      if (
-        errorCode ===
-        "API_URL_MISSING"
-      ) {
-        message =
-          "The website API is not configured. Add NEXT_PUBLIC_API_URL in Vercel and redeploy.";
-      }
-
-      if (
-        errorCode ===
-          "NETWORK_ERROR" ||
-        errorCode ===
-          "REQUEST_TIMEOUT"
-      ) {
-        message =
-          "Unable to reach the ChapsSmS server. Please try again shortly.";
-      }
+      const errorCode =
+        error?.code ||
+        error?.data?.code;
 
       if (
         errorCode ===
         "EMAIL_NOT_VERIFIED"
       ) {
-        toast.error(
-          message
-        );
+        toast.error(message);
 
         router.push(
           `/verify-email?email=${encodeURIComponent(
@@ -282,11 +275,48 @@ export default function LoginPage() {
         message
       );
 
-      toast.error(
-        message
-      );
+      toast.error(message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleGoogle(
+    credential
+  ) {
+    if (
+      loading ||
+      googleLoading
+    ) {
+      return;
+    }
+
+    try {
+      setGoogleLoading(true);
+      setSubmitError("");
+
+      const response =
+        await googleLogin(
+          credential,
+          {
+            rememberMe:
+              form.rememberMe,
+          }
+        );
+
+      completeLogin(response);
+    } catch (error) {
+      const message =
+        error?.message ||
+        "Google login failed. Please try again.";
+
+      setSubmitError(
+        message
+      );
+
+      toast.error(message);
+    } finally {
+      setGoogleLoading(false);
     }
   }
 
@@ -303,8 +333,8 @@ export default function LoginPage() {
 
         <p className="mt-3 text-sm leading-7 text-[var(--muted-foreground)] sm:text-base">
           Login to manage your
-          wallet, orders, pricing
-          access, and API keys.
+          wallet, orders, and
+          virtual numbers.
         </p>
       </div>
 
@@ -316,6 +346,25 @@ export default function LoginPage() {
           {submitError}
         </div>
       ) : null}
+
+      <GoogleAuthButton
+        onCredential={
+          handleGoogle
+        }
+        disabled={
+          loading ||
+          googleLoading
+        }
+        text="continue_with"
+      />
+
+      <div className="my-6 flex items-center gap-3">
+        <span className="h-px flex-1 bg-[var(--border)]" />
+        <span className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+          or use email
+        </span>
+        <span className="h-px flex-1 bg-[var(--border)]" />
+      </div>
 
       <form
         onSubmit={

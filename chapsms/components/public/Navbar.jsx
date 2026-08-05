@@ -7,7 +7,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
-
+import ChapsSmsLogo from "@/components/brand/ChapsSmsLogo";
 import ThemeToggle from "@/components/ui/ThemeToggle";
 import Button from "@/components/ui/Button";
 import { useAuth } from "@/context/AuthContext";
@@ -126,17 +126,7 @@ export default function Navbar() {
       "
     >
       <nav className="site-container flex h-16 items-center justify-between gap-3 sm:h-[72px]">
-        <a
-          href="/"
-          onClick={closeMenu}
-          aria-label="ChapsSmS homepage"
-          className="focus-ring rounded-lg text-xl font-black tracking-tight text-[var(--foreground)] sm:text-2xl"
-        >
-          Chaps
-          <span className="text-blue-600">
-            SmS
-          </span>
-        </a>
+       <ChapsSmsLogo priority />
 
         <div className="hidden items-center gap-1 lg:flex">
           {navigationLinks.map(

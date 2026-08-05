@@ -2,106 +2,111 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 
-import {
-  registerUser,
-  loginUser,
-  getCurrentUser,
-  verifyUserEmail,
-  resendVerificationCode,
-} from "@/services/auth.service";
+import { authService } from "@/services/auth.service";
+const AuthContext =
+  createContext(null);
 
-const AuthContext = createContext(null);
+const TOKEN_KEYS = [
+  "chapsms-token",
+  "chapsms_token",
+  "authToken",
+  "token",
+];
 
 function getStoredToken() {
-  if (typeof window === "undefined") {
-    return null;
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return "";
   }
 
-  return (
-    localStorage.getItem(
-      "chapsms-token"
-    ) ||
-    sessionStorage.getItem(
-      "chapsms-token"
-    )
-  );
+  for (const key of TOKEN_KEYS) {
+    const persistent =
+      window.localStorage.getItem(
+        key
+      );
+
+    if (persistent) {
+      return persistent;
+    }
+  }
+
+  for (const key of TOKEN_KEYS) {
+    const temporary =
+      window.sessionStorage.getItem(
+        key
+      );
+
+    if (temporary) {
+      return temporary;
+    }
+  }
+
+  return "";
 }
 
-function getStoredUser() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const storedUser =
-    localStorage.getItem(
-      "chapsms-user"
-    ) ||
-    sessionStorage.getItem(
-      "chapsms-user"
-    );
-
-  if (!storedUser) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(storedUser);
-  } catch {
-    return null;
-  }
-}
-
-function clearStoredSession() {
-  if (typeof window === "undefined") {
+function clearStoredTokens() {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
     return;
   }
 
-  localStorage.removeItem(
-    "chapsms-token"
-  );
+  for (const key of TOKEN_KEYS) {
+    window.localStorage.removeItem(
+      key
+    );
 
-  localStorage.removeItem(
-    "chapsms-user"
-  );
-
-  sessionStorage.removeItem(
-    "chapsms-token"
-  );
-
-  sessionStorage.removeItem(
-    "chapsms-user"
-  );
+    window.sessionStorage.removeItem(
+      key
+    );
+  }
 }
 
-function storeCurrentUser(currentUser) {
-  if (typeof window === "undefined") {
+function storeToken(
+  token,
+  rememberMe
+) {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
     return;
   }
 
-  if (
-    localStorage.getItem(
-      "chapsms-token"
-    )
-  ) {
-    localStorage.setItem(
-      "chapsms-user",
-      JSON.stringify(currentUser)
+  clearStoredTokens();
+
+  const storage =
+    rememberMe
+      ? window.localStorage
+      : window.sessionStorage;
+
+  for (const key of TOKEN_KEYS) {
+    storage.setItem(
+      key,
+      token
     );
   }
+}
 
+function notifyAuthChanged() {
   if (
-    sessionStorage.getItem(
-      "chapsms-token"
-    )
+    typeof window !==
+    "undefined"
   ) {
-    sessionStorage.setItem(
-      "chapsms-user",
-      JSON.stringify(currentUser)
+    window.dispatchEvent(
+      new Event(
+        "chapsms-auth-change"
+      )
     );
   }
 }
@@ -109,100 +114,140 @@ function storeCurrentUser(currentUser) {
 export function AuthProvider({
   children,
 }) {
-  const [user, setUser] = useState(
-    null
-  );
+  const [user, setUser] =
+    useState(null);
+
+  const [token, setToken] =
+    useState("");
 
   const [
     authLoading,
     setAuthLoading,
   ] = useState(true);
 
-  useEffect(() => {
-    let active = true;
+  const establishSession =
+    useCallback(
+      (
+        response,
+        rememberMe = true
+      ) => {
+        const nextToken =
+          String(
+            response?.token || ""
+          ).trim();
 
-    async function initializeAuth() {
-      try {
-        const token =
-          getStoredToken();
+        if (!nextToken) {
+          const error =
+            new Error(
+              "The server did not return an authentication token"
+            );
 
-        if (!token) {
-          if (active) {
-            setUser(null);
-          }
+          error.code =
+            "AUTH_TOKEN_MISSING";
 
-          return;
+          throw error;
         }
 
-        /*
-         * Restore the cached user immediately
-         * while validating the JWT.
-         */
-        const storedUser =
-          getStoredUser();
+        storeToken(
+          nextToken,
+          rememberMe
+        );
 
-        if (
-          active &&
-          storedUser
-        ) {
-          setUser(storedUser);
+        setToken(nextToken);
+        setUser(
+          response?.user || null
+        );
+
+        notifyAuthChanged();
+
+        return response;
+      },
+      []
+    );
+
+  const logout = useCallback(
+    async () => {
+      clearStoredTokens();
+      setToken("");
+      setUser(null);
+      notifyAuthChanged();
+    },
+    []
+  );
+
+  const refreshUser =
+    useCallback(
+      async (
+        explicitToken
+      ) => {
+        const activeToken =
+          explicitToken ||
+          token ||
+          getStoredToken();
+
+        if (!activeToken) {
+          setUser(null);
+          return null;
         }
 
         const response =
-          await getCurrentUser();
-
-        const currentUser =
-          response?.user ||
-          response;
-
-        if (!currentUser) {
-          throw new Error(
-            "The server did not return the current user"
+          await authService.getMe(
+            activeToken
           );
+
+        const nextUser =
+          response?.user ||
+          null;
+
+        setToken(activeToken);
+        setUser(nextUser);
+
+        return nextUser;
+      },
+      [token]
+    );
+
+  useEffect(() => {
+    let active = true;
+
+    async function restoreSession() {
+      const storedToken =
+        getStoredToken();
+
+      if (!storedToken) {
+        if (active) {
+          setAuthLoading(false);
         }
+
+        return;
+      }
+
+      try {
+        const response =
+          await authService.getMe(
+            storedToken
+          );
 
         if (!active) {
           return;
         }
 
-        setUser(currentUser);
-        storeCurrentUser(
-          currentUser
+        setToken(storedToken);
+        setUser(
+          response?.user ||
+          null
         );
       } catch (error) {
         console.error(
-          "Authentication restoration failed:",
+          "Session restoration failed:",
           error
         );
 
-        /*
-         * Clear the session only when the
-         * backend rejects the token.
-         */
-        if (
-          error?.status === 401
-        ) {
-          clearStoredSession();
+        clearStoredTokens();
 
-          if (active) {
-            setUser(null);
-          }
-
-          return;
-        }
-
-        /*
-         * Preserve the cached user during
-         * temporary backend/network failures.
-         */
-        const storedUser =
-          getStoredUser();
-
-        if (
-          active &&
-          storedUser
-        ) {
-          setUser(storedUser);
+        if (active) {
+          setToken("");
+          setUser(null);
         }
       } finally {
         if (active) {
@@ -211,155 +256,109 @@ export function AuthProvider({
       }
     }
 
-    initializeAuth();
+    restoreSession();
 
     return () => {
       active = false;
     };
   }, []);
 
-  async function login({
-    email,
-    password,
-    rememberMe = true,
-  }) {
-    const normalizedEmail =
-      String(email || "")
-        .trim()
-        .toLowerCase();
+  const signup = useCallback(
+    (payload) =>
+      authService.register(
+        payload
+      ),
+    []
+  );
 
-    const response =
-      await loginUser({
-        email: normalizedEmail,
-        password,
-      });
+  const login = useCallback(
+    async (payload) => {
+      const response =
+        await authService.login({
+          email: payload.email,
+          password:
+            payload.password,
+        });
 
-    if (
-      !response?.token ||
-      !response?.user
-    ) {
-      throw new Error(
-        "The server returned an invalid login response"
+      return establishSession(
+        response,
+        payload.rememberMe !==
+          false
       );
-    }
+    },
+    [establishSession]
+  );
 
-    clearStoredSession();
+  const googleLogin =
+    useCallback(
+      async (
+        credential,
+        {
+          rememberMe = true,
+        } = {}
+      ) => {
+        const response =
+          await authService.google(
+            credential
+          );
 
-    const storage =
-      rememberMe
-        ? localStorage
-        : sessionStorage;
-
-    storage.setItem(
-      "chapsms-token",
-      response.token
+        return establishSession(
+          response,
+          rememberMe
+        );
+      },
+      [establishSession]
     );
 
-    storage.setItem(
-      "chapsms-user",
-      JSON.stringify(
-        response.user
-      )
+  const updateUser =
+    useCallback(
+      (value) => {
+        setUser((current) =>
+          typeof value ===
+          "function"
+            ? value(current)
+            : value
+        );
+      },
+      []
     );
 
-    setUser(response.user);
-
-    return response;
-  }
-
-  async function signup(data) {
-    return registerUser({
-      ...data,
-
-      email: String(
-        data?.email || ""
-      )
-        .trim()
-        .toLowerCase(),
-    });
-  }
-
-  async function refreshUser() {
-    const response =
-      await getCurrentUser();
-
-    const currentUser =
-      response?.user ||
-      response;
-
-    if (!currentUser) {
-      throw new Error(
-        "Unable to retrieve the current user"
-      );
-    }
-
-    setUser(currentUser);
-
-    storeCurrentUser(
-      currentUser
-    );
-
-    return currentUser;
-  }
-
-  function logout() {
-    clearStoredSession();
-    setUser(null);
-  }
-
-  async function verifyEmail(data) {
-    return verifyUserEmail({
-      email: String(
-        data?.email || ""
-      )
-        .trim()
-        .toLowerCase(),
-
-      code: String(
-        data?.code ||
-          data?.verificationCode ||
-          ""
-      ).trim(),
-    });
-  }
-
-  async function resendVerification(
-    email
-  ) {
-    const normalizedEmail =
-      typeof email === "string"
-        ? email
-            .trim()
-            .toLowerCase()
-        : String(
-            email?.email || ""
-          )
-            .trim()
-            .toLowerCase();
-
-    if (!normalizedEmail) {
-      throw new Error(
-        "Email address is required"
-      );
-    }
-
-    return resendVerificationCode({
-      email: normalizedEmail,
-    });
-  }
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      authLoading,
+      isAuthenticated:
+        Boolean(
+          user && token
+        ),
+      signup,
+      register: signup,
+      login,
+      googleLogin,
+      logout,
+      refreshUser,
+      refreshAuth:
+        refreshUser,
+      setUser: updateUser,
+      updateUser,
+    }),
+    [
+      user,
+      token,
+      authLoading,
+      signup,
+      login,
+      googleLogin,
+      logout,
+      refreshUser,
+      updateUser,
+    ]
+  );
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-        authLoading,
-        login,
-        signup,
-        logout,
-        refreshUser,
-        verifyEmail,
-        resendVerification,
-      }}
+      value={value}
     >
       {children}
     </AuthContext.Provider>
@@ -378,3 +377,5 @@ export function useAuth() {
 
   return context;
 }
+
+export default AuthContext;
