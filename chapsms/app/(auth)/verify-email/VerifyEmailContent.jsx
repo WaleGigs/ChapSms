@@ -25,7 +25,7 @@ import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import {
   authService,
-} from "@/services/authService";
+} from "@/services/auth.service";
 
 function normalizeEmail(value) {
   return String(value || "")
