@@ -137,6 +137,32 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+
+    /*
+     * The environment and exact balance field used to pay for this order.
+     * Old orders without these values are treated as live/balance.
+     */
+    paymentEnvironment: {
+      type: String,
+      enum: ["test", "live"],
+      default: "live",
+      index: true,
+    },
+
+    walletBalanceField: {
+      type: String,
+      enum: ["balance", "testBalance"],
+      default: "balance",
+    },
+
+    walletReservationReference: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+      index: true,
+    },
+
     server: {
       type: String,
       enum: ["server1", "server2"],
@@ -214,6 +240,8 @@ orderSchema.index({ refunded: 1, createdAt: -1 });
 function hidePrivateProviderFields(_doc, ret) {
   delete ret.provider;
   delete ret.providerResponse;
+  delete ret.walletBalanceField;
+  delete ret.walletReservationReference;
   return ret;
 }
 

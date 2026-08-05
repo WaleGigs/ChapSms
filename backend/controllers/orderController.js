@@ -1,3 +1,5 @@
+const crypto = require("node:crypto");
+
 const Order = require("../models/Order");
 const Wallet = require("../models/Wallet");
 const providerManager = require(
@@ -59,6 +61,8 @@ function sanitizeOrder(order) {
   delete data.financialStatus;
   delete data.pricingRule;
   delete data.pricingSnapshot;
+  delete data.walletBalanceField;
+  delete data.walletReservationReference;
 
   return data;
 }
@@ -67,336 +71,1162 @@ function sanitizeOrders(orders = []) {
   return orders.map(sanitizeOrder);
 }
 
-async function refundWalletAfterSaveFailure({
+const VALID_ENVIRONMENTS = [
+  "test",
+  "live",
+];
+
+function normalizeEnvironment(
+  value,
+  fallback,
+  variableName,
+) {
+  const environment =
+    String(
+      value || fallback,
+    )
+      .trim()
+      .toLowerCase();
+
+  if (
+    !VALID_ENVIRONMENTS.includes(
+      environment,
+    )
+  ) {
+    const error =
+      new Error(
+        `${variableName} must be test or live`,
+      );
+
+    error.status = 500;
+    error.code =
+      "INVALID_ENVIRONMENT_MODE";
+
+    throw error;
+  }
+
+  return environment;
+}
+
+function getPaymentEnvironment() {
+  return normalizeEnvironment(
+    process.env.PAYMENT_MODE,
+    "test",
+    "PAYMENT_MODE",
+  );
+}
+
+function getSmsProviderEnvironment() {
+  /*
+   * SMSBower and BenOTP are live providers.
+   * Defaulting this to live prevents accidental treatment as a mock.
+   */
+  return normalizeEnvironment(
+    process.env.SMS_PROVIDER_MODE,
+    "live",
+    "SMS_PROVIDER_MODE",
+  );
+}
+
+function getWalletBalanceField(
+  environment,
+) {
+  return environment === "live"
+    ? "balance"
+    : "testBalance";
+}
+
+function getWalletBalance(
+  wallet,
+  balanceField,
+) {
+  return Number(
+    wallet?.[balanceField] || 0,
+  );
+}
+
+function createReservationReference(
   userId,
+) {
+  return [
+    "ORDER",
+    userId,
+    Date.now(),
+    crypto
+      .randomBytes(5)
+      .toString("hex"),
+  ]
+    .join("-")
+    .toUpperCase();
+}
+
+async function refundReservedWallet({
+  userId,
+  amount,
+  balanceField,
+  environment,
+  reservationReference,
+  service,
+  country,
+  server,
+  reason,
+}) {
+  const numericAmount =
+    Number(amount);
+
+  if (
+    !Number.isFinite(
+      numericAmount,
+    ) ||
+    numericAmount <= 0
+  ) {
+    return null;
+  }
+
+  const refundReference =
+    `${reservationReference}-REFUND`
+      .toUpperCase();
+
+  const wallet =
+    await Wallet.findOneAndUpdate(
+      {
+        user: userId,
+
+        "transactions.reference": {
+          $ne:
+            refundReference,
+        },
+      },
+
+      {
+        $inc: {
+          [balanceField]:
+            numericAmount,
+        },
+
+        $set: {
+          "transactions.$[purchase].status":
+            "failed",
+
+          "transactions.$[purchase].description":
+            `${reason}: ${service} (${country})`,
+        },
+
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type:
+                  "refund",
+
+                amount:
+                  numericAmount,
+
+                environment,
+
+                balanceField,
+
+                description:
+                  `${reason}: ${service} (${country})`,
+
+                status:
+                  "completed",
+
+                reference:
+                  refundReference,
+
+                server,
+
+                currency:
+                  "NGN",
+              },
+            ],
+
+            $position: 0,
+          },
+        },
+      },
+
+      {
+        new: true,
+        runValidators: true,
+
+        arrayFilters: [
+          {
+            "purchase.reference":
+              reservationReference,
+          },
+        ],
+      },
+    );
+
+  if (wallet) {
+    return wallet;
+  }
+
+  return Wallet.findOne({
+    user: userId,
+  });
+}
+
+async function reconcileReservation({
+  userId,
+  balanceField,
+  reservationReference,
+  reservedAmount,
+  finalAmount,
+}) {
+  const difference =
+    Number(finalAmount) -
+    Number(reservedAmount);
+
+  if (
+    !Number.isFinite(
+      difference,
+    )
+  ) {
+    const error =
+      new Error(
+        "Invalid wallet reconciliation amount",
+      );
+
+    error.status = 500;
+    error.code =
+      "INVALID_RECONCILIATION_AMOUNT";
+
+    throw error;
+  }
+
+  if (difference > 0) {
+    return Wallet.findOneAndUpdate(
+      {
+        user: userId,
+
+        [balanceField]: {
+          $gte: difference,
+        },
+
+        "transactions.reference":
+          reservationReference,
+      },
+
+      {
+        $inc: {
+          [balanceField]:
+            -difference,
+        },
+
+        $set: {
+          "transactions.$.amount":
+            finalAmount,
+        },
+      },
+
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+  }
+
+  if (difference < 0) {
+    return Wallet.findOneAndUpdate(
+      {
+        user: userId,
+
+        "transactions.reference":
+          reservationReference,
+      },
+
+      {
+        $inc: {
+          [balanceField]:
+            Math.abs(
+              difference,
+            ),
+        },
+
+        $set: {
+          "transactions.$.amount":
+            finalAmount,
+        },
+      },
+
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+  }
+
+  return Wallet.findOneAndUpdate(
+    {
+      user: userId,
+
+      "transactions.reference":
+        reservationReference,
+    },
+
+    {
+      $set: {
+        "transactions.$.amount":
+          finalAmount,
+      },
+    },
+
+    {
+      new: true,
+      runValidators: true,
+    },
+  );
+}
+
+async function completePurchaseTransaction({
+  userId,
+  reservationReference,
+  orderId,
   amount,
   service,
   country,
+  server,
 }) {
-  try {
-    await Wallet.findOneAndUpdate(
-      { user: userId },
-      {
-        $inc: { balance: amount },
-        $push: {
-          transactions: {
-            $each: [
-              {
-                type: "refund",
-                amount,
-                description: `Automatic refund for failed ${service} order (${country})`,
-                status: "completed",
-              },
-            ],
-            $position: 0,
-          },
-        },
+  await Wallet.updateOne(
+    {
+      user: userId,
+
+      "transactions.reference":
+        reservationReference,
+    },
+
+    {
+      $set: {
+        "transactions.$.status":
+          "completed",
+
+        "transactions.$.amount":
+          amount,
+
+        "transactions.$.description":
+          `${service} (${country}) - ${server}`,
+
+        "transactions.$.orderId":
+          orderId,
       },
-      {
-        returnDocument: "after",
-        runValidators: true,
-      }
-    );
-  } catch (walletError) {
-    console.error("Automatic wallet rollback failed:", walletError);
-  }
+    },
+
+    {
+      runValidators: true,
+    },
+  );
 }
 
-exports.createOrder = async (req, res) => {
-  let purchasedProviderOrder = null;
-  let walletWasDebited = false;
-  let debitedAmount = 0;
+exports.createOrder =
+  async (req, res) => {
+    let purchasedProviderOrder =
+      null;
 
-  try {
-    const {
-      country,
-      service,
-      countryName,
-      serviceName,
-      operator,
-      server,
-    } = req.body;
+    let walletWasDebited =
+      false;
 
-    if (!country || !service) {
-      return res.status(400).json({
-        success: false,
-        message: "Country and service are required",
-      });
-    }
+    let debitedAmount = 0;
 
-    const normalizedCountry = normalizeCountry(country);
-    const normalizedService = normalizeService(service);
-    const normalizedCountryName = String(
-      countryName || ""
-    ).trim();
-    const normalizedServiceName = String(
-      serviceName || ""
-    ).trim();
-    const requestedOperator =
-      normalizeOperator(operator);
+    let reservationReference =
+      "";
 
-    const normalizedServer =
-      normalizeServer(server);
+    let balanceField =
+      "balance";
 
-    if (!VALID_SERVERS.includes(normalizedServer)) {
-      return res.status(400).json({
-        success: false,
-        message: "Select a valid SMS server",
-      });
-    }
+    let paymentEnvironment =
+      "live";
 
-    const normalizedOperator =
-      await pricingService
-        .resolveEffectiveOperator({
-          server:
-            normalizedServer,
-          country:
-            normalizedCountry,
-          service:
-            normalizedService,
-          countryName:
-            normalizedCountryName,
-          serviceName:
-            normalizedServiceName,
-          requestedOperator,
-        });
+    let normalizedCountry =
+      "";
 
-    const preliminaryQuote =
-      await providerManager.getPrice({
-        server:
-          normalizedServer,
-        country:
-          normalizedCountry,
-        service:
-          normalizedService,
-        operator:
-          normalizedOperator,
-      });
+    let normalizedService =
+      "";
 
-    const preliminaryPricing =
-      await pricingService.resolveCustomerPricing({
-        server: normalizedServer,
-        country: normalizedCountry,
-        service: normalizedService,
-        countryName: normalizedCountryName,
-        serviceName: normalizedServiceName,
-        operator: normalizedOperator,
-        providerPrice: preliminaryQuote.price,
-        providerCurrency: preliminaryQuote.currency,
-      });
-
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[Pricing] purchase pre-check:", {
-        server: normalizedServer,
-        country: normalizedCountry,
-        countryName: normalizedCountryName,
-        service: normalizedService,
-        serviceName: normalizedServiceName,
-        operator: normalizedOperator,
-        providerPrice: preliminaryQuote.price,
-        providerCurrency: preliminaryQuote.currency,
-        sellingPrice: preliminaryPricing.sellingPrice,
-        pricingSource: preliminaryPricing.pricingSource,
-        pricingRuleMatched:
-          preliminaryPricing.pricingRuleMatched,
-      });
-    }
-
-    const walletBefore = await Wallet.findOne({
-      user: req.user._id,
-    }).select("balance");
-
-    if (!walletBefore) {
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found",
-      });
-    }
-
-    if (
-      Number(walletBefore.balance) <
-      preliminaryPricing.sellingPrice
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient wallet balance",
-        walletBalance: walletBefore.balance,
-        requiredAmount: preliminaryPricing.sellingPrice,
-      });
-    }
-
-    purchasedProviderOrder = await providerManager.buyNumber({
-      server: normalizedServer,
-      country: normalizedCountry,
-      service: normalizedService,
-      operator: normalizedOperator,
-    });
-
-    const providerPrice = Number(
-      purchasedProviderOrder.providerPrice
-    );
-
-    if (!Number.isFinite(providerPrice) || providerPrice <= 0) {
-      try {
-        await providerManager.cancelOrder(
-          purchasedProviderOrder.internalProvider,
-          purchasedProviderOrder.providerOrderId
-        );
-      } catch (cancelError) {
-        console.error("Invalid-price cancellation failed:", cancelError);
-      }
-
-      return res.status(502).json({
-        success: false,
-        message: "Provider returned an invalid purchase price",
-      });
-    }
-
-    const providerCurrency =
-      purchasedProviderOrder.providerCurrency ||
-      preliminaryQuote.currency;
-
-    const actualOperator = normalizeOperator(
-      purchasedProviderOrder.operator || normalizedOperator
-    );
-
-    const finalPricing = await pricingService.resolveCustomerPricing({
-      server: normalizedServer,
-      country: normalizedCountry,
-      service: normalizedService,
-      countryName: normalizedCountryName,
-      serviceName: normalizedServiceName,
-      operator: actualOperator,
-      providerPrice,
-      providerCurrency,
-    });
-
-    debitedAmount = finalPricing.sellingPrice;
-
-    const wallet = await Wallet.findOneAndUpdate(
-      {
-        user: req.user._id,
-        balance: { $gte: debitedAmount },
-      },
-      {
-        $inc: { balance: -debitedAmount },
-        $push: {
-          transactions: {
-            $each: [
-              {
-                type: "purchase",
-                amount: debitedAmount,
-                description: `${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
-                status: "completed",
-              },
-            ],
-            $position: 0,
-          },
-        },
-      },
-      {
-        returnDocument: "after",
-        runValidators: true,
-      }
-    );
-
-    if (!wallet) {
-      try {
-        await providerManager.cancelOrder(
-          purchasedProviderOrder.internalProvider,
-          purchasedProviderOrder.providerOrderId
-        );
-      } catch (cancelError) {
-        console.error("Insufficient-balance cancellation failed:", cancelError);
-      }
-
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient wallet balance",
-      });
-    }
-
-    walletWasDebited = true;
-
-    let order;
+    let normalizedServer =
+      "";
 
     try {
-      order = await Order.create({
-        user: req.user._id,
-        customerEmail: req.user.email || "",
-        customerName: [req.user.firstName, req.user.lastName]
-          .filter(Boolean)
-          .join(" "),
-        country: normalizedCountry,
-        service: normalizedService,
-        operator: actualOperator,
-        phoneNumber: purchasedProviderOrder.phoneNumber,
-        price: finalPricing.sellingPrice,
-        sellingPrice: finalPricing.sellingPrice,
-        providerPrice,
-        providerCurrency: finalPricing.providerCurrency,
-        providerCostNgn: finalPricing.providerCostNgn,
-        profit: finalPricing.profit,
-        financialStatus: "charged",
-        pricingRule: finalPricing.pricingRuleId,
-        pricingSnapshot: finalPricing.pricingSnapshot,
-        server: purchasedProviderOrder.server || normalizedServer,
-        provider: purchasedProviderOrder.internalProvider,
-        providerOrderId: String(
-          purchasedProviderOrder.providerOrderId
-        ),
-        providerStatus:
-          purchasedProviderOrder.providerStatus ||
-          "STATUS_WAIT_CODE",
-        providerResponse: purchasedProviderOrder.raw,
-        status: "waiting",
-        refunded: false,
-      });
-    } catch (saveError) {
-      try {
-        await providerManager.cancelOrder(
-          purchasedProviderOrder.internalProvider,
-          purchasedProviderOrder.providerOrderId
-        );
-      } catch (cancelError) {
-        console.error("Order-save cancellation failed:", cancelError);
+      paymentEnvironment =
+        getPaymentEnvironment();
+
+      const smsProviderEnvironment =
+        getSmsProviderEnvironment();
+
+      /*
+       * The current provider manager contains real SMSBower and BenOTP
+       * integrations. It does not contain a mock provider.
+       */
+      if (
+        smsProviderEnvironment ===
+        "test"
+      ) {
+        return res
+          .status(503)
+          .json({
+            success: false,
+
+            code:
+              "MOCK_SMS_PROVIDER_NOT_CONFIGURED",
+
+            message:
+              "Test number purchasing is disabled because a mock SMS provider is not configured. Test wallet funds cannot be used with SMSBower or BenOTP.",
+          });
       }
 
-      await refundWalletAfterSaveFailure({
-        userId: req.user._id,
-        amount: debitedAmount,
-        service: normalizedService,
-        country: normalizedCountry,
+      /*
+       * Most important safety gate:
+       * test Flutterwave money cannot reach a live SMS provider.
+       */
+      if (
+        paymentEnvironment !==
+        smsProviderEnvironment
+      ) {
+        return res
+          .status(503)
+          .json({
+            success: false,
+
+            code:
+              "UNSAFE_PAYMENT_CONFIGURATION",
+
+            message:
+              "Number purchasing is disabled because Flutterwave is in test mode while the SMS providers are live. Switch both systems to live before accepting real purchases.",
+          });
+      }
+
+      balanceField =
+        getWalletBalanceField(
+          paymentEnvironment,
+        );
+
+      const {
+        country,
+        service,
+        countryName,
+        serviceName,
+        operator,
+        server,
+      } = req.body;
+
+      if (
+        !country ||
+        !service
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Country and service are required",
+          });
+      }
+
+      normalizedCountry =
+        normalizeCountry(
+          country,
+        );
+
+      normalizedService =
+        normalizeService(
+          service,
+        );
+
+      const normalizedCountryName =
+        String(
+          countryName || "",
+        ).trim();
+
+      const normalizedServiceName =
+        String(
+          serviceName || "",
+        ).trim();
+
+      const requestedOperator =
+        normalizeOperator(
+          operator,
+        );
+
+      normalizedServer =
+        normalizeServer(
+          server,
+        );
+
+      if (
+        !VALID_SERVERS.includes(
+          normalizedServer,
+        )
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Select a valid SMS server",
+          });
+      }
+
+      const normalizedOperator =
+        await pricingService
+          .resolveEffectiveOperator({
+            server:
+              normalizedServer,
+
+            country:
+              normalizedCountry,
+
+            service:
+              normalizedService,
+
+            countryName:
+              normalizedCountryName,
+
+            serviceName:
+              normalizedServiceName,
+
+            requestedOperator,
+          });
+
+      const preliminaryQuote =
+        await providerManager.getPrice({
+          server:
+            normalizedServer,
+
+          country:
+            normalizedCountry,
+
+          service:
+            normalizedService,
+
+          operator:
+            normalizedOperator,
+        });
+
+      const preliminaryPricing =
+        await pricingService
+          .resolveCustomerPricing({
+            server:
+              normalizedServer,
+
+            country:
+              normalizedCountry,
+
+            service:
+              normalizedService,
+
+            countryName:
+              normalizedCountryName,
+
+            serviceName:
+              normalizedServiceName,
+
+            operator:
+              normalizedOperator,
+
+            providerPrice:
+              preliminaryQuote.price,
+
+            providerCurrency:
+              preliminaryQuote.currency,
+          });
+
+      const reservedAmount =
+        Number(
+          preliminaryPricing
+            .sellingPrice,
+        );
+
+      if (
+        !Number.isFinite(
+          reservedAmount,
+        ) ||
+        reservedAmount <= 0
+      ) {
+        return res
+          .status(502)
+          .json({
+            success: false,
+            message:
+              "The calculated selling price is invalid",
+          });
+      }
+
+      reservationReference =
+        createReservationReference(
+          req.user._id,
+        );
+
+      /*
+       * Reserve/deduct the ChapsSmS wallet BEFORE purchasing
+       * from SMSBower or BenOTP.
+       */
+      let wallet =
+        await Wallet.findOneAndUpdate(
+          {
+            user:
+              req.user._id,
+
+            [balanceField]: {
+              $gte:
+                reservedAmount,
+            },
+          },
+
+          {
+            $inc: {
+              [balanceField]:
+                -reservedAmount,
+            },
+
+            $push: {
+              transactions: {
+                $each: [
+                  {
+                    type:
+                      "purchase",
+
+                    amount:
+                      reservedAmount,
+
+                    environment:
+                      paymentEnvironment,
+
+                    balanceField,
+
+                    description:
+                      `Reserved for ${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
+
+                    status:
+                      "pending",
+
+                    reference:
+                      reservationReference,
+
+                    server:
+                      normalizedServer,
+
+                    currency:
+                      "NGN",
+                  },
+                ],
+
+                $position: 0,
+              },
+            },
+          },
+
+          {
+            new: true,
+            runValidators: true,
+          },
+        );
+
+      if (!wallet) {
+        const latestWallet =
+          await Wallet.findOne({
+            user:
+              req.user._id,
+          }).select(
+            "balance testBalance",
+          );
+
+        if (!latestWallet) {
+          return res
+            .status(404)
+            .json({
+              success: false,
+              code:
+                "WALLET_NOT_FOUND",
+              message:
+                "Wallet not found",
+            });
+        }
+
+        return res
+          .status(400)
+          .json({
+            success: false,
+
+            code:
+              "INSUFFICIENT_WALLET_BALANCE",
+
+            message:
+              "Insufficient ChapsSmS wallet balance. Fund your live wallet before purchasing a number.",
+
+            walletBalance:
+              getWalletBalance(
+                latestWallet,
+                balanceField,
+              ),
+
+            requiredAmount:
+              reservedAmount,
+
+            paymentEnvironment,
+          });
+      }
+
+      walletWasDebited =
+        true;
+
+      debitedAmount =
+        reservedAmount;
+
+      purchasedProviderOrder =
+        await providerManager.buyNumber({
+          server:
+            normalizedServer,
+
+          country:
+            normalizedCountry,
+
+          service:
+            normalizedService,
+
+          operator:
+            normalizedOperator,
+        });
+
+      const providerPrice =
+        Number(
+          purchasedProviderOrder
+            .providerPrice,
+        );
+
+      if (
+        !Number.isFinite(
+          providerPrice,
+        ) ||
+        providerPrice <= 0
+      ) {
+        const error =
+          new Error(
+            "Provider returned an invalid purchase price",
+          );
+
+        error.status = 502;
+        error.code =
+          "INVALID_PROVIDER_PRICE";
+
+        throw error;
+      }
+
+      const providerCurrency =
+        purchasedProviderOrder
+          .providerCurrency ||
+        preliminaryQuote.currency;
+
+      const actualOperator =
+        normalizeOperator(
+          purchasedProviderOrder
+            .operator ||
+            normalizedOperator,
+        );
+
+      const finalPricing =
+        await pricingService
+          .resolveCustomerPricing({
+            server:
+              normalizedServer,
+
+            country:
+              normalizedCountry,
+
+            service:
+              normalizedService,
+
+            countryName:
+              normalizedCountryName,
+
+            serviceName:
+              normalizedServiceName,
+
+            operator:
+              actualOperator,
+
+            providerPrice,
+
+            providerCurrency,
+          });
+
+      const finalAmount =
+        Number(
+          finalPricing
+            .sellingPrice,
+        );
+
+      if (
+        !Number.isFinite(
+          finalAmount,
+        ) ||
+        finalAmount <= 0
+      ) {
+        const error =
+          new Error(
+            "The final selling price is invalid",
+          );
+
+        error.status = 502;
+        error.code =
+          "INVALID_FINAL_PRICE";
+
+        throw error;
+      }
+
+      wallet =
+        await reconcileReservation({
+          userId:
+            req.user._id,
+
+          balanceField,
+
+          reservationReference,
+
+          reservedAmount,
+
+          finalAmount,
+        });
+
+      if (!wallet) {
+        /*
+         * The final provider price increased and the customer cannot
+         * cover the difference. Cancel the provider activation and
+         * return the reserved amount.
+         */
+        try {
+          await providerManager.cancelOrder(
+            purchasedProviderOrder
+              .internalProvider,
+
+            purchasedProviderOrder
+              .providerOrderId,
+          );
+        } catch (cancelError) {
+          console.error(
+            "Final-price cancellation failed:",
+            cancelError,
+          );
+        }
+
+        await refundReservedWallet({
+          userId:
+            req.user._id,
+
+          amount:
+            reservedAmount,
+
+          balanceField,
+
+          environment:
+            paymentEnvironment,
+
+          reservationReference,
+
+          service:
+            normalizedService,
+
+          country:
+            normalizedCountry,
+
+          server:
+            normalizedServer,
+
+          reason:
+            "Automatic refund because the final price exceeded the available wallet balance",
+        });
+
+        walletWasDebited =
+          false;
+
+        purchasedProviderOrder =
+          null;
+
+        const latestWallet =
+          await Wallet.findOne({
+            user:
+              req.user._id,
+          });
+
+        return res
+          .status(400)
+          .json({
+            success: false,
+
+            code:
+              "INSUFFICIENT_FINAL_BALANCE",
+
+            message:
+              "The live provider price changed and your wallet could not cover the difference. The provider order was cancelled and your wallet was refunded.",
+
+            walletBalance:
+              getWalletBalance(
+                latestWallet,
+                balanceField,
+              ),
+
+            requiredAmount:
+              finalAmount,
+          });
+      }
+
+      debitedAmount =
+        finalAmount;
+
+      let order;
+
+      try {
+        order =
+          await Order.create({
+            user:
+              req.user._id,
+
+            customerEmail:
+              req.user.email ||
+              "",
+
+            customerName:
+              req.user.username ||
+              [
+                req.user
+                  .firstName,
+                req.user
+                  .lastName,
+              ]
+                .filter(
+                  Boolean,
+                )
+                .join(" ")
+                .trim(),
+
+            country:
+              normalizedCountry,
+
+            service:
+              normalizedService,
+
+            operator:
+              actualOperator,
+
+            phoneNumber:
+              purchasedProviderOrder
+                .phoneNumber,
+
+            price:
+              finalAmount,
+
+            sellingPrice:
+              finalAmount,
+
+            providerPrice,
+
+            providerCurrency:
+              finalPricing
+                .providerCurrency,
+
+            providerCostNgn:
+              finalPricing
+                .providerCostNgn,
+
+            profit:
+              finalPricing.profit,
+
+            financialStatus:
+              "charged",
+
+            pricingRule:
+              finalPricing
+                .pricingRule ||
+              null,
+
+            pricingSnapshot:
+              finalPricing
+                .pricingSnapshot ||
+              null,
+
+            paymentEnvironment,
+
+            walletBalanceField:
+              balanceField,
+
+            walletReservationReference:
+              reservationReference,
+
+            server:
+              purchasedProviderOrder
+                .server ||
+              normalizedServer,
+
+            provider:
+              purchasedProviderOrder
+                .internalProvider,
+
+            providerOrderId:
+              String(
+                purchasedProviderOrder
+                  .providerOrderId,
+              ),
+
+            providerStatus:
+              String(
+                purchasedProviderOrder
+                  .providerStatus ||
+                  "STATUS_WAIT_CODE",
+              ),
+
+            providerResponse:
+              purchasedProviderOrder
+                .raw,
+
+            status:
+              "waiting",
+
+            refunded:
+              false,
+          });
+      } catch (saveError) {
+        throw saveError;
+      }
+
+      await completePurchaseTransaction({
+        userId:
+          req.user._id,
+
+        reservationReference,
+
+        orderId:
+          order._id,
+
+        amount:
+          finalAmount,
+
+        service:
+          normalizedService,
+
+        country:
+          normalizedCountry,
+
+        server:
+          normalizedServer,
       });
 
-      walletWasDebited = false;
-      throw saveError;
+      walletWasDebited =
+        false;
+
+      purchasedProviderOrder =
+        null;
+
+      return res
+        .status(201)
+        .json({
+          success: true,
+
+          message:
+            "Number purchased successfully",
+
+          order:
+            sanitizeOrder(
+              order,
+            ),
+
+          walletBalance:
+            getWalletBalance(
+              wallet,
+              balanceField,
+            ),
+
+          paymentEnvironment,
+        });
+    } catch (error) {
+      if (
+        purchasedProviderOrder
+          ?.providerOrderId
+      ) {
+        try {
+          await providerManager.cancelOrder(
+            purchasedProviderOrder
+              .internalProvider,
+
+            purchasedProviderOrder
+              .providerOrderId,
+          );
+        } catch (cancelError) {
+          console.error(
+            "Provider rollback failed:",
+            cancelError,
+          );
+        }
+      }
+
+      if (
+        walletWasDebited &&
+        debitedAmount > 0 &&
+        reservationReference
+      ) {
+        try {
+          await refundReservedWallet({
+            userId:
+              req.user._id,
+
+            amount:
+              debitedAmount,
+
+            balanceField,
+
+            environment:
+              paymentEnvironment,
+
+            reservationReference,
+
+            service:
+              normalizedService ||
+              "SMS",
+
+            country:
+              normalizedCountry ||
+              "unknown",
+
+            server:
+              normalizedServer ||
+              null,
+
+            reason:
+              "Automatic refund for failed number purchase",
+          });
+        } catch (refundError) {
+          console.error(
+            "Automatic wallet rollback failed:",
+            refundError,
+          );
+        }
+      }
+
+      console.error(
+        "Create order error:",
+        error,
+      );
+
+      return res
+        .status(
+          error.status ||
+            500,
+        )
+        .json({
+          success: false,
+
+          code:
+            error.code ||
+            "ORDER_CREATION_FAILED",
+
+          message:
+            extractProviderError(
+              error,
+            ) ||
+            "Unable to create order",
+        });
     }
-
-    return res.status(201).json({
-      success: true,
-      order: sanitizeOrder(order),
-      walletBalance: wallet.balance,
-    });
-  } catch (error) {
-    if (walletWasDebited && debitedAmount > 0) {
-      await refundWalletAfterSaveFailure({
-        userId: req.user._id,
-        amount: debitedAmount,
-        service: String(req.body.service || "service"),
-        country: String(req.body.country || "country"),
-      });
-    }
-
-    console.error("Create order error:", error);
-
-    return res.status(error.status || 500).json({
-      success: false,
-      message: extractProviderError(error),
-      code: error.code || "ORDER_CREATION_FAILED",
-    });
-  }
-};
+  };
 
 exports.checkOrder = async (req, res) => {
   try {
@@ -537,156 +1367,496 @@ exports.checkOrder = async (req, res) => {
   }
 };
 
-exports.cancelOrder = async (req, res) => {
-  let claimedOrder = null;
+exports.cancelOrder =
+  async (req, res) => {
+    let claimedOrder =
+      null;
 
-  try {
-    const order = await Order.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    });
+    let providerCancelled =
+      false;
 
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
-    }
+    try {
+      const order =
+        await Order.findOne({
+          _id:
+            req.params.id,
 
-    if (order.refunded) {
-      const wallet = await Wallet.findOne({ user: req.user._id });
+          user:
+            req.user._id,
+        });
+
+      if (!order) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Order not found",
+          });
+      }
+
+      const paymentEnvironment =
+        String(
+          order.paymentEnvironment ||
+            "live",
+        )
+          .trim()
+          .toLowerCase();
+
+      const balanceField =
+        ["balance", "testBalance"].includes(
+          order.walletBalanceField,
+        )
+          ? order.walletBalanceField
+          : getWalletBalanceField(
+              paymentEnvironment,
+            );
+
+      const refundAmount =
+        Number(
+          order.sellingPrice ||
+            order.price,
+        );
+
+      if (
+        !Number.isFinite(
+          refundAmount,
+        ) ||
+        refundAmount <= 0
+      ) {
+        return res
+          .status(500)
+          .json({
+            success: false,
+            message:
+              "Invalid refund amount.",
+          });
+      }
+
+      if (order.refunded) {
+        const wallet =
+          await Wallet.findOne({
+            user:
+              req.user._id,
+          });
+
+        return res.json({
+          success: true,
+          refunded: true,
+
+          walletBalance:
+            getWalletBalance(
+              wallet,
+              balanceField,
+            ),
+
+          order:
+            sanitizeOrder(
+              order,
+            ),
+
+          message:
+            "Order was already cancelled and refunded.",
+        });
+      }
+
+      if (
+        order.status ===
+          "received" ||
+        order.otpCode
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "OTP has already been received. This order cannot be cancelled.",
+          });
+      }
+
+      /*
+       * A previous request may have cancelled the provider but failed
+       * before refunding MongoDB. In that state, retry only the refund.
+       */
+      const providerAlreadyCancelled =
+        order.status ===
+          "cancelled" &&
+        !order.refunded;
+
+      if (
+        providerAlreadyCancelled
+      ) {
+        claimedOrder =
+          await Order.findOneAndUpdate(
+            {
+              _id:
+                order._id,
+
+              user:
+                req.user._id,
+
+              status:
+                "cancelled",
+
+              refunded: {
+                $ne: true,
+              },
+            },
+
+            {
+              $set: {
+                status:
+                  "cancelling",
+              },
+            },
+
+            {
+              returnDocument:
+                "after",
+            },
+          );
+
+        providerCancelled =
+          true;
+      } else {
+        claimedOrder =
+          await Order.findOneAndUpdate(
+            {
+              _id:
+                order._id,
+
+              user:
+                req.user._id,
+
+              refunded: {
+                $ne: true,
+              },
+
+              status:
+                "waiting",
+            },
+
+            {
+              $set: {
+                status:
+                  "cancelling",
+              },
+            },
+
+            {
+              returnDocument:
+                "after",
+            },
+          );
+      }
+
+      if (!claimedOrder) {
+        const latestOrder =
+          await Order.findById(
+            order._id,
+          );
+
+        const wallet =
+          await Wallet.findOne({
+            user:
+              req.user._id,
+          });
+
+        return res
+          .status(409)
+          .json({
+            success: false,
+
+            refunded:
+              Boolean(
+                latestOrder
+                  ?.refunded,
+              ),
+
+            walletBalance:
+              getWalletBalance(
+                wallet,
+                balanceField,
+              ),
+
+            order:
+              sanitizeOrder(
+                latestOrder,
+              ),
+
+            message:
+              "Order is already being processed.",
+          });
+      }
+
+      let providerResponse =
+        null;
+
+      if (
+        !providerAlreadyCancelled
+      ) {
+        providerResponse =
+          await providerManager.cancelOrder(
+            claimedOrder
+              .provider,
+
+            claimedOrder
+              .providerOrderId,
+          );
+
+        providerCancelled =
+          true;
+      }
+
+      const refundReference =
+        `ORDER-${claimedOrder._id}-CANCEL-REFUND`
+          .toUpperCase();
+
+      let wallet =
+        await Wallet.findOneAndUpdate(
+          {
+            user:
+              req.user._id,
+
+            "transactions.reference": {
+              $ne:
+                refundReference,
+            },
+          },
+
+          {
+            $inc: {
+              [balanceField]:
+                refundAmount,
+            },
+
+            $push: {
+              transactions: {
+                $each: [
+                  {
+                    type:
+                      "refund",
+
+                    amount:
+                      refundAmount,
+
+                    environment:
+                      paymentEnvironment,
+
+                    balanceField,
+
+                    description:
+                      `Refund for cancelled ${claimedOrder.service} activation`,
+
+                    status:
+                      "completed",
+
+                    reference:
+                      refundReference,
+
+                    orderId:
+                      claimedOrder._id,
+
+                    server:
+                      claimedOrder.server,
+
+                    currency:
+                      "NGN",
+                  },
+                ],
+
+                $position: 0,
+              },
+            },
+          },
+
+          {
+            new: true,
+            runValidators: true,
+          },
+        );
+
+      if (!wallet) {
+        wallet =
+          await Wallet.findOne({
+            user:
+              req.user._id,
+          });
+
+        const refundExists =
+          wallet?.transactions
+            ?.some(
+              (transaction) =>
+                String(
+                  transaction
+                    .reference ||
+                    "",
+                ) ===
+                refundReference,
+            );
+
+        if (!refundExists) {
+          await Order.findByIdAndUpdate(
+            claimedOrder._id,
+            {
+              status:
+                providerCancelled
+                  ? "cancelled"
+                  : "waiting",
+
+              refunded:
+                false,
+
+              financialStatus:
+                "charged",
+
+              providerStatus:
+                providerResponse
+                  ?.providerStatus ||
+                claimedOrder
+                  .providerStatus,
+
+              providerCancelledAt:
+                providerCancelled
+                  ? new Date()
+                  : claimedOrder
+                      .providerCancelledAt,
+            },
+          );
+
+          return res
+            .status(500)
+            .json({
+              success: false,
+
+              code:
+                "WALLET_REFUND_FAILED",
+
+              message:
+                "The provider order was cancelled, but the wallet refund could not be completed. Retry cancellation to complete the refund.",
+            });
+        }
+      }
+
+      const updatedOrder =
+        await Order.findByIdAndUpdate(
+          claimedOrder._id,
+
+          {
+            $set: {
+              status:
+                "cancelled",
+
+              refunded:
+                true,
+
+              refundedAt:
+                new Date(),
+
+              financialStatus:
+                "refunded",
+
+              providerStatus:
+                providerResponse
+                  ?.providerStatus ||
+                claimedOrder
+                  .providerStatus,
+
+              providerCancelledAt:
+                claimedOrder
+                  .providerCancelledAt ||
+                new Date(),
+
+              providerResponse:
+                providerResponse
+                  ?.raw ??
+                claimedOrder
+                  .providerResponse,
+            },
+          },
+
+          {
+            returnDocument:
+              "after",
+          },
+        );
 
       return res.json({
         success: true,
         refunded: true,
-        walletBalance: wallet?.balance ?? 0,
-        order: sanitizeOrder(order),
-      });
-    }
+        refundAmount,
 
-    if (order.status === "received" || order.otpCode) {
-      return res.status(400).json({
-        success: false,
+        walletBalance:
+          getWalletBalance(
+            wallet,
+            balanceField,
+          ),
+
+        order:
+          sanitizeOrder(
+            updatedOrder,
+          ),
+
         message:
-          "OTP has already been received. This order cannot be cancelled.",
+          "Order cancelled and wallet refunded.",
       });
-    }
+    } catch (error) {
+      if (
+        claimedOrder?._id
+      ) {
+        const fallbackStatus =
+          providerCancelled
+            ? "cancelled"
+            : "waiting";
 
-    const refundAmount = Number(order.sellingPrice || order.price);
+        await Order.findOneAndUpdate(
+          {
+            _id:
+              claimedOrder._id,
 
-    if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
-      return res.status(500).json({
-        success: false,
-        message: "Invalid refund amount.",
-      });
-    }
+            status:
+              "cancelling",
 
-    claimedOrder = await Order.findOneAndUpdate(
-      {
-        _id: order._id,
-        user: req.user._id,
-        refunded: { $ne: true },
-        status: "waiting",
-      },
-      { $set: { status: "cancelling" } },
-      { returnDocument: "after" }
-    );
-
-    if (!claimedOrder) {
-      return res.status(409).json({
-        success: false,
-        message: "Order is already being processed.",
-      });
-    }
-
-    const providerResponse = await providerManager.cancelOrder(
-      claimedOrder.provider,
-      claimedOrder.providerOrderId
-    );
-
-    const wallet = await Wallet.findOneAndUpdate(
-      { user: req.user._id },
-      {
-        $inc: { balance: refundAmount },
-        $push: {
-          transactions: {
-            $each: [
-              {
-                type: "refund",
-                amount: refundAmount,
-                description: `Refund for cancelled ${claimedOrder.service} activation`,
-                status: "completed",
-              },
-            ],
-            $position: 0,
+            refunded: {
+              $ne: true,
+            },
           },
-        },
-      },
-      {
-        returnDocument: "after",
-        runValidators: true,
+
+          {
+            $set: {
+              status:
+                fallbackStatus,
+            },
+          },
+        ).catch(
+          () => null,
+        );
       }
-    );
 
-    if (!wallet) {
-      await Order.findByIdAndUpdate(claimedOrder._id, {
-        status: "cancelled",
-        refunded: false,
-        financialStatus: "charged",
-        providerStatus: providerResponse.providerStatus,
-        providerCancelledAt: new Date(),
-      });
+      console.error(
+        "Cancel order error:",
+        error,
+      );
 
-      return res.status(404).json({
-        success: false,
-        message: "Provider cancelled successfully but wallet was not found.",
-      });
+      return res
+        .status(
+          error.status ||
+            500,
+        )
+        .json({
+          success: false,
+
+          code:
+            error.code ||
+            "ORDER_CANCELLATION_FAILED",
+
+          message:
+            extractProviderError(
+              error,
+            ),
+        });
     }
-
-    const updatedOrder = await Order.findByIdAndUpdate(
-      claimedOrder._id,
-      {
-        $set: {
-          status: "cancelled",
-          refunded: true,
-          refundedAt: new Date(),
-          financialStatus: "refunded",
-          providerStatus: providerResponse.providerStatus,
-          providerCancelledAt: new Date(),
-          providerResponse: providerResponse.raw,
-        },
-      },
-      { returnDocument: "after" }
-    );
-
-    return res.json({
-      success: true,
-      refunded: true,
-      refundAmount,
-      walletBalance: wallet.balance,
-      order: sanitizeOrder(updatedOrder),
-      message: "Order cancelled and wallet refunded.",
-    });
-  } catch (error) {
-    if (claimedOrder?._id) {
-      await Order.findOneAndUpdate(
-        {
-          _id: claimedOrder._id,
-          status: "cancelling",
-          refunded: { $ne: true },
-        },
-        { $set: { status: "waiting" } }
-      ).catch(() => null);
-    }
-
-    console.error("Cancel order error:", error);
-
-    return res.status(error.status || 500).json({
-      success: false,
-      message: extractProviderError(error),
-    });
-  }
-};
+  };
 
 exports.getOrders = async (req, res) => {
   try {

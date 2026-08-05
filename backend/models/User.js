@@ -10,6 +10,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    googlePicture: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
     authProvider: {
       type: String,
       enum: ["local", "google"],
@@ -91,6 +97,18 @@ const userSchema = new mongoose.Schema(
     },
 
     verificationExpires: {
+      type: Date,
+      default: null,
+      select: false,
+    },
+
+    verificationLastSentAt: {
+      type: Date,
+      default: null,
+      select: false,
+    },
+
+    verificationResendAvailableAt: {
       type: Date,
       default: null,
       select: false,

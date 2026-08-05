@@ -1,12 +1,12 @@
 const express = require("express");
 
-const router =
-  express.Router();
+const router = express.Router();
 
 const {
   register,
   verifyEmail,
   resendVerificationCode,
+  googleAuth,
   login,
   getMe,
   forgotPassword,
@@ -35,6 +35,11 @@ router.post(
 router.post(
   "/resend-verification",
   resendVerificationCode
+);
+
+router.post(
+  "/google",
+  googleAuth
 );
 
 router.post(

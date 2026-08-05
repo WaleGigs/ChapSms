@@ -1,4 +1,5 @@
 const bcrypt = require("bcryptjs");
+const { OAuth2Client } = require("google-auth-library");
 
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
@@ -14,6 +15,7 @@ const {
 } = require("../services/email.service");
 
 const VERIFICATION_CODE_EXPIRY_MINUTES = 10;
+const VERIFICATION_RESEND_COOLDOWN_SECONDS = 60;
 const PASSWORD_RESET_EXPIRY_MINUTES = 10;
 
 function normalizeEmail(email) {
@@ -34,17 +36,13 @@ function isValidEmail(email) {
 }
 
 function validatePassword(password) {
-  const value =
-    String(password || "");
+  const value = String(password || "");
 
   if (!value) {
     return "Password is required";
   }
 
-  if (
-    value.length < 6 ||
-    value.length > 64
-  ) {
+  if (value.length < 6 || value.length > 64) {
     return "Password must contain 6–64 characters";
   }
 
@@ -57,8 +55,30 @@ function validatePassword(password) {
 
 function getExpiryDate(minutes) {
   return new Date(
+    Date.now() + minutes * 60 * 1000
+  );
+}
+
+function getResendAvailableDate() {
+  return new Date(
     Date.now() +
-      minutes * 60 * 1000
+      VERIFICATION_RESEND_COOLDOWN_SECONDS *
+        1000
+  );
+}
+
+function getRetryAfterSeconds(date) {
+  if (!date) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.ceil(
+      (new Date(date).getTime() -
+        Date.now()) /
+        1000
+    )
   );
 }
 
@@ -84,72 +104,153 @@ function serializeUser(
 ) {
   return {
     id: user._id,
-    username:
-      user.username ||
-      null,
-    firstName:
-      user.firstName ||
-      null,
-    lastName:
-      user.lastName ||
-      null,
-    displayName:
-      getDisplayName(user),
+    username: user.username || null,
+    firstName: user.firstName || null,
+    lastName: user.lastName || null,
+    displayName: getDisplayName(user),
     email: user.email,
+    googlePicture:
+      user.googlePicture || null,
     wallet:
       walletBalance ??
       user.wallet ??
       0,
     role: user.role,
-    suspended:
-      user.suspended,
-    isVerified:
-      user.isVerified,
-    authProvider:
-      user.authProvider,
-    lastLogin:
-      user.lastLogin,
-    createdAt:
-      user.createdAt,
-    updatedAt:
-      user.updatedAt,
+    suspended: user.suspended,
+    isVerified: user.isVerified,
+    authProvider: user.authProvider,
+    lastLogin: user.lastLogin,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
   };
 }
 
-function queueVerificationEmail({
-  user,
-  code,
-}) {
-  setImmediate(async () => {
-    try {
-      await sendVerificationEmail({
-        to: user.email,
-        username:
-          getDisplayName(user),
-        code,
-      });
-    } catch (error) {
-      console.error(
-        "Background verification email failed:",
-        {
-          userId:
-            user._id?.toString?.(),
-          email:
-            user.email,
-          code:
-            error?.code,
-          message:
-            error?.message,
-        }
-      );
-    }
-  });
+function verificationTiming(user) {
+  return {
+    verificationExpiresAt:
+      user.verificationExpires || null,
+    resendAvailableAt:
+      user.verificationResendAvailableAt ||
+      null,
+    resendCooldownSeconds:
+      VERIFICATION_RESEND_COOLDOWN_SECONDS,
+    retryAfterSeconds:
+      getRetryAfterSeconds(
+        user.verificationResendAvailableAt
+      ),
+  };
 }
 
-exports.register = async (
-  req,
-  res
-) => {
+async function ensureWallet(userId) {
+  let wallet = await Wallet.findOne({
+    user: userId,
+  });
+
+  if (wallet) {
+    return wallet;
+  }
+
+  try {
+    wallet = await Wallet.create({
+      user: userId,
+      balance: 0,
+    });
+  } catch (error) {
+    if (error?.code !== 11000) {
+      throw error;
+    }
+
+    wallet = await Wallet.findOne({
+      user: userId,
+    });
+  }
+
+  if (!wallet) {
+    throw new Error(
+      "Could not create the user wallet"
+    );
+  }
+
+  return wallet;
+}
+
+function sanitizeGoogleUsernamePart(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 36);
+}
+
+async function createUniqueGoogleUsername({
+  email,
+  name,
+}) {
+  const emailBase =
+    normalizeEmail(email).split("@")[0];
+
+  const preferredBase =
+    sanitizeGoogleUsernamePart(emailBase) ||
+    sanitizeGoogleUsernamePart(name) ||
+    "user";
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const suffix =
+      attempt === 0
+        ? ""
+        : `-${Math.floor(
+            1000 + Math.random() * 9000
+          )}`;
+
+    const candidate =
+      `${preferredBase}${suffix}`.slice(
+        0,
+        50
+      );
+
+    const exists = await User.findOne({
+      username: candidate,
+    }).collation({
+      locale: "en",
+      strength: 2,
+    });
+
+    if (!exists) {
+      return candidate;
+    }
+  }
+
+  return `user-${Date.now()}`.slice(
+    0,
+    50
+  );
+}
+
+function getGoogleClient() {
+  const clientId = String(
+    process.env.GOOGLE_CLIENT_ID || ""
+  ).trim();
+
+  if (!clientId) {
+    const error = new Error(
+      "Google authentication is not configured"
+    );
+
+    error.status = 503;
+    error.code =
+      "GOOGLE_AUTH_NOT_CONFIGURED";
+
+    throw error;
+  }
+
+  return {
+    clientId,
+    client: new OAuth2Client(clientId),
+  };
+}
+
+exports.register = async (req, res) => {
   try {
     const username =
       normalizeUsername(
@@ -171,40 +272,30 @@ exports.register = async (
       !email ||
       !password
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Username, email and password are required",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Username, email and password are required",
+      });
     }
 
     if (!isValidEmail(email)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          code:
-            "INVALID_EMAIL",
-          message:
-            "Enter a valid email address",
-        });
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_EMAIL",
+        message:
+          "Enter a valid email address",
+      });
     }
 
     const passwordError =
-      validatePassword(
-        password
-      );
+      validatePassword(password);
 
     if (passwordError) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            passwordError,
-        });
+      return res.status(400).json({
+        success: false,
+        message: passwordError,
+      });
     }
 
     const existingUser =
@@ -220,22 +311,17 @@ exports.register = async (
 
     if (existingUser) {
       const duplicateEmail =
-        existingUser.email ===
-        email;
+        existingUser.email === email;
 
-      return res
-        .status(409)
-        .json({
-          success: false,
-          code:
-            duplicateEmail
-              ? "EMAIL_ALREADY_EXISTS"
-              : "USERNAME_ALREADY_EXISTS",
-          message:
-            duplicateEmail
-              ? "An account with this email already exists"
-              : "This username is already in use",
-        });
+      return res.status(409).json({
+        success: false,
+        code: duplicateEmail
+          ? "EMAIL_ALREADY_EXISTS"
+          : "USERNAME_ALREADY_EXISTS",
+        message: duplicateEmail
+          ? "An account with this email already exists"
+          : "This username is already in use",
+      });
     }
 
     const hashedPassword =
@@ -247,14 +333,14 @@ exports.register = async (
     const verificationCode =
       generateOTP(6);
 
+    const now = new Date();
+
     const createdUser =
       await User.create({
         username,
         email,
-        password:
-          hashedPassword,
-        authProvider:
-          "local",
+        password: hashedPassword,
+        authProvider: "local",
         isVerified: false,
         verificationCodeHash:
           hashToken(
@@ -264,58 +350,83 @@ exports.register = async (
           getExpiryDate(
             VERIFICATION_CODE_EXPIRY_MINUTES
           ),
-        apiKey:
-          generateApiKey(),
+        verificationLastSentAt: now,
+        verificationResendAvailableAt:
+          getResendAvailableDate(),
+        apiKey: generateApiKey(),
       });
 
     let wallet;
 
     try {
-      wallet =
-        await Wallet.create({
-          user:
-            createdUser._id,
-          balance: 0,
-        });
+      wallet = await ensureWallet(
+        createdUser._id
+      );
     } catch (walletError) {
       await User.deleteOne({
-        _id:
-          createdUser._id,
+        _id: createdUser._id,
       }).catch(() => {});
 
       throw walletError;
     }
 
-    queueVerificationEmail({
-      user:
-        createdUser,
-      code:
-        verificationCode,
-    });
+    try {
+      await sendVerificationEmail({
+        to: createdUser.email,
+        username:
+          getDisplayName(
+            createdUser
+          ),
+        code: verificationCode,
+      });
+    } catch (emailError) {
+      console.error(
+        "Registration verification email failed:",
+        {
+          userId:
+            createdUser._id.toString(),
+          email: createdUser.email,
+          code: emailError?.code,
+          message:
+            emailError?.message,
+        }
+      );
 
-    return res
-      .status(201)
-      .json({
-        success: true,
+      return res.status(503).json({
+        success: false,
         code:
-          "ACCOUNT_CREATED",
-        emailQueued: true,
+          "EMAIL_DELIVERY_FAILED",
+        accountCreated: true,
+        email: createdUser.email,
         message:
-          "Account created successfully. Check your email for the verification code. If it is delayed, use Resend Code.",
-        user: serializeUser(
-          createdUser,
-          wallet.balance
+          "Your account was created, but the verification email could not be delivered. Wait for the resend timer, then use Resend Code.",
+        ...verificationTiming(
+          createdUser
         ),
       });
+    }
+
+    return res.status(201).json({
+      success: true,
+      code: "ACCOUNT_CREATED",
+      emailDelivered: true,
+      message:
+        "Account created successfully. A verification code was sent to your email.",
+      user: serializeUser(
+        createdUser,
+        wallet.balance
+      ),
+      ...verificationTiming(
+        createdUser
+      ),
+    });
   } catch (error) {
     console.error(
       "Registration error:",
       error
     );
 
-    if (
-      error.code === 11000
-    ) {
+    if (error.code === 11000) {
       const duplicateKey =
         Object.keys(
           error.keyPattern ||
@@ -323,30 +434,23 @@ exports.register = async (
             {}
         )[0];
 
-      return res
-        .status(409)
-        .json({
-          success: false,
-          code:
-            duplicateKey ===
-            "username"
-              ? "USERNAME_ALREADY_EXISTS"
-              : "EMAIL_ALREADY_EXISTS",
-          message:
-            duplicateKey ===
-            "username"
-              ? "This username is already in use"
-              : "An account with this email already exists",
-        });
+      return res.status(409).json({
+        success: false,
+        code:
+          duplicateKey === "username"
+            ? "USERNAME_ALREADY_EXISTS"
+            : "EMAIL_ALREADY_EXISTS",
+        message:
+          duplicateKey === "username"
+            ? "This username is already in use"
+            : "An account with this email already exists",
+      });
     }
 
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message:
-          "Registration failed",
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Registration failed",
+    });
   }
 };
 
@@ -372,42 +476,34 @@ exports.verifyEmail = async (
       !email ||
       !verificationCode
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Email and verification code are required",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Email and verification code are required",
+      });
     }
 
     if (!isValidEmail(email)) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          code:
-            "INVALID_EMAIL",
-          message:
-            "Enter a valid email address",
-        });
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_EMAIL",
+        message:
+          "Enter a valid email address",
+      });
     }
 
     const user =
       await User.findOne({
         email,
       }).select(
-        "+verificationCodeHash +verificationExpires"
+        "+verificationCodeHash +verificationExpires +verificationLastSentAt +verificationResendAvailableAt"
       );
 
     if (!user) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message:
-            "Account not found",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
     }
 
     if (user.isVerified) {
@@ -422,26 +518,26 @@ exports.verifyEmail = async (
       !user.verificationCodeHash ||
       !user.verificationExpires
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "No active verification code was found. Request a new code.",
-        });
+      return res.status(400).json({
+        success: false,
+        code:
+          "VERIFICATION_CODE_MISSING",
+        message:
+          "No active verification code was found. Request a new code.",
+      });
     }
 
     if (
       user.verificationExpires.getTime() <
       Date.now()
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Verification code has expired. Request a new code.",
-        });
+      return res.status(400).json({
+        success: false,
+        code:
+          "VERIFICATION_CODE_EXPIRED",
+        message:
+          "Verification code has expired. Request a new code.",
+      });
     }
 
     if (
@@ -450,19 +546,20 @@ exports.verifyEmail = async (
       ) !==
       user.verificationCodeHash
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Invalid verification code",
-        });
+      return res.status(400).json({
+        success: false,
+        code:
+          "INVALID_VERIFICATION_CODE",
+        message:
+          "Invalid verification code",
+      });
     }
 
     user.isVerified = true;
-    user.verificationCodeHash =
-      null;
-    user.verificationExpires =
+    user.verificationCodeHash = null;
+    user.verificationExpires = null;
+    user.verificationLastSentAt = null;
+    user.verificationResendAvailableAt =
       null;
 
     await user.save();
@@ -478,13 +575,11 @@ exports.verifyEmail = async (
       error
     );
 
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message:
-          "Email verification failed",
-      });
+    return res.status(500).json({
+      success: false,
+      message:
+        "Email verification failed",
+    });
   }
 };
 
@@ -497,65 +592,80 @@ exports.resendVerificationCode =
         );
 
       if (!email) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Email is required",
-          });
+        return res.status(400).json({
+          success: false,
+          message: "Email is required",
+        });
       }
 
       if (!isValidEmail(email)) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            code:
-              "INVALID_EMAIL",
-            message:
-              "Enter a valid email address",
-          });
+        return res.status(400).json({
+          success: false,
+          code: "INVALID_EMAIL",
+          message:
+            "Enter a valid email address",
+        });
       }
 
       const user =
         await User.findOne({
           email,
         }).select(
-          "+verificationCodeHash +verificationExpires"
+          "+verificationCodeHash +verificationExpires +verificationLastSentAt +verificationResendAvailableAt"
         );
 
       if (!user) {
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message:
-              "Account not found",
-          });
+        return res.status(404).json({
+          success: false,
+          message:
+            "Account not found",
+        });
       }
 
       if (
         user.authProvider !==
         "local"
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "This account uses Google authentication",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "This account uses Google authentication",
+        });
       }
 
       if (user.isVerified) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Email is already verified",
-          });
+        return res.status(400).json({
+          success: false,
+          code:
+            "EMAIL_ALREADY_VERIFIED",
+          message:
+            "Email is already verified",
+        });
+      }
+
+      const retryAfterSeconds =
+        getRetryAfterSeconds(
+          user.verificationResendAvailableAt
+        );
+
+      if (retryAfterSeconds > 0) {
+        res.set(
+          "Retry-After",
+          String(
+            retryAfterSeconds
+          )
+        );
+
+        return res.status(429).json({
+          success: false,
+          code:
+            "VERIFICATION_RESEND_COOLDOWN",
+          retryAfterSeconds,
+          resendAvailableAt:
+            user.verificationResendAvailableAt,
+          message:
+            `Please wait ${retryAfterSeconds} seconds before requesting another code.`,
+        });
       }
 
       const verificationCode =
@@ -571,6 +681,12 @@ exports.resendVerificationCode =
           VERIFICATION_CODE_EXPIRY_MINUTES
         );
 
+      user.verificationLastSentAt =
+        new Date();
+
+      user.verificationResendAvailableAt =
+        getResendAvailableDate();
+
       await user.save();
 
       try {
@@ -578,8 +694,7 @@ exports.resendVerificationCode =
           to: user.email,
           username:
             getDisplayName(user),
-          code:
-            verificationCode,
+          code: verificationCode,
         });
       } catch (emailError) {
         console.error(
@@ -587,23 +702,27 @@ exports.resendVerificationCode =
           emailError
         );
 
-        return res
-          .status(503)
-          .json({
-            success: false,
-            code:
-              "EMAIL_DELIVERY_FAILED",
-            accountCreated:
-              true,
-            message:
-              "Your account exists, but the verification email could not be delivered. Check the SMTP settings and try again.",
-          });
+        return res.status(503).json({
+          success: false,
+          code:
+            "EMAIL_DELIVERY_FAILED",
+          accountCreated: true,
+          message:
+            "The verification email could not be delivered. Check the SMTP configuration and try again after the timer.",
+          ...verificationTiming(
+            user
+          ),
+        });
       }
 
       return res.json({
         success: true,
+        emailDelivered: true,
         message:
           "A new verification code has been sent to your email.",
+        ...verificationTiming(
+          user
+        ),
       });
     } catch (error) {
       console.error(
@@ -611,15 +730,244 @@ exports.resendVerificationCode =
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          success: false,
-          message:
-            "Could not resend the verification code",
-        });
+      return res.status(500).json({
+        success: false,
+        message:
+          "Could not resend the verification code",
+      });
     }
   };
+
+exports.googleAuth = async (
+  req,
+  res
+) => {
+  try {
+    const credential =
+      String(
+        req.body.credential ||
+          req.body.idToken ||
+          ""
+      ).trim();
+
+    if (!credential) {
+      return res.status(400).json({
+        success: false,
+        code:
+          "GOOGLE_CREDENTIAL_REQUIRED",
+        message:
+          "Google credential is required",
+      });
+    }
+
+    const {
+      client,
+      clientId,
+    } = getGoogleClient();
+
+    const ticket =
+      await client.verifyIdToken({
+        idToken: credential,
+        audience: clientId,
+      });
+
+    const payload =
+      ticket.getPayload();
+
+    const googleId =
+      String(
+        payload?.sub || ""
+      ).trim();
+
+    const email =
+      normalizeEmail(
+        payload?.email
+      );
+
+    if (
+      !googleId ||
+      !email ||
+      payload?.email_verified !== true
+    ) {
+      return res.status(401).json({
+        success: false,
+        code:
+          "GOOGLE_ACCOUNT_NOT_VERIFIED",
+        message:
+          "Google could not verify this email account",
+      });
+    }
+
+    let user =
+      await User.findOne({
+        $or: [
+          { googleId },
+          { email },
+        ],
+      }).select(
+        "+password +verificationCodeHash +verificationExpires +verificationLastSentAt +verificationResendAvailableAt"
+      );
+
+    if (
+      user?.googleId &&
+      user.googleId !== googleId
+    ) {
+      return res.status(409).json({
+        success: false,
+        code:
+          "GOOGLE_ACCOUNT_CONFLICT",
+        message:
+          "This email is already connected to another Google account",
+      });
+    }
+
+    if (user?.suspended) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account has been suspended. Contact support.",
+      });
+    }
+
+    const fullName =
+      String(
+        payload?.name || ""
+      ).trim();
+
+    const firstName =
+      String(
+        payload?.given_name ||
+          fullName.split(" ")[0] ||
+          ""
+      ).trim() || null;
+
+    const lastName =
+      String(
+        payload?.family_name ||
+          fullName
+            .split(" ")
+            .slice(1)
+            .join(" ") ||
+          ""
+      ).trim() || null;
+
+    if (!user) {
+      const username =
+        await createUniqueGoogleUsername({
+          email,
+          name: fullName,
+        });
+
+      user = await User.create({
+        googleId,
+        authProvider: "google",
+        username,
+        firstName,
+        lastName,
+        email,
+        googlePicture:
+          payload?.picture || null,
+        isVerified: true,
+        verificationCodeHash:
+          null,
+        verificationExpires:
+          null,
+        verificationLastSentAt:
+          null,
+        verificationResendAvailableAt:
+          null,
+        apiKey: generateApiKey(),
+        lastLogin: new Date(),
+      });
+    } else {
+      user.googleId = googleId;
+      user.googlePicture =
+        payload?.picture ||
+        user.googlePicture ||
+        null;
+      user.firstName =
+        user.firstName ||
+        firstName;
+      user.lastName =
+        user.lastName ||
+        lastName;
+      user.isVerified = true;
+      user.verificationCodeHash =
+        null;
+      user.verificationExpires =
+        null;
+      user.verificationLastSentAt =
+        null;
+      user.verificationResendAvailableAt =
+        null;
+      user.lastLogin =
+        new Date();
+
+      /*
+       * Preserve "local" for an existing password account.
+       * This lets the owner use either password login or Google.
+       */
+      if (
+        user.authProvider !==
+        "local"
+      ) {
+        user.authProvider =
+          "google";
+      }
+
+      await user.save();
+    }
+
+    const wallet =
+      await ensureWallet(
+        user._id
+      );
+
+    const token =
+      generateToken(user);
+
+    return res.json({
+      success: true,
+      message:
+        "Google authentication successful",
+      token,
+      user: serializeUser(
+        user,
+        wallet.balance
+      ),
+    });
+  } catch (error) {
+    console.error(
+      "Google authentication error:",
+      {
+        name: error?.name,
+        code: error?.code,
+        message: error?.message,
+      }
+    );
+
+    if (
+      error?.code ===
+      "GOOGLE_AUTH_NOT_CONFIGURED"
+    ) {
+      return res.status(
+        error.status || 503
+      ).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+
+    return res.status(401).json({
+      success: false,
+      code:
+        "GOOGLE_AUTH_FAILED",
+      message:
+        "Google authentication failed. Please try again.",
+    });
+  }
+};
 
 exports.login = async (
   req,
@@ -640,13 +988,11 @@ exports.login = async (
       !email ||
       !password
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "Email and password are required",
-        });
+      return res.status(400).json({
+        success: false,
+        message:
+          "Email and password are required",
+      });
     }
 
     const user =
@@ -654,52 +1000,52 @@ exports.login = async (
         email,
       }).select("+password");
 
-    if (
-      !user ||
-      !user.password
-    ) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message:
-            "Invalid email or password",
-        });
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid email or password",
+      });
     }
 
     if (
-      user.authProvider !==
-      "local"
+      user.authProvider ===
+        "google" &&
+      !user.password
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message:
-            "This account uses Google authentication. Continue with Google.",
-        });
+      return res.status(400).json({
+        success: false,
+        code:
+          "GOOGLE_AUTH_REQUIRED",
+        message:
+          "This account uses Google authentication. Continue with Google.",
+      });
+    }
+
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid email or password",
+      });
     }
 
     if (user.suspended) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          message:
-            "Your account has been suspended. Contact support.",
-        });
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account has been suspended. Contact support.",
+      });
     }
 
     if (!user.isVerified) {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          code:
-            "EMAIL_NOT_VERIFIED",
-          message:
-            "Please verify your email before logging in.",
-        });
+      return res.status(403).json({
+        success: false,
+        code:
+          "EMAIL_NOT_VERIFIED",
+        message:
+          "Please verify your email before logging in.",
+      });
     }
 
     const passwordMatch =
@@ -709,27 +1055,17 @@ exports.login = async (
       );
 
     if (!passwordMatch) {
-      return res
-        .status(401)
-        .json({
-          success: false,
-          message:
-            "Invalid email or password",
-        });
-    }
-
-    let wallet =
-      await Wallet.findOne({
-        user: user._id,
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid email or password",
       });
-
-    if (!wallet) {
-      wallet =
-        await Wallet.create({
-          user: user._id,
-          balance: 0,
-        });
     }
+
+    const wallet =
+      await ensureWallet(
+        user._id
+      );
 
     user.lastLogin =
       new Date();
@@ -755,13 +1091,10 @@ exports.login = async (
       error
     );
 
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message:
-          "Login failed",
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Login failed",
+    });
   }
 };
 
