@@ -2,21 +2,52 @@ import Link from "next/link";
 
 const footerLinks = {
   Product: [
-    { href: "#services", label: "Services" },
-    { href: "#countries", label: "Countries" },
-    { href: "#api", label: "Developer API" },
-    { href: "/signup", label: "Create Account" },
+    {
+      href: "#services",
+      label: "Services",
+    },
+    {
+      href: "#countries",
+      label: "Countries",
+    },
+    {
+      href: "#api",
+      label: "Developer API",
+    },
+    {
+      href: "/signup",
+      label: "Create Account",
+    },
   ],
+
   Company: [
-    { href: "#", label: "About" },
-    { href: "#", label: "Contact" },
-    { href: "#", label: "Status" },
-    { href: "#faq", label: "FAQ" },
+    {
+      href: "/#about",
+      label: "About",
+    },
+    {
+      href: "/support",
+      label: "Contact",
+    },
+    {
+      href: "#faq",
+      label: "FAQ",
+    },
   ],
+
   Legal: [
-    { href: "#", label: "Terms" },
-    { href: "#", label: "Privacy Policy" },
-    { href: "#", label: "Refund Policy" },
+    {
+      href: "/terms",
+      label: "Terms of Service",
+    },
+    {
+      href: "/privacy",
+      label: "Privacy Policy",
+    },
+    {
+      href: "/refund-policy",
+      label: "Refund Policy",
+    },
   ],
 };
 
@@ -29,7 +60,10 @@ export default function Footer() {
             href="/"
             className="text-2xl font-black text-[var(--foreground)]"
           >
-            Chaps<span className="text-blue-600">SmS</span>
+            Chaps
+            <span className="text-blue-600">
+              SmS
+            </span>
           </Link>
 
           <p className="mt-4 max-w-sm leading-7 text-[var(--muted-foreground)]">
@@ -42,25 +76,34 @@ export default function Footer() {
           </p>
         </div>
 
-        {Object.entries(footerLinks).map(([title, links]) => (
-          <div key={title}>
-            <h3 className="font-black text-[var(--foreground)]">
-              {title}
-            </h3>
+        {Object.entries(
+          footerLinks,
+        ).map(
+          ([
+            title,
+            links,
+          ]) => (
+            <div key={title}>
+              <h3 className="font-black text-[var(--foreground)]">
+                {title}
+              </h3>
 
-            <div className="mt-4 space-y-3">
-              {links.map((link) => (
-                <Link
-                  key={link.label}
-                  href={link.href}
-                  className="block text-sm font-medium text-[var(--muted-foreground)] transition hover:text-blue-600"
-                >
-                  {link.label}
-                </Link>
-              ))}
+              <div className="mt-4 space-y-3">
+                {links.map(
+                  (link) => (
+                    <Link
+                      key={link.label}
+                      href={link.href}
+                      className="block text-sm font-medium text-[var(--muted-foreground)] transition hover:text-blue-600"
+                    >
+                      {link.label}
+                    </Link>
+                  ),
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          ),
+        )}
       </div>
     </footer>
   );

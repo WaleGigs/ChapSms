@@ -16,82 +16,96 @@ const GOOGLE_SCRIPT_ID =
 const GOOGLE_SCRIPT_SRC =
   "https://accounts.google.com/gsi/client";
 
-function loadGoogleScript() {
+function waitForGoogleIdentity(
+  timeoutMilliseconds = 10000,
+) {
+  return new Promise(
+    (
+      resolve,
+      reject,
+    ) => {
+      const startedAt =
+        Date.now();
+
+      const interval =
+        window.setInterval(
+          () => {
+            if (
+              window.google
+                ?.accounts?.id
+            ) {
+              window.clearInterval(
+                interval,
+              );
+
+              resolve();
+              return;
+            }
+
+            if (
+              Date.now() -
+                startedAt >=
+              timeoutMilliseconds
+            ) {
+              window.clearInterval(
+                interval,
+              );
+
+              reject(
+                new Error(
+                  "Google authentication did not become ready",
+                ),
+              );
+            }
+          },
+          100,
+        );
+    },
+  );
+}
+
+async function loadGoogleScript() {
   if (
     typeof window ===
     "undefined"
   ) {
-    return Promise.reject(
-      new Error(
-        "Google authentication requires a browser"
-      )
+    throw new Error(
+      "Google authentication requires a browser",
     );
   }
 
   if (
     window.google?.accounts?.id
   ) {
-    return Promise.resolve();
+    return;
   }
 
-  const existing =
+  let script =
     document.getElementById(
-      GOOGLE_SCRIPT_ID
+      GOOGLE_SCRIPT_ID,
     );
 
-  if (existing) {
-    return new Promise(
-      (resolve, reject) => {
-        existing.addEventListener(
-          "load",
-          resolve,
-          { once: true }
-        );
+  if (!script) {
+    script =
+      document.createElement(
+        "script",
+      );
 
-        existing.addEventListener(
-          "error",
-          () =>
-            reject(
-              new Error(
-                "Could not load Google authentication"
-              )
-            ),
-          { once: true }
-        );
-      }
+    script.id =
+      GOOGLE_SCRIPT_ID;
+
+    script.src =
+      GOOGLE_SCRIPT_SRC;
+
+    script.async = true;
+    script.defer = true;
+
+    document.head.appendChild(
+      script,
     );
   }
 
-  return new Promise(
-    (resolve, reject) => {
-      const script =
-        document.createElement(
-          "script"
-        );
-
-      script.id =
-        GOOGLE_SCRIPT_ID;
-
-      script.src =
-        GOOGLE_SCRIPT_SRC;
-
-      script.async = true;
-      script.defer = true;
-
-      script.onload = resolve;
-
-      script.onerror = () =>
-        reject(
-          new Error(
-            "Could not load Google authentication"
-          )
-        );
-
-      document.head.appendChild(
-        script
-      );
-    }
-  );
+  await waitForGoogleIdentity();
 }
 
 export default function GoogleAuthButton({
@@ -124,13 +138,14 @@ export default function GoogleAuthButton({
       String(
         process.env
           .NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
-          ""
+          "",
       ).trim();
 
     if (!clientId) {
       setLoading(false);
+
       setError(
-        "Google login is not configured"
+        "Google login is not configured",
       );
 
       return undefined;
@@ -140,41 +155,46 @@ export default function GoogleAuthButton({
       if (
         cancelled ||
         !containerRef.current ||
-        !window.google?.accounts?.id
+        !window.google
+          ?.accounts?.id
       ) {
         return;
       }
 
-      const width = Math.max(
-        220,
-        Math.min(
-          400,
-          Math.floor(
-            containerRef.current
-              .getBoundingClientRect()
-              .width
-          ) || 320
-        )
-      );
+      const width =
+        Math.max(
+          220,
+          Math.min(
+            400,
+            Math.floor(
+              containerRef.current
+                .getBoundingClientRect()
+                .width,
+            ) || 320,
+          ),
+        );
 
       containerRef.current
         .replaceChildren();
 
       window.google.accounts.id
         .initialize({
-          client_id: clientId,
+          client_id:
+            clientId,
+
           callback: (
-            response
+            response,
           ) => {
             const credential =
               String(
-                response?.credential ||
-                  ""
+                response
+                  ?.credential ||
+                  "",
               ).trim();
 
             if (!credential) {
               setError(
-                "Google did not return a valid credential"
+                "Google did not return a valid credential",
               );
 
               return;
@@ -182,18 +202,24 @@ export default function GoogleAuthButton({
 
             Promise.resolve(
               callbackRef.current?.(
-                credential
-              )
-            ).catch((callbackError) => {
-              console.error(
-                "Google callback failed:",
-                callbackError
-              );
-            });
+                credential,
+              ),
+            ).catch(
+              (
+                callbackError,
+              ) => {
+                console.error(
+                  "Google callback failed:",
+                  callbackError,
+                );
+              },
+            );
           },
+
           auto_select: false,
           cancel_on_tap_outside:
             true,
+          ux_mode: "popup",
         });
 
       window.google.accounts.id
@@ -205,9 +231,10 @@ export default function GoogleAuthButton({
             size: "large",
             text,
             shape: "rectangular",
-            logo_alignment: "left",
+            logo_alignment:
+              "left",
             width,
-          }
+          },
         );
 
       setLoading(false);
@@ -220,43 +247,61 @@ export default function GoogleAuthButton({
           renderButton();
         }
       })
-      .catch((scriptError) => {
-        if (!cancelled) {
+      .catch(
+        (
+          scriptError,
+        ) => {
+          if (cancelled) {
+            return;
+          }
+
+          console.error(
+            "Google Identity Services failed:",
+            {
+              origin:
+                window.location
+                  .origin,
+              error:
+                scriptError,
+            },
+          );
+
           setLoading(false);
+
           setError(
             scriptError?.message ||
-              "Could not load Google authentication"
+              "Could not load Google authentication",
           );
-        }
-      });
+        },
+      );
 
     function handleResize() {
       window.clearTimeout(
-        resizeTimer
+        resizeTimer,
       );
 
       resizeTimer =
         window.setTimeout(
           renderButton,
-          150
+          150,
         );
     }
 
     window.addEventListener(
       "resize",
-      handleResize
+      handleResize,
     );
 
     return () => {
       cancelled = true;
 
       window.clearTimeout(
-        resizeTimer
+        resizeTimer,
       );
 
       window.removeEventListener(
         "resize",
-        handleResize
+        handleResize,
       );
     };
   }, [text]);
@@ -279,6 +324,7 @@ export default function GoogleAuthButton({
               className="mr-2 animate-spin"
               size={17}
             />
+
             Loading Google…
           </div>
         ) : null}
