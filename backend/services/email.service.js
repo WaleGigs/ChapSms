@@ -1,51 +1,110 @@
-const nodemailer = require("nodemailer");
-const dns = require("node:dns");
-const dnsPromises = require("node:dns").promises;
+const nodemailer =
+  require(
+    "nodemailer",
+  );
 
-/*
- * Node.js can preserve the DNS result order returned by the operating system.
- * Prefer IPv4 because the current network cannot reach Gmail's IPv6 address.
- */
-dns.setDefaultResultOrder("ipv4first");
+const SMTP_HOST =
+  String(
+    process.env
+      .SMTP_HOST ||
+      "smtp.gmail.com",
+  ).trim();
 
-const SMTP_HOST = String(
-  process.env.SMTP_HOST || "smtp.gmail.com"
-).trim();
-
-const SMTP_PORT = Number(
-  process.env.SMTP_PORT || 587
-);
+const SMTP_PORT =
+  Number(
+    process.env
+      .SMTP_PORT ||
+      587,
+  );
 
 const SMTP_SECURE =
-  String(process.env.SMTP_SECURE || "false")
+  String(
+    process.env
+      .SMTP_SECURE ||
+      "false",
+  )
     .trim()
-    .toLowerCase() === "true";
+    .toLowerCase() ===
+  "true";
 
-const SMTP_USER = String(
-  process.env.SMTP_USER || ""
-)
-  .trim()
-  .toLowerCase();
+const SMTP_USER =
+  String(
+    process.env
+      .SMTP_USER ||
+      "",
+  )
+    .trim()
+    .toLowerCase();
 
-const SMTP_PASS = String(
-  process.env.SMTP_PASS || ""
-)
-  .replace(/\s+/g, "")
-  .trim();
+const SMTP_PASS =
+  String(
+    process.env
+      .SMTP_PASS ||
+      "",
+  )
+    .replace(
+      /\s+/g,
+      "",
+    )
+    .trim();
 
 const EMAIL_FROM =
-  process.env.EMAIL_FROM ||
-  `"ChapsSmS" <${SMTP_USER}>`;
+  String(
+    process.env
+      .EMAIL_FROM ||
+      `"ChapsSmS" <${SMTP_USER}>`,
+  ).trim();
 
-const MAXIMUM_SEND_ATTEMPTS = 2;
+const SMTP_CONNECTION_TIMEOUT =
+  Number(
+    process.env
+      .SMTP_CONNECTION_TIMEOUT ||
+      15000,
+  );
+
+const SMTP_GREETING_TIMEOUT =
+  Number(
+    process.env
+      .SMTP_GREETING_TIMEOUT ||
+      15000,
+  );
+
+const SMTP_SOCKET_TIMEOUT =
+  Number(
+    process.env
+      .SMTP_SOCKET_TIMEOUT ||
+      30000,
+  );
+
+const SMTP_DEBUG =
+  String(
+    process.env
+      .SMTP_DEBUG ||
+      "false",
+  )
+    .trim()
+    .toLowerCase() ===
+  "true";
+
+const MAXIMUM_SEND_ATTEMPTS =
+  Math.max(
+    1,
+    Number(
+      process.env
+        .SMTP_SEND_ATTEMPTS ||
+        2,
+    ),
+  );
 
 let transporter = null;
-let resolvedIpv4Address = null;
-let ipv4AddressCursor = 0;
 
-function isValidEmailAddress(value) {
+function isValidEmailAddress(
+  value,
+) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-    String(value || "").trim()
+    String(
+      value || "",
+    ).trim(),
   );
 }
 
@@ -53,86 +112,94 @@ function validateEmailConfiguration() {
   const missing = [];
 
   if (!SMTP_USER) {
-    missing.push("SMTP_USER");
+    missing.push(
+      "SMTP_USER",
+    );
   }
 
   if (!SMTP_PASS) {
-    missing.push("SMTP_PASS");
-  }
-
-  if (missing.length > 0) {
-    const error = new Error(
-      `Missing email environment variables: ${missing.join(", ")}`
-    );
-
-    error.code = "EMAIL_CONFIG_MISSING";
-    throw error;
-  }
-
-  if (!isValidEmailAddress(SMTP_USER)) {
-    const error = new Error(
-      "SMTP_USER must be a valid email address"
-    );
-
-    error.code = "INVALID_SMTP_USER";
-    throw error;
-  }
-
-  if (SMTP_PORT === 465 && !SMTP_SECURE) {
-    throw new Error(
-      "SMTP_SECURE must be true when SMTP_PORT is 465"
+    missing.push(
+      "SMTP_PASS",
     );
   }
-
-  if (SMTP_PORT === 587 && SMTP_SECURE) {
-    throw new Error(
-      "SMTP_SECURE must be false when SMTP_PORT is 587"
-    );
-  }
-}
-
-async function resolveSmtpIpv4() {
-  const addresses =
-    await dnsPromises.resolve4(SMTP_HOST);
 
   if (
-    !Array.isArray(addresses) ||
-    addresses.length === 0
+    missing.length > 0
   ) {
-    const error = new Error(
-      `No IPv4 address was found for ${SMTP_HOST}`
-    );
+    const error =
+      new Error(
+        `Missing email environment variables: ${missing.join(
+          ", ",
+        )}`,
+      );
 
-    error.code = "SMTP_IPV4_NOT_FOUND";
+    error.code =
+      "EMAIL_CONFIG_MISSING";
+
     throw error;
   }
 
-  const address =
-    addresses[
-      ipv4AddressCursor %
-        addresses.length
-    ];
+  if (
+    !isValidEmailAddress(
+      SMTP_USER,
+    )
+  ) {
+    const error =
+      new Error(
+        "SMTP_USER must be a valid email address",
+      );
 
-  ipv4AddressCursor += 1;
+    error.code =
+      "INVALID_SMTP_USER";
 
-  return address;
+    throw error;
+  }
+
+  if (
+    !Number.isInteger(
+      SMTP_PORT,
+    ) ||
+    SMTP_PORT <= 0
+  ) {
+    throw new Error(
+      "SMTP_PORT must be a valid port number",
+    );
+  }
+
+  if (
+    SMTP_PORT === 465 &&
+    !SMTP_SECURE
+  ) {
+    throw new Error(
+      "SMTP_SECURE must be true when SMTP_PORT is 465",
+    );
+  }
+
+  if (
+    SMTP_PORT === 587 &&
+    SMTP_SECURE
+  ) {
+    throw new Error(
+      "SMTP_SECURE must be false when SMTP_PORT is 587",
+    );
+  }
 }
 
-async function createTransporter() {
+function createTransporter() {
   validateEmailConfiguration();
-
-  resolvedIpv4Address =
-    await resolveSmtpIpv4();
 
   transporter =
     nodemailer.createTransport({
-      /*
-       * Connect directly to an IPv4 address so Nodemailer
-       * cannot select Gmail's unreachable IPv6 address.
-       */
-      host: resolvedIpv4Address,
+      host: SMTP_HOST,
       port: SMTP_PORT,
       secure: SMTP_SECURE,
+
+      /*
+       * Prefer IPv4 while still connecting through the real SMTP hostname.
+       * This keeps TLS hostname verification correct and avoids manually
+       * pinning a temporary Gmail IP address.
+       */
+      family: 4,
 
       auth: {
         user: SMTP_USER,
@@ -142,37 +209,45 @@ async function createTransporter() {
       requireTLS:
         SMTP_PORT === 587,
 
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-      dnsTimeout: 8000,
+      connectionTimeout:
+        SMTP_CONNECTION_TIMEOUT,
+
+      greetingTimeout:
+        SMTP_GREETING_TIMEOUT,
+
+      socketTimeout:
+        SMTP_SOCKET_TIMEOUT,
+
+      logger: SMTP_DEBUG,
+      debug: SMTP_DEBUG,
 
       tls: {
-        /*
-         * Gmail's certificate belongs to smtp.gmail.com,
-         * not to the resolved numeric IPv4 address.
-         */
-        servername: SMTP_HOST,
-        minVersion: "TLSv1.2",
+        servername:
+          SMTP_HOST,
+        minVersion:
+          "TLSv1.2",
       },
     });
 
   console.log(
-    "SMTP configured through IPv4:",
+    "SMTP transporter configured:",
     {
-      hostname: SMTP_HOST,
-      address:
-        resolvedIpv4Address,
-      port: SMTP_PORT,
+      host:
+        SMTP_HOST,
+      port:
+        SMTP_PORT,
       secure:
         SMTP_SECURE,
-    }
+      family: 4,
+      user:
+        SMTP_USER,
+    },
   );
 
   return transporter;
 }
 
-async function getTransporter() {
+function getTransporter() {
   if (!transporter) {
     return createTransporter();
   }
@@ -182,22 +257,41 @@ async function getTransporter() {
 
 function resetTransporter() {
   try {
-    transporter?.close();
+    transporter
+      ?.close();
   } catch {
-    // Ignore transporter close errors.
+    // Ignore close errors.
   }
 
   transporter = null;
-  resolvedIpv4Address = null;
 }
 
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function escapeHtml(
+  value,
+) {
+  return String(
+    value || "",
+  )
+    .replace(
+      /&/g,
+      "&amp;",
+    )
+    .replace(
+      /</g,
+      "&lt;",
+    )
+    .replace(
+      />/g,
+      "&gt;",
+    )
+    .replace(
+      /"/g,
+      "&quot;",
+    )
+    .replace(
+      /'/g,
+      "&#039;",
+    );
 }
 
 function getGreetingName({
@@ -208,22 +302,27 @@ function getGreetingName({
     String(
       username ||
         firstName ||
-        "there"
-    ).trim() || "there"
+        "there",
+    ).trim() ||
+    "there"
   );
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => {
-    setTimeout(
-      resolve,
-      milliseconds
-    );
-  });
+function wait(
+  milliseconds,
+) {
+  return new Promise(
+    (resolve) => {
+      setTimeout(
+        resolve,
+        milliseconds,
+      );
+    },
+  );
 }
 
 async function sendMail(
-  mailOptions
+  mailOptions,
 ) {
   let lastError;
 
@@ -234,16 +333,34 @@ async function sendMail(
     attempt += 1
   ) {
     try {
-      const currentTransporter =
-        await getTransporter();
-
       const info =
-        await currentTransporter.sendMail(
-          mailOptions
-        );
+        await getTransporter()
+          .sendMail({
+            ...mailOptions,
+
+            /*
+             * Prevent templates from loading arbitrary local or remote files.
+             */
+            disableFileAccess:
+              true,
+            disableUrlAccess:
+              true,
+          });
 
       console.log(
-        `✅ Email sent to ${mailOptions.to}`
+        "✅ Email accepted by SMTP:",
+        {
+          to:
+            mailOptions.to,
+          messageId:
+            info.messageId,
+          accepted:
+            info.accepted,
+          rejected:
+            info.rejected,
+          response:
+            info.response,
+        },
       );
 
       return info;
@@ -269,7 +386,7 @@ async function sendMail(
             error.address,
           port:
             error.port,
-        }
+        },
       );
 
       resetTransporter();
@@ -278,7 +395,7 @@ async function sendMail(
         attempt <
         MAXIMUM_SEND_ATTEMPTS
       ) {
-        await wait(750);
+        await wait(1000);
       }
     }
   }
@@ -288,13 +405,11 @@ async function sendMail(
 
 async function verifyEmailTransport() {
   try {
-    const currentTransporter =
-      await getTransporter();
-
-    await currentTransporter.verify();
+    await getTransporter()
+      .verify();
 
     console.log(
-      `✅ SMTP ready through IPv4 ${resolvedIpv4Address}:${SMTP_PORT}`
+      `✅ SMTP ready: ${SMTP_HOST}:${SMTP_PORT} through IPv4`,
     );
 
     return true;
@@ -308,6 +423,8 @@ async function verifyEmailTransport() {
           error.code,
         message:
           error.message,
+        command:
+          error.command,
         response:
           error.response,
         responseCode:
@@ -316,7 +433,7 @@ async function verifyEmailTransport() {
           error.address,
         port:
           error.port,
-      }
+      },
     );
 
     return false;
@@ -330,22 +447,26 @@ async function sendVerificationEmail({
   code,
 }) {
   const recipient =
-    String(to || "")
+    String(
+      to || "",
+    )
       .trim()
       .toLowerCase();
 
   const verificationCode =
-    String(code || "")
-      .trim();
+    String(
+      code || "",
+    ).trim();
 
   if (
     !isValidEmailAddress(
-      recipient
+      recipient,
     )
   ) {
-    const error = new Error(
-      "A valid verification email recipient is required"
-    );
+    const error =
+      new Error(
+        "A valid verification email recipient is required",
+      );
 
     error.code =
       "INVALID_EMAIL_RECIPIENT";
@@ -353,10 +474,20 @@ async function sendVerificationEmail({
     throw error;
   }
 
-  if (!verificationCode) {
-    throw new Error(
-      "Verification code is required"
-    );
+  if (
+    !/^\d{6}$/.test(
+      verificationCode,
+    )
+  ) {
+    const error =
+      new Error(
+        "A six-digit verification code is required",
+      );
+
+    error.code =
+      "INVALID_VERIFICATION_CODE";
+
+    throw error;
   }
 
   const greetingName =
@@ -368,6 +499,7 @@ async function sendVerificationEmail({
   return sendMail({
     from: EMAIL_FROM,
     to: recipient,
+
     subject:
       "Verify your ChapsSmS account",
 
@@ -388,17 +520,16 @@ If you did not create this account, ignore this email.
         <h2>Verify your ChapsSmS account</h2>
 
         <p>Hello ${escapeHtml(
-          greetingName
+          greetingName,
         )},</p>
 
         <p>
-          Use the verification code below to verify
-          your email address.
+          Use the verification code below to verify your email address.
         </p>
 
         <div style="margin:24px 0;padding:20px;border-radius:12px;background:#eff6ff;color:#1d4ed8;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;">
           ${escapeHtml(
-            verificationCode
+            verificationCode,
           )}
         </div>
 
@@ -419,22 +550,26 @@ async function sendPasswordResetEmail({
   code,
 }) {
   const recipient =
-    String(to || "")
+    String(
+      to || "",
+    )
       .trim()
       .toLowerCase();
 
   const resetCode =
-    String(code || "")
-      .trim();
+    String(
+      code || "",
+    ).trim();
 
   if (
     !isValidEmailAddress(
-      recipient
+      recipient,
     )
   ) {
-    const error = new Error(
-      "A valid password-reset email recipient is required"
-    );
+    const error =
+      new Error(
+        "A valid password-reset email recipient is required",
+      );
 
     error.code =
       "INVALID_EMAIL_RECIPIENT";
@@ -444,7 +579,7 @@ async function sendPasswordResetEmail({
 
   if (!resetCode) {
     throw new Error(
-      "Password-reset code is required"
+      "Password-reset code is required",
     );
   }
 
@@ -457,6 +592,7 @@ async function sendPasswordResetEmail({
   return sendMail({
     from: EMAIL_FROM,
     to: recipient,
+
     subject:
       "Reset your ChapsSmS password",
 
@@ -477,7 +613,7 @@ If you did not request a password reset, ignore this email.
         <h2>Reset your ChapsSmS password</h2>
 
         <p>Hello ${escapeHtml(
-          greetingName
+          greetingName,
         )},</p>
 
         <p>
@@ -486,7 +622,7 @@ If you did not request a password reset, ignore this email.
 
         <div style="margin:24px 0;padding:20px;border-radius:12px;background:#eff6ff;color:#1d4ed8;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;">
           ${escapeHtml(
-            resetCode
+            resetCode,
           )}
         </div>
 

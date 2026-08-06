@@ -628,6 +628,8 @@ exports.resendVerificationCode =
       ) {
         return res.status(400).json({
           success: false,
+          code:
+            "GOOGLE_AUTH_REQUIRED",
           message:
             "This account uses Google authentication",
         });
@@ -668,6 +670,22 @@ exports.resendVerificationCode =
         });
       }
 
+      /*
+       * Preserve the currently active code. If SMTP rejects the new email,
+       * restore this state so the database does not contain a code that the
+       * user never received.
+       */
+      const previousVerification = {
+        verificationCodeHash:
+          user.verificationCodeHash,
+        verificationExpires:
+          user.verificationExpires,
+        verificationLastSentAt:
+          user.verificationLastSentAt,
+        verificationResendAvailableAt:
+          user.verificationResendAvailableAt,
+      };
+
       const verificationCode =
         generateOTP(6);
 
@@ -699,7 +717,40 @@ exports.resendVerificationCode =
       } catch (emailError) {
         console.error(
           "Resend verification email failed:",
-          emailError
+          {
+            email: user.email,
+            code:
+              emailError?.code,
+            message:
+              emailError?.message,
+            response:
+              emailError?.response,
+          }
+        );
+
+        user.verificationCodeHash =
+          previousVerification
+            .verificationCodeHash;
+
+        user.verificationExpires =
+          previousVerification
+            .verificationExpires;
+
+        user.verificationLastSentAt =
+          previousVerification
+            .verificationLastSentAt;
+
+        user.verificationResendAvailableAt =
+          previousVerification
+            .verificationResendAvailableAt;
+
+        await user.save().catch(
+          (restoreError) => {
+            console.error(
+              "Could not restore previous verification state:",
+              restoreError
+            );
+          }
         );
 
         return res.status(503).json({
@@ -707,8 +758,9 @@ exports.resendVerificationCode =
           code:
             "EMAIL_DELIVERY_FAILED",
           accountCreated: true,
+          email: user.email,
           message:
-            "The verification email could not be delivered. Check the SMTP configuration and try again after the timer.",
+            "The verification email was not accepted by the email server. Check the backend SMTP logs and try Resend Code again.",
           ...verificationTiming(
             user
           ),
@@ -718,6 +770,7 @@ exports.resendVerificationCode =
       return res.json({
         success: true,
         emailDelivered: true,
+        email,
         message:
           "A new verification code has been sent to your email.",
         ...verificationTiming(
