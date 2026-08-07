@@ -8,9 +8,7 @@ const countries = [
   { flag: "🇺🇸", name: "United States", numbers: "12,430", price: "$0.19" },
   { flag: "🇬🇧", name: "United Kingdom", numbers: "8,210", price: "$0.22" },
   { flag: "🇨🇦", name: "Canada", numbers: "5,940", price: "$0.24" },
-  { flag: "🇩🇪", name: "Germany", numbers: "4,875", price: "$0.27" },
-  { flag: "🇳🇬", name: "Nigeria", numbers: "3,120", price: "$0.18" },
-  { flag: "🇮🇳", name: "India", numbers: "9,860", price: "$0.15" },
+  
 ];
 
 export default function SupportedCountries() {

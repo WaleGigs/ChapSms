@@ -1,12 +1,8 @@
 import {
   Gamepad2,
-  Mail,
   MessageCircle,
   Music2,
   Send,
-  ShoppingBag,
-  Users,
-  Video,
 } from "lucide-react";
 
 import Section from "@/components/ui/Section";
@@ -31,22 +27,6 @@ const services = [
     name: "Discord",
     icon: Gamepad2,
   },
-  {
-    name: "Google",
-    icon: Mail,
-  },
-  {
-    name: "Amazon",
-    icon: ShoppingBag,
-  },
-  {
-    name: "Netflix",
-    icon: Video,
-  },
-  {
-    name: "Facebook",
-    icon: Users,
-  },
 ];
 
 export default function PopularServices() {
@@ -63,40 +43,19 @@ export default function PopularServices() {
           className="mb-0"
         />
 
-        <a
-  href="/login?next=%2Fbuy-number"
-  className="
-    relative
-    z-20
-    inline-flex
-    min-h-11
-    w-full
-    items-center
-    justify-center
-    rounded-xl
-    border
-    border-[var(--border)]
-    bg-[var(--card)]
-    px-5
-    py-3
-    text-sm
-    font-semibold
-    text-[var(--foreground)]
-    shadow-sm
-    transition
-    hover:border-blue-300
-    hover:bg-[var(--muted)]
-    active:scale-[0.98]
-    lg:w-auto
-  "
->
-  View all services
-</a>
+        <Button
+          href="/buy-number"
+          variant="secondary"
+          className="relative z-10 w-full lg:w-auto"
+        >
+          View all services
+        </Button>
       </div>
 
       <div className="mt-10 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4 lg:mt-12">
         {services.map((service) => {
-          const Icon = service.icon;
+          const Icon =
+            service.icon;
 
           return (
             <Card
