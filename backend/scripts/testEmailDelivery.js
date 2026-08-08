@@ -1,19 +1,7 @@
-/*
- * Copy this viewing file to:
- *
- *   scripts/testEmailDelivery.js
- *
- * Then run:
- *
- *   node scripts/testEmailDelivery.js recipient@gmail.com
- */
-
-require(
-  "dotenv",
-).config();
+require("dotenv").config();
 
 const {
-  verifyEmailTransport,
+  validateEmailConfiguration,
   sendVerificationEmail,
 } =
   require(
@@ -35,9 +23,7 @@ async function run() {
     String(
       process.argv[2] ||
         process.env
-          .SMTP_TEST_RECIPIENT ||
-        process.env
-          .SMTP_USER ||
+          .EMAIL_TEST_RECIPIENT ||
         "",
     )
       .trim()
@@ -45,47 +31,44 @@ async function run() {
 
   if (!recipient) {
     throw new Error(
-      "Pass a recipient email or set SMTP_TEST_RECIPIENT",
+      "Pass a recipient email: node scripts/testEmailDelivery.js you@gmail.com",
     );
   }
+
+  const config =
+    validateEmailConfiguration();
 
   console.log(
-    "Testing SMTP configuration...",
+    "Testing email provider:",
+    {
+      provider:
+        config.provider,
+      from:
+        config.from,
+      recipient,
+    },
   );
-
-  const ready =
-    await verifyEmailTransport();
-
-  if (!ready) {
-    throw new Error(
-      "SMTP verification failed. Read the error printed above.",
-    );
-  }
 
   const code =
     createTestCode();
 
-  const info =
+  const result =
     await sendVerificationEmail({
       to: recipient,
       username:
-        "SMTP Test User",
+        "ChapsSmS Test User",
       code,
     });
 
   console.log(
-    "✅ Test verification email accepted:",
+    "✅ Test verification email submitted successfully:",
     {
+      provider:
+        result.provider,
+      messageId:
+        result.messageId,
       recipient,
       code,
-      messageId:
-        info.messageId,
-      accepted:
-        info.accepted,
-      rejected:
-        info.rejected,
-      response:
-        info.response,
     },
   );
 }
@@ -94,26 +77,20 @@ run()
   .then(() => {
     process.exit(0);
   })
-  .catch(
-    (error) => {
-      console.error(
-        "❌ Email test failed:",
-        {
-          name:
-            error.name,
-          code:
-            error.code,
-          message:
-            error.message,
-          response:
-            error.response,
-          responseCode:
-            error.responseCode,
-          command:
-            error.command,
-        },
-      );
+  .catch((error) => {
+    console.error(
+      "❌ Email test failed:",
+      {
+        name:
+          error?.name,
+        code:
+          error?.code,
+        message:
+          error?.message,
+        statusCode:
+          error?.statusCode,
+      },
+    );
 
-      process.exit(1);
-    },
-  );
+    process.exit(1);
+  });

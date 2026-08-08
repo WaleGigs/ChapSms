@@ -1,102 +1,26 @@
-const nodemailer =
-  require(
-    "nodemailer",
-  );
+const {
+  Resend,
+} = require("resend");
 
-const SMTP_HOST =
+const RESEND_API_KEY =
   String(
-    process.env
-      .SMTP_HOST ||
-      "smtp.gmail.com",
+    process.env.RESEND_API_KEY ||
+      "",
   ).trim();
-
-const SMTP_PORT =
-  Number(
-    process.env
-      .SMTP_PORT ||
-      587,
-  );
-
-const SMTP_SECURE =
-  String(
-    process.env
-      .SMTP_SECURE ||
-      "false",
-  )
-    .trim()
-    .toLowerCase() ===
-  "true";
-
-const SMTP_USER =
-  String(
-    process.env
-      .SMTP_USER ||
-      "",
-  )
-    .trim()
-    .toLowerCase();
-
-const SMTP_PASS =
-  String(
-    process.env
-      .SMTP_PASS ||
-      "",
-  )
-    .replace(
-      /\s+/g,
-      "",
-    )
-    .trim();
 
 const EMAIL_FROM =
   String(
-    process.env
-      .EMAIL_FROM ||
-      `"ChapsSmS" <${SMTP_USER}>`,
+    process.env.EMAIL_FROM ||
+      "",
   ).trim();
 
-const SMTP_CONNECTION_TIMEOUT =
-  Number(
-    process.env
-      .SMTP_CONNECTION_TIMEOUT ||
-      15000,
-  );
-
-const SMTP_GREETING_TIMEOUT =
-  Number(
-    process.env
-      .SMTP_GREETING_TIMEOUT ||
-      15000,
-  );
-
-const SMTP_SOCKET_TIMEOUT =
-  Number(
-    process.env
-      .SMTP_SOCKET_TIMEOUT ||
-      30000,
-  );
-
-const SMTP_DEBUG =
+const EMAIL_REPLY_TO =
   String(
-    process.env
-      .SMTP_DEBUG ||
-      "false",
-  )
-    .trim()
-    .toLowerCase() ===
-  "true";
+    process.env.EMAIL_REPLY_TO ||
+      "",
+  ).trim();
 
-const MAXIMUM_SEND_ATTEMPTS =
-  Math.max(
-    1,
-    Number(
-      process.env
-        .SMTP_SEND_ATTEMPTS ||
-        2,
-    ),
-  );
-
-let transporter = null;
+let resendClient = null;
 
 function isValidEmailAddress(
   value,
@@ -111,21 +35,19 @@ function isValidEmailAddress(
 function validateEmailConfiguration() {
   const missing = [];
 
-  if (!SMTP_USER) {
+  if (!RESEND_API_KEY) {
     missing.push(
-      "SMTP_USER",
+      "RESEND_API_KEY",
     );
   }
 
-  if (!SMTP_PASS) {
+  if (!EMAIL_FROM) {
     missing.push(
-      "SMTP_PASS",
+      "EMAIL_FROM",
     );
   }
 
-  if (
-    missing.length > 0
-  ) {
+  if (missing.length > 0) {
     const error =
       new Error(
         `Missing email environment variables: ${missing.join(
@@ -139,136 +61,29 @@ function validateEmailConfiguration() {
     throw error;
   }
 
-  if (
-    !isValidEmailAddress(
-      SMTP_USER,
-    )
-  ) {
-    const error =
-      new Error(
-        "SMTP_USER must be a valid email address",
-      );
-
-    error.code =
-      "INVALID_SMTP_USER";
-
-    throw error;
-  }
-
-  if (
-    !Number.isInteger(
-      SMTP_PORT,
-    ) ||
-    SMTP_PORT <= 0
-  ) {
-    throw new Error(
-      "SMTP_PORT must be a valid port number",
-    );
-  }
-
-  if (
-    SMTP_PORT === 465 &&
-    !SMTP_SECURE
-  ) {
-    throw new Error(
-      "SMTP_SECURE must be true when SMTP_PORT is 465",
-    );
-  }
-
-  if (
-    SMTP_PORT === 587 &&
-    SMTP_SECURE
-  ) {
-    throw new Error(
-      "SMTP_SECURE must be false when SMTP_PORT is 587",
-    );
-  }
+  return {
+    provider: "resend",
+    from: EMAIL_FROM,
+    replyTo:
+      EMAIL_REPLY_TO ||
+      null,
+  };
 }
 
-function createTransporter() {
+function getResendClient() {
   validateEmailConfiguration();
 
-  transporter =
-    nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_SECURE,
-
-      /*
-       * Prefer IPv4 while still connecting through the real SMTP hostname.
-       * This keeps TLS hostname verification correct and avoids manually
-       * pinning a temporary Gmail IP address.
-       */
-      family: 4,
-
-      auth: {
-        user: SMTP_USER,
-        pass: SMTP_PASS,
-      },
-
-      requireTLS:
-        SMTP_PORT === 587,
-
-      connectionTimeout:
-        SMTP_CONNECTION_TIMEOUT,
-
-      greetingTimeout:
-        SMTP_GREETING_TIMEOUT,
-
-      socketTimeout:
-        SMTP_SOCKET_TIMEOUT,
-
-      logger: SMTP_DEBUG,
-      debug: SMTP_DEBUG,
-
-      tls: {
-        servername:
-          SMTP_HOST,
-        minVersion:
-          "TLSv1.2",
-      },
-    });
-
-  console.log(
-    "SMTP transporter configured:",
-    {
-      host:
-        SMTP_HOST,
-      port:
-        SMTP_PORT,
-      secure:
-        SMTP_SECURE,
-      family: 4,
-      user:
-        SMTP_USER,
-    },
-  );
-
-  return transporter;
-}
-
-function getTransporter() {
-  if (!transporter) {
-    return createTransporter();
+  if (!resendClient) {
+    resendClient =
+      new Resend(
+        RESEND_API_KEY,
+      );
   }
 
-  return transporter;
+  return resendClient;
 }
 
-function resetTransporter() {
-  try {
-    transporter
-      ?.close();
-  } catch {
-    // Ignore close errors.
-  }
-
-  transporter = null;
-}
-
-function escapeHtml(
-  value,
-) {
+function escapeHtml(value) {
   return String(
     value || "",
   )
@@ -308,135 +123,149 @@ function getGreetingName({
   );
 }
 
-function wait(
-  milliseconds,
+function createEmailError(
+  providerError,
 ) {
-  return new Promise(
-    (resolve) => {
-      setTimeout(
-        resolve,
-        milliseconds,
-      );
-    },
-  );
-}
-
-async function sendMail(
-  mailOptions,
-) {
-  let lastError;
-
-  for (
-    let attempt = 1;
-    attempt <=
-    MAXIMUM_SEND_ATTEMPTS;
-    attempt += 1
-  ) {
-    try {
-      const info =
-        await getTransporter()
-          .sendMail({
-            ...mailOptions,
-
-            /*
-             * Prevent templates from loading arbitrary local or remote files.
-             */
-            disableFileAccess:
-              true,
-            disableUrlAccess:
-              true,
-          });
-
-      console.log(
-        "✅ Email accepted by SMTP:",
-        {
-          to:
-            mailOptions.to,
-          messageId:
-            info.messageId,
-          accepted:
-            info.accepted,
-          rejected:
-            info.rejected,
-          response:
-            info.response,
-        },
-      );
-
-      return info;
-    } catch (error) {
-      lastError = error;
-
-      console.error(
-        `❌ Email attempt ${attempt}/${MAXIMUM_SEND_ATTEMPTS} failed:`,
-        {
-          name:
-            error.name,
-          code:
-            error.code,
-          message:
-            error.message,
-          command:
-            error.command,
-          response:
-            error.response,
-          responseCode:
-            error.responseCode,
-          address:
-            error.address,
-          port:
-            error.port,
-        },
-      );
-
-      resetTransporter();
-
-      if (
-        attempt <
-        MAXIMUM_SEND_ATTEMPTS
-      ) {
-        await wait(1000);
-      }
-    }
-  }
-
-  throw lastError;
-}
-
-async function verifyEmailTransport() {
-  try {
-    await getTransporter()
-      .verify();
-
-    console.log(
-      `✅ SMTP ready: ${SMTP_HOST}:${SMTP_PORT} through IPv4`,
+  const error =
+    new Error(
+      providerError?.message ||
+        "The email provider rejected the message",
     );
 
-    return true;
-  } catch (error) {
-    resetTransporter();
+  error.code =
+    providerError?.name ||
+    providerError?.code ||
+    "EMAIL_PROVIDER_ERROR";
 
-    console.error(
-      "❌ SMTP verification failed:",
+  error.provider =
+    "resend";
+
+  if (
+    providerError?.statusCode
+  ) {
+    error.statusCode =
+      providerError.statusCode;
+  }
+
+  return error;
+}
+
+async function sendEmail({
+  to,
+  subject,
+  text,
+  html,
+}) {
+  const recipient =
+    String(
+      to || "",
+    )
+      .trim()
+      .toLowerCase();
+
+  if (
+    !isValidEmailAddress(
+      recipient,
+    )
+  ) {
+    const error =
+      new Error(
+        "A valid email recipient is required",
+      );
+
+    error.code =
+      "INVALID_EMAIL_RECIPIENT";
+
+    throw error;
+  }
+
+  const client =
+    getResendClient();
+
+  const payload = {
+    from: EMAIL_FROM,
+    to: [recipient],
+    subject,
+    text,
+    html,
+  };
+
+  if (EMAIL_REPLY_TO) {
+    payload.replyTo =
+      EMAIL_REPLY_TO;
+  }
+
+  const startedAt =
+    Date.now();
+
+  try {
+    const {
+      data,
+      error:
+        providerError,
+    } =
+      await client.emails.send(
+        payload,
+      );
+
+    if (providerError) {
+      throw createEmailError(
+        providerError,
+      );
+    }
+
+    if (!data?.id) {
+      const error =
+        new Error(
+          "The email provider did not return a message ID",
+        );
+
+      error.code =
+        "EMAIL_PROVIDER_RESPONSE_INVALID";
+
+      throw error;
+    }
+
+    console.log(
+      "✅ Resend accepted email:",
       {
-        code:
-          error.code,
-        message:
-          error.message,
-        command:
-          error.command,
-        response:
-          error.response,
-        responseCode:
-          error.responseCode,
-        address:
-          error.address,
-        port:
-          error.port,
+        to: recipient,
+        messageId:
+          data.id,
+        durationMs:
+          Date.now() -
+          startedAt,
       },
     );
 
-    return false;
+    return {
+      provider: "resend",
+      id: data.id,
+      messageId:
+        data.id,
+      accepted: [
+        recipient,
+      ],
+    };
+  } catch (error) {
+    console.error(
+      "❌ Resend email failed:",
+      {
+        to: recipient,
+        code:
+          error?.code ||
+          error?.name,
+        message:
+          error?.message,
+        statusCode:
+          error?.statusCode,
+        durationMs:
+          Date.now() -
+          startedAt,
+      },
+    );
+
+    throw error;
   }
 }
 
@@ -446,33 +275,10 @@ async function sendVerificationEmail({
   firstName,
   code,
 }) {
-  const recipient =
-    String(
-      to || "",
-    )
-      .trim()
-      .toLowerCase();
-
   const verificationCode =
     String(
       code || "",
     ).trim();
-
-  if (
-    !isValidEmailAddress(
-      recipient,
-    )
-  ) {
-    const error =
-      new Error(
-        "A valid verification email recipient is required",
-      );
-
-    error.code =
-      "INVALID_EMAIL_RECIPIENT";
-
-    throw error;
-  }
 
   if (
     !/^\d{6}$/.test(
@@ -496,9 +302,18 @@ async function sendVerificationEmail({
       firstName,
     });
 
-  return sendMail({
-    from: EMAIL_FROM,
-    to: recipient,
+  const safeName =
+    escapeHtml(
+      greetingName,
+    );
+
+  const safeCode =
+    escapeHtml(
+      verificationCode,
+    );
+
+  return sendEmail({
+    to,
 
     subject:
       "Verify your ChapsSmS account",
@@ -512,32 +327,45 @@ ${verificationCode}
 
 This code expires in 10 minutes.
 
-If you did not create this account, ignore this email.
+If you did not create this account, you can ignore this email.
     `.trim(),
 
     html: `
-      <div style="max-width:560px;margin:0 auto;padding:32px 24px;font-family:Arial,sans-serif;color:#111827;">
-        <h2>Verify your ChapsSmS account</h2>
+      <div style="margin:0;background:#f8fafc;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+        <div style="max-width:560px;margin:0 auto;overflow:hidden;border:1px solid #e2e8f0;border-radius:20px;background:#ffffff;">
+          <div style="background:#2563eb;padding:28px 28px 24px;color:#ffffff;">
+            <div style="font-size:22px;font-weight:800;">ChapsSmS</div>
+            <div style="margin-top:6px;font-size:14px;color:#dbeafe;">
+              Email verification
+            </div>
+          </div>
 
-        <p>Hello ${escapeHtml(
-          greetingName,
-        )},</p>
+          <div style="padding:30px 28px;">
+            <h1 style="margin:0;font-size:24px;line-height:1.25;">
+              Verify your email address
+            </h1>
 
-        <p>
-          Use the verification code below to verify your email address.
-        </p>
+            <p style="margin:18px 0 0;line-height:1.7;color:#475569;">
+              Hello ${safeName},
+            </p>
 
-        <div style="margin:24px 0;padding:20px;border-radius:12px;background:#eff6ff;color:#1d4ed8;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;">
-          ${escapeHtml(
-            verificationCode,
-          )}
+            <p style="margin:12px 0 0;line-height:1.7;color:#475569;">
+              Enter this code on ChapsSmS to finish creating your account.
+            </p>
+
+            <div style="margin:26px 0;padding:22px;border-radius:14px;background:#eff6ff;text-align:center;color:#1d4ed8;font-size:34px;font-weight:800;letter-spacing:9px;">
+              ${safeCode}
+            </div>
+
+            <p style="margin:0;line-height:1.7;color:#475569;">
+              This code expires in 10 minutes.
+            </p>
+
+            <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#94a3b8;">
+              If you did not create this account, you can ignore this email.
+            </p>
+          </div>
         </div>
-
-        <p>This code expires in 10 minutes.</p>
-
-        <p style="color:#6b7280;font-size:13px;">
-          If you did not create this account, ignore this email.
-        </p>
       </div>
     `,
   });
@@ -549,38 +377,25 @@ async function sendPasswordResetEmail({
   firstName,
   code,
 }) {
-  const recipient =
-    String(
-      to || "",
-    )
-      .trim()
-      .toLowerCase();
-
   const resetCode =
     String(
       code || "",
     ).trim();
 
   if (
-    !isValidEmailAddress(
-      recipient,
+    !/^\d{6}$/.test(
+      resetCode,
     )
   ) {
     const error =
       new Error(
-        "A valid password-reset email recipient is required",
+        "A six-digit password-reset code is required",
       );
 
     error.code =
-      "INVALID_EMAIL_RECIPIENT";
+      "INVALID_PASSWORD_RESET_CODE";
 
     throw error;
-  }
-
-  if (!resetCode) {
-    throw new Error(
-      "Password-reset code is required",
-    );
   }
 
   const greetingName =
@@ -589,9 +404,18 @@ async function sendPasswordResetEmail({
       firstName,
     });
 
-  return sendMail({
-    from: EMAIL_FROM,
-    to: recipient,
+  const safeName =
+    escapeHtml(
+      greetingName,
+    );
+
+  const safeCode =
+    escapeHtml(
+      resetCode,
+    );
+
+  return sendEmail({
+    to,
 
     subject:
       "Reset your ChapsSmS password",
@@ -605,39 +429,52 @@ ${resetCode}
 
 This code expires in 10 minutes.
 
-If you did not request a password reset, ignore this email.
+If you did not request a password reset, you can ignore this email.
     `.trim(),
 
     html: `
-      <div style="max-width:560px;margin:0 auto;padding:32px 24px;font-family:Arial,sans-serif;color:#111827;">
-        <h2>Reset your ChapsSmS password</h2>
+      <div style="margin:0;background:#f8fafc;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+        <div style="max-width:560px;margin:0 auto;overflow:hidden;border:1px solid #e2e8f0;border-radius:20px;background:#ffffff;">
+          <div style="background:#2563eb;padding:28px 28px 24px;color:#ffffff;">
+            <div style="font-size:22px;font-weight:800;">ChapsSmS</div>
+            <div style="margin-top:6px;font-size:14px;color:#dbeafe;">
+              Password reset
+            </div>
+          </div>
 
-        <p>Hello ${escapeHtml(
-          greetingName,
-        )},</p>
+          <div style="padding:30px 28px;">
+            <h1 style="margin:0;font-size:24px;line-height:1.25;">
+              Reset your password
+            </h1>
 
-        <p>
-          Use the code below to reset your password.
-        </p>
+            <p style="margin:18px 0 0;line-height:1.7;color:#475569;">
+              Hello ${safeName},
+            </p>
 
-        <div style="margin:24px 0;padding:20px;border-radius:12px;background:#eff6ff;color:#1d4ed8;text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;">
-          ${escapeHtml(
-            resetCode,
-          )}
+            <p style="margin:12px 0 0;line-height:1.7;color:#475569;">
+              Enter this code on ChapsSmS to continue resetting your password.
+            </p>
+
+            <div style="margin:26px 0;padding:22px;border-radius:14px;background:#eff6ff;text-align:center;color:#1d4ed8;font-size:34px;font-weight:800;letter-spacing:9px;">
+              ${safeCode}
+            </div>
+
+            <p style="margin:0;line-height:1.7;color:#475569;">
+              This code expires in 10 minutes.
+            </p>
+
+            <p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#94a3b8;">
+              If you did not request this password reset, you can ignore this email.
+            </p>
+          </div>
         </div>
-
-        <p>This code expires in 10 minutes.</p>
-
-        <p style="color:#6b7280;font-size:13px;">
-          If you did not request this password reset, ignore this email.
-        </p>
       </div>
     `,
   });
 }
 
 module.exports = {
-  verifyEmailTransport,
+  validateEmailConfiguration,
   sendVerificationEmail,
   sendPasswordResetEmail,
 };

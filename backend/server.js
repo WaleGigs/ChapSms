@@ -1,43 +1,130 @@
 require("dotenv").config();
 
-const dns = require("node:dns");
-const mongoose = require("mongoose");
-const app = require("./app");
+const dns =
+  require("node:dns");
+
+const mongoose =
+  require("mongoose");
+
+const app =
+  require("./app");
+
 const {
-  verifyEmailTransport,
-} = require("./services/email.service");
+  validateEmailConfiguration,
+} =
+  require(
+    "./services/email.service",
+  );
 
-/* Prefer IPv4 for provider connections. */
-dns.setDefaultResultOrder("ipv4first");
+/*
+ * Prefer IPv4 for external provider connections.
+ * This no longer affects email delivery because Resend uses HTTPS.
+ */
+dns.setDefaultResultOrder(
+  "ipv4first",
+);
 
-const PORT = Number(process.env.PORT || 5050);
+const PORT =
+  Number(
+    process.env.PORT ||
+      5050,
+  );
+
+const HOST =
+  "0.0.0.0";
+
+const isProduction =
+  process.env.NODE_ENV ===
+  "production";
 
 async function startServer() {
+  const startedAt =
+    Date.now();
+
   try {
-    if (!process.env.MONGO_URI) {
+    if (
+      !process.env.MONGO_URI
+    ) {
       throw new Error(
-        "MONGO_URI is missing from the backend .env file"
+        "MONGO_URI is missing from the backend environment",
       );
     }
 
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log("✅ MongoDB Connected");
-
+    /*
+     * Validate Resend locally. This performs NO network request,
+     * so an unavailable email provider cannot delay server startup.
+     */
     try {
-      await verifyEmailTransport();
+      const emailConfig =
+        validateEmailConfiguration();
+
+      console.log(
+        "✅ Email provider configured:",
+        {
+          provider:
+            emailConfig.provider,
+          from:
+            emailConfig.from,
+        },
+      );
     } catch (emailError) {
+      if (isProduction) {
+        throw emailError;
+      }
+
       console.warn(
-        "⚠️ Email transport verification failed. The API will still start:",
-        emailError.message
+        "⚠️ Email configuration is incomplete. Verification emails will fail until it is configured:",
+        emailError.message,
       );
     }
 
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-    });
+    const mongoStartedAt =
+      Date.now();
+
+    await mongoose.connect(
+      process.env.MONGO_URI,
+    );
+
+    console.log(
+      "✅ MongoDB connected",
+      {
+        durationMs:
+          Date.now() -
+          mongoStartedAt,
+      },
+    );
+
+    app.listen(
+      PORT,
+      HOST,
+      () => {
+        console.log(
+          `🚀 Server running on ${HOST}:${PORT}`,
+        );
+
+        console.log(
+          "✅ API startup complete",
+          {
+            durationMs:
+              Date.now() -
+              startedAt,
+          },
+        );
+      },
+    );
   } catch (error) {
-    console.error("❌ Startup Error:");
-    console.error(error);
+    console.error(
+      "❌ Startup Error:",
+      {
+        name:
+          error?.name,
+        code:
+          error?.code,
+        message:
+          error?.message,
+      },
+    );
+
     process.exit(1);
   }
 }

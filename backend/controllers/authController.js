@@ -1,4 +1,4 @@
-const bcrypt = require("bcryptjs");
+const bcrypt = require("bcrypt");
 const { OAuth2Client } = require("google-auth-library");
 
 const User = require("../models/User");
@@ -671,7 +671,7 @@ exports.resendVerificationCode =
       }
 
       /*
-       * Preserve the currently active code. If SMTP rejects the new email,
+       * Preserve the currently active code. If the email provider rejects the new email,
        * restore this state so the database does not contain a code that the
        * user never received.
        */
@@ -760,7 +760,7 @@ exports.resendVerificationCode =
           accountCreated: true,
           email: user.email,
           message:
-            "The verification email was not accepted by the email server. Check the backend SMTP logs and try Resend Code again.",
+            "The verification email could not be delivered by our email provider. Please try Resend Code again.",
           ...verificationTiming(
             user
           ),
@@ -1115,15 +1115,18 @@ exports.login = async (
       });
     }
 
-    const wallet =
-      await ensureWallet(
-        user._id
-      );
-
     user.lastLogin =
       new Date();
 
-    await user.save();
+    const [
+      wallet,
+    ] =
+      await Promise.all([
+        ensureWallet(
+          user._id
+        ),
+        user.save(),
+      ]);
 
     const token =
       generateToken(user);
@@ -1170,10 +1173,22 @@ exports.getMe = async (
         });
     }
 
-    const user =
-      await User.findById(
-        userId
-      );
+    /*
+     * User and wallet are independent lookups once the JWT user ID is known,
+     * so perform them in parallel to make session restoration faster.
+     */
+    const [
+      user,
+      existingWallet,
+    ] =
+      await Promise.all([
+        User.findById(
+          userId
+        ),
+        Wallet.findOne({
+          user: userId,
+        }),
+      ]);
 
     if (!user) {
       return res
@@ -1195,18 +1210,11 @@ exports.getMe = async (
         });
     }
 
-    let wallet =
-      await Wallet.findOne({
-        user: user._id,
-      });
-
-    if (!wallet) {
-      wallet =
-        await Wallet.create({
-          user: user._id,
-          balance: 0,
-        });
-    }
+    const wallet =
+      existingWallet ||
+      (await ensureWallet(
+        user._id
+      ));
 
     return res.json({
       success: true,
@@ -1319,7 +1327,7 @@ exports.forgotPassword =
             code:
               "EMAIL_DELIVERY_FAILED",
             message:
-              "We could not send the password reset email. Check the SMTP settings and try again.",
+              "We could not send the password reset email. Please try again in a moment.",
           });
       }
 
