@@ -1,209 +1,286 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useState,
+} from "react";
+
 import {
   ArrowRight,
-  Headphones,
   Megaphone,
   MessageCircleMore,
   X,
 } from "lucide-react";
 
-import { useAuth } from "@/context/AuthContext";
+import {
+  LOGIN_ANNOUNCEMENT_KEY,
+  useAuth,
+} from "@/context/AuthContext";
 
-const NOTICE_VERSION = "welcome-notice-v2";
+const NOTICE_DELAY_MS = 500;
 
 export default function WelcomeNoticeModal({
   whatsappChannelUrl =
-    process.env.NEXT_PUBLIC_WHATSAPP_CHANNEL_URL || "",
-  supportUrl = process.env.NEXT_PUBLIC_SUPPORT_URL || "/support",
+    process.env
+      .NEXT_PUBLIC_WHATSAPP_CHANNEL_URL ||
+    "",
 }) {
-  const { user, authLoading } = useAuth();
-  const [open, setOpen] = useState(false);
+  const {
+    user,
+    authLoading,
+  } = useAuth();
 
-  const userIdentifier = useMemo(() => {
-    return String(user?._id || user?.id || user?.email || "member")
-      .trim()
-      .toLowerCase();
-  }, [user]);
-
-  const storageKey = useMemo(
-    () => `chapsms:${NOTICE_VERSION}:${userIdentifier}`,
-    [userIdentifier],
-  );
+  const [open, setOpen] =
+    useState(false);
 
   useEffect(() => {
-    if (authLoading || !user || user?.role === "admin") return undefined;
+    if (
+      authLoading ||
+      !user ||
+      user?.role === "admin"
+    ) {
+      return undefined;
+    }
 
-    let timer;
+    let shouldShow =
+      false;
 
     try {
-      const dismissed = localStorage.getItem(storageKey);
-      if (!dismissed) {
-        timer = window.setTimeout(() => setOpen(true), 350);
+      const pending =
+        window.sessionStorage.getItem(
+          LOGIN_ANNOUNCEMENT_KEY
+        );
+
+      if (pending) {
+        shouldShow = true;
+
+        /*
+         * Consume immediately so route changes/refreshes do not
+         * show this same login announcement twice.
+         */
+        window.sessionStorage.removeItem(
+          LOGIN_ANNOUNCEMENT_KEY
+        );
       }
     } catch {
-      timer = window.setTimeout(() => setOpen(true), 350);
+      /*
+       * No storage = do not repeatedly annoy the user on every
+       * render. The login itself remains unaffected.
+       */
+      shouldShow = false;
     }
 
+    if (!shouldShow) {
+      return undefined;
+    }
+
+    const timer =
+      window.setTimeout(() => {
+        setOpen(true);
+      }, NOTICE_DELAY_MS);
+
     return () => {
-      if (timer) window.clearTimeout(timer);
+      window.clearTimeout(
+        timer
+      );
     };
-  }, [authLoading, storageKey, user]);
+  }, [
+    authLoading,
+    user,
+  ]);
 
   useEffect(() => {
-    if (!open) return undefined;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    function handleKeyDown(event) {
-      if (event.key === "Escape") dismissNotice();
+    if (!open) {
+      return undefined;
     }
 
-    window.addEventListener("keydown", handleKeyDown);
+    const previousOverflow =
+      document.body.style
+        .overflow;
+
+    document.body.style.overflow =
+      "hidden";
+
+    function handleKeyDown(
+      event
+    ) {
+      if (
+        event.key === "Escape"
+      ) {
+        setOpen(false);
+      }
+    }
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
 
     return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
     };
   }, [open]);
 
-  function dismissNotice() {
-    try {
-      localStorage.setItem(storageKey, new Date().toISOString());
-    } catch {
-      // The modal still closes when localStorage is unavailable.
-    }
-
+  function closeNotice() {
     setOpen(false);
   }
 
-  function handleWhatsAppClick(event) {
-    if (!whatsappChannelUrl) {
+  function handleWhatsAppClick(
+    event
+  ) {
+    if (
+      !whatsappChannelUrl
+    ) {
       event.preventDefault();
       return;
     }
 
-    dismissNotice();
+    closeNotice();
   }
 
-  if (!open) return null;
+  if (!open) {
+    return null;
+  }
 
   return (
     <div
-      className="fixed inset-0 z-[250] flex items-center justify-center overflow-y-auto bg-slate-950/70 px-5 py-6 backdrop-blur-sm sm:px-6"
+      className="fixed inset-0 z-[300] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm"
       role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) dismissNotice();
+      onMouseDown={(
+        event
+      ) => {
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          closeNotice();
+        }
       }}
     >
       <section
         role="dialog"
         aria-modal="true"
-        aria-labelledby="welcome-notice-title"
-        aria-describedby="welcome-notice-description"
-        className="relative my-auto max-h-[calc(100dvh-3rem)] w-[min(100%,360px)] overflow-y-auto rounded-[26px] border border-white/10 bg-[var(--card)] shadow-[0_35px_100px_-25px_rgba(15,23,42,0.65)] sm:w-full sm:max-w-[440px] sm:rounded-[30px]"
+        aria-labelledby="login-announcement-title"
+        aria-describedby="login-announcement-description"
+        className="relative my-auto w-full max-w-[430px] overflow-hidden rounded-[30px] border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-[0_35px_100px_-25px_rgba(15,23,42,0.75)]"
       >
         <button
           type="button"
-          onClick={dismissNotice}
-          aria-label="Close platform notice"
-          className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:right-4 sm:top-4 sm:h-10 sm:w-10"
+          onClick={
+            closeNotice
+          }
+          aria-label="Close announcement"
+          className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white backdrop-blur transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         >
-          <X size={19} />
+          <X size={20} />
         </button>
 
-        <div className="relative overflow-hidden bg-gradient-to-br from-blue-950 via-blue-800 to-blue-600 px-5 pb-7 pt-8 text-center text-white sm:px-8 sm:pb-10 sm:pt-12">
-          <div className="pointer-events-none absolute -left-12 -top-12 h-44 w-44 rounded-full bg-cyan-400/20 blur-3xl" />
+        <div className="relative overflow-hidden bg-gradient-to-br from-blue-950 via-blue-800 to-blue-600 px-6 pb-9 pt-11 text-center text-white sm:px-8">
+          <div className="pointer-events-none absolute -left-14 -top-16 h-48 w-48 rounded-full bg-cyan-400/20 blur-3xl" />
+
           <div className="pointer-events-none absolute -bottom-20 -right-10 h-52 w-52 rounded-full bg-indigo-400/30 blur-3xl" />
 
           <div className="relative">
-            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/30 bg-white/10 shadow-xl backdrop-blur sm:h-20 sm:w-20">
-              <Megaphone size={28} className="sm:hidden" />
-              <Megaphone size={34} className="hidden sm:block" />
+            <span className="mx-auto flex h-18 w-18 items-center justify-center rounded-full border border-white/30 bg-white/10 p-5 shadow-xl backdrop-blur">
+              <Megaphone
+                size={32}
+              />
             </span>
 
-            <p className="mt-4 text-[10px] font-black uppercase tracking-[0.26em] text-blue-100 sm:mt-6 sm:text-xs sm:tracking-[0.28em]">
-              Platform notice
+            <p className="mt-5 text-xs font-black uppercase tracking-[0.26em] text-blue-100">
+              ChapsSmS announcement
             </p>
 
             <h2
-              id="welcome-notice-title"
-              className="mx-auto mt-2 max-w-sm text-[28px] font-black leading-tight tracking-tight sm:mt-3 sm:text-[34px]"
+              id="login-announcement-title"
+              className="mx-auto mt-3 max-w-sm text-3xl font-black tracking-tight"
             >
-              Welcome to ChapsSmS
+              Welcome back
             </h2>
           </div>
         </div>
 
-        <div className="px-4 pb-5 pt-5 sm:px-8 sm:pb-8 sm:pt-7">
-          <button
-            type="button"
-            onClick={dismissNotice}
-            className="flex min-h-12 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 text-sm font-black text-white shadow-xl shadow-blue-500/25 transition hover:-translate-y-0.5 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25 active:translate-y-0 sm:min-h-14 sm:text-base"
-          >
-            Got it — let&apos;s go!
-          </button>
-
+        <div className="px-5 pb-6 pt-7 sm:px-8 sm:pb-8">
           <p
-            id="welcome-notice-description"
-            className="mx-auto mt-5 max-w-sm text-center text-sm leading-6 text-[var(--muted-foreground)] sm:mt-8 sm:text-base sm:leading-7"
+            id="login-announcement-description"
+            className="mx-auto max-w-sm text-center text-sm leading-7 text-[var(--muted-foreground)] sm:text-base"
           >
-            Stay informed through our WhatsApp channel for service updates,
-            downtime notices, maintenance information, and new features.
+            Join our official WhatsApp
+            channel to receive service
+            updates, maintenance notices,
+            availability information and
+            important ChapsSmS
+            announcements.
           </p>
 
-          <div className="mt-5 space-y-3 sm:mt-7">
+          <div className="mt-6 space-y-3">
             <a
-              href={whatsappChannelUrl || undefined}
+              href={
+                whatsappChannelUrl ||
+                undefined
+              }
               target="_blank"
               rel="noopener noreferrer"
-              onClick={handleWhatsAppClick}
-              aria-disabled={!whatsappChannelUrl}
-              className={`group flex min-h-[68px] items-center gap-3 rounded-2xl px-3.5 text-white shadow-lg transition sm:min-h-[78px] sm:gap-4 sm:px-5 ${
+              onClick={
+                handleWhatsAppClick
+              }
+              aria-disabled={
+                !whatsappChannelUrl
+              }
+              className={`group flex min-h-[72px] items-center gap-4 rounded-2xl px-4 text-white shadow-lg transition sm:px-5 ${
                 whatsappChannelUrl
                   ? "bg-gradient-to-r from-emerald-600 to-green-500 hover:-translate-y-0.5 hover:shadow-xl"
-                  : "cursor-not-allowed bg-slate-400 opacity-70"
+                  : "cursor-not-allowed bg-slate-500 opacity-60"
               }`}
             >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15 sm:h-12 sm:w-12">
-                <MessageCircleMore size={22} />
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/15">
+                <MessageCircleMore
+                  size={24}
+                />
               </span>
+
               <span className="min-w-0 flex-1 text-left">
-                <span className="block text-sm font-black sm:text-base">
+                <span className="block font-black">
                   Join WhatsApp Channel
                 </span>
-                <span className="mt-0.5 block text-[11px] text-white/80 sm:text-sm">
+
+                <span className="mt-0.5 block text-xs text-white/80 sm:text-sm">
                   Updates and announcements
                 </span>
               </span>
-              <ArrowRight size={18} className="shrink-0" />
+
+              <ArrowRight
+                size={19}
+                className="shrink-0 transition group-hover:translate-x-1"
+              />
             </a>
 
-            <a
-              href={supportUrl}
-              onClick={dismissNotice}
-              className="group flex min-h-[68px] items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--muted)] px-3.5 text-[var(--foreground)] transition hover:border-blue-400 sm:min-h-[78px] sm:gap-4 sm:px-5"
+            <button
+              type="button"
+              onClick={
+                closeNotice
+              }
+              className="flex min-h-12 w-full items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--muted)] px-5 text-sm font-black text-[var(--foreground)] transition hover:opacity-90"
             >
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)] text-[var(--accent-foreground)] sm:h-12 sm:w-12">
-                <Headphones size={22} />
-              </span>
-              <span className="min-w-0 flex-1 text-left">
-                <span className="block text-sm font-black sm:text-base">
-                  Contact Support
-                </span>
-                <span className="mt-0.5 block text-[11px] text-[var(--muted-foreground)] sm:text-sm">
-                  We&apos;re here to help
-                </span>
-              </span>
-              <ArrowRight size={18} className="shrink-0 text-[var(--muted-foreground)]" />
-            </a>
+              Continue to dashboard
+            </button>
           </div>
 
           {!whatsappChannelUrl ? (
             <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-center text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-              Add NEXT_PUBLIC_WHATSAPP_CHANNEL_URL to your frontend environment.
+              Add
+              {" "}
+              NEXT_PUBLIC_WHATSAPP_CHANNEL_URL
+              {" "}
+              to your frontend environment
+              variables to activate the
+              WhatsApp button.
             </p>
           ) : null}
         </div>

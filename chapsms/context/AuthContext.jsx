@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { authService } from "@/services/auth.service";
+
 const AuthContext =
   createContext(null);
 
@@ -19,6 +20,9 @@ const TOKEN_KEYS = [
   "authToken",
   "token",
 ];
+
+export const LOGIN_ANNOUNCEMENT_KEY =
+  "chapsms:show-login-announcement";
 
 function getStoredToken() {
   if (
@@ -98,6 +102,55 @@ function storeToken(
   }
 }
 
+function queueLoginAnnouncement(
+  user
+) {
+  if (
+    typeof window ===
+    "undefined" ||
+    !user ||
+    user?.role === "admin"
+  ) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      LOGIN_ANNOUNCEMENT_KEY,
+      JSON.stringify({
+        createdAt:
+          Date.now(),
+        userId:
+          String(
+            user?._id ||
+              user?.id ||
+              user?.email ||
+              ""
+          ),
+      })
+    );
+  } catch {
+    // The login still succeeds if sessionStorage is unavailable.
+  }
+}
+
+function clearLoginAnnouncement() {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(
+      LOGIN_ANNOUNCEMENT_KEY
+    );
+  } catch {
+    // Ignore storage failures during logout.
+  }
+}
+
 function notifyAuthChanged() {
   if (
     typeof window !==
@@ -158,6 +211,20 @@ export function AuthProvider({
           response?.user || null
         );
 
+        /*
+         * Every explicit successful login queues one WhatsApp
+         * announcement for the customer dashboard.
+         *
+         * This runs for BOTH:
+         * - email/password login
+         * - Google login
+         *
+         * Session restoration after a refresh does NOT queue it.
+         */
+        queueLoginAnnouncement(
+          response?.user
+        );
+
         notifyAuthChanged();
 
         return response;
@@ -168,6 +235,7 @@ export function AuthProvider({
   const logout = useCallback(
     async () => {
       clearStoredTokens();
+      clearLoginAnnouncement();
       setToken("");
       setUser(null);
       notifyAuthChanged();
@@ -244,6 +312,7 @@ export function AuthProvider({
         );
 
         clearStoredTokens();
+        clearLoginAnnouncement();
 
         if (active) {
           setToken("");
