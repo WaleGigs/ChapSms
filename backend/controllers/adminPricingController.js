@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 
+const User = require("../models/User");
+const Wallet = require("../models/Wallet");
 const PricingRule = require("../models/PricingRule");
 const Order = require("../models/Order");
 const providerManager = require(
@@ -503,53 +505,76 @@ exports.getDashboardSummary = async (req, res) => {
       match.server = pricingService.normalizeServer(req.query.server);
     }
 
-    const [result] = await Order.aggregate([
-      { $match: match },
-      {
-        $facet: {
-          totals: [
-            { $match: { refunded: { $ne: true } } },
-            {
-              $group: {
-                _id: null,
-                totalOrders: { $sum: 1 },
-                totalRevenue: {
-                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
+    const [resultRows, totalUsers, walletRows] = await Promise.all([
+      Order.aggregate([
+        { $match: match },
+        {
+          $facet: {
+            totals: [
+              { $match: { refunded: { $ne: true } } },
+              {
+                $group: {
+                  _id: null,
+                  totalOrders: { $sum: 1 },
+                  totalRevenue: {
+                    $sum: { $ifNull: ["$sellingPrice", "$price"] },
+                  },
+                  totalProviderCost: {
+                    $sum: { $ifNull: ["$providerCostNgn", 0] },
+                  },
+                  totalProfit: {
+                    $sum: { $ifNull: ["$profit", 0] },
+                  },
                 },
-                totalProviderCost: {
-                  $sum: { $ifNull: ["$providerCostNgn", 0] },
-                },
-                totalProfit: { $sum: { $ifNull: ["$profit", 0] } },
               },
-            },
-          ],
-          statuses: [
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-              },
-            },
-          ],
-          servers: [
-            { $match: { refunded: { $ne: true } } },
-            {
-              $group: {
-                _id: "$server",
-                orders: { $sum: 1 },
-                revenue: {
-                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
+            ],
+            statuses: [
+              {
+                $group: {
+                  _id: "$status",
+                  count: { $sum: 1 },
                 },
-                providerCost: {
-                  $sum: { $ifNull: ["$providerCostNgn", 0] },
-                },
-                profit: { $sum: { $ifNull: ["$profit", 0] } },
               },
-            },
-          ],
+            ],
+            servers: [
+              { $match: { refunded: { $ne: true } } },
+              {
+                $group: {
+                  _id: "$server",
+                  orders: { $sum: 1 },
+                  revenue: {
+                    $sum: { $ifNull: ["$sellingPrice", "$price"] },
+                  },
+                  providerCost: {
+                    $sum: { $ifNull: ["$providerCostNgn", 0] },
+                  },
+                  profit: {
+                    $sum: { $ifNull: ["$profit", 0] },
+                  },
+                },
+              },
+            ],
+          },
         },
-      },
+      ]),
+
+      User.countDocuments({}),
+
+      // LIVE balance only. Do not include testBalance here.
+      Wallet.aggregate([
+        { $match: { currency: "NGN" } },
+        {
+          $group: {
+            _id: null,
+            usersBalance: {
+              $sum: { $ifNull: ["$balance", 0] },
+            },
+          },
+        },
+      ]),
     ]);
+
+    const result = resultRows?.[0] || {};
 
     const totals = result?.totals?.[0] || {
       totalOrders: 0,
@@ -559,7 +584,7 @@ exports.getDashboardSummary = async (req, res) => {
     };
 
     const statuses = Object.fromEntries(
-      (result?.statuses || []).map((item) => [item._id, item.count])
+      (result?.statuses || []).map((item) => [item._id, item.count]),
     );
 
     const servers = Object.fromEntries(
@@ -571,13 +596,15 @@ exports.getDashboardSummary = async (req, res) => {
           providerCost: item.providerCost,
           profit: item.profit,
         },
-      ])
+      ]),
     );
 
     return res.json({
       success: true,
       summary: {
         ...totals,
+        totalUsers: Number(totalUsers || 0),
+        usersBalance: Number(walletRows?.[0]?.usersBalance || 0),
         waitingOrders: statuses.waiting || 0,
         receivedOrders: statuses.received || 0,
         cancelledOrders: statuses.cancelled || 0,
@@ -597,6 +624,8 @@ exports.getDashboardSummary = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Admin dashboard summary error:", error);
+
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Unable to load dashboard summary",
