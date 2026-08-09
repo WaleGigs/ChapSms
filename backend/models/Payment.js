@@ -83,6 +83,53 @@ const paymentSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+
+    /*
+     * Temporary Flutterwave PWBT details.
+     * These are safe account/payment metadata, not card credentials.
+     */
+    bankTransfer: {
+      transferReference: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      accountNumber: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      bankName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      accountName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      transferNote: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      transferAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      expiresAt: {
+        type: Date,
+        default: null,
+      },
+    },
   },
   {
     timestamps: true,
