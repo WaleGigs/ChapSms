@@ -77,7 +77,7 @@ export default function AdminShell({
           }
         />
 
-        <section className="min-w-0">
+        <section className="min-w-0 pt-16">
           <AdminTopbar
             onMenuClick={() =>
               setSidebarOpen(true)

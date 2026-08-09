@@ -22,7 +22,7 @@ export default function AdminTopbar({ onMenuClick }) {
     }`.toUpperCase() || "A";
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-xl">
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-[var(--border)] bg-[var(--background)]/95 shadow-sm backdrop-blur-xl lg:left-[250px] xl:left-[280px]">
       <div className="mx-auto flex h-16 w-full max-w-[1700px] items-center justify-between gap-3 px-3 min-[375px]:px-4 sm:px-6 lg:px-8 xl:px-10">
         <div className="flex min-w-0 items-center gap-3">
           <button
