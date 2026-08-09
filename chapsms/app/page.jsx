@@ -1,9 +1,9 @@
 import Navbar from "@/components/public/Navbar";
 import Hero from "@/components/public/Hero";
 import Stats from "@/components/home/Stats";
-import AppPurpose from "@/components/home/AppPurpose";
 import PopularServices from "@/components/home/PopularServices";
 import SupportedCountries from "@/components/home/SupportedCountries";
+import AppPurpose from "@/components/home/AppPurpose";
 import ApiPreview from "@/components/home/ApiPreview";
 import Features from "@/components/public/Features";
 import HowItWorks from "@/components/public/HowItWorks";
@@ -15,19 +15,19 @@ export default function Home() {
   return (
     <main
       id="top"
-      className="overflow-x-clip"
+      className="public-mobile-scope min-w-0 overflow-x-clip"
     >
       <Navbar />
       <Hero />
       <Stats />
-      <AppPurpose />
       <PopularServices />
       <SupportedCountries />
+      <AppPurpose />
       <ApiPreview />
       <Features />
       <HowItWorks />
       <FAQ />
-    
+      <CTA />
       <Footer />
     </main>
   );

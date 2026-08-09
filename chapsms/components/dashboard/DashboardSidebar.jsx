@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import ChapsSmsLogo from "@/components/brand/ChapsSmsLogo";
+
 import { useWallet } from "@/hooks/useWallet";
 import { useAuth } from "@/context/AuthContext";
 
@@ -98,12 +98,12 @@ export default function DashboardSidebar({
   }
 
   const SidebarContent = (
-    <div className="flex min-h-full flex-col">
+    <div className="flex min-h-full min-w-0 flex-col">
       <div className="sticky top-0 z-20 -mx-4 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 pb-4 pt-1 min-[375px]:-mx-5 min-[375px]:px-5">
         <Link
           href="/buy-number"
           onClick={handleNavigation}
-          className="text-xl font-black tracking-tight text-[var(--foreground)]"
+          className="text-lg font-black tracking-tight text-[var(--foreground)] min-[390px]:text-xl"
         >
           Chaps<span className="text-blue-600">SmS</span>
         </Link>
@@ -118,13 +118,13 @@ export default function DashboardSidebar({
         </button>
       </div>
 
-      <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-4">
+      <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-3.5 min-[390px]:p-4">
         <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
           Current balance
         </p>
 
         <div className="mt-2 flex min-w-0 items-center justify-between gap-3">
-          <p className="min-w-0 truncate text-xl font-black text-[var(--foreground)] xl:text-2xl">
+          <p className="min-w-0 truncate text-lg font-black tabular-nums text-[var(--foreground)] min-[390px]:text-xl xl:text-2xl">
             {loading ? "..." : formatNaira(wallet?.balance)}
           </p>
 
@@ -224,7 +224,7 @@ export default function DashboardSidebar({
 
   return (
     <>
-      <aside className="sticky top-0 hidden h-screen overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] lg:block">
+      <aside className="sticky top-0 hidden h-dvh overflow-y-auto overscroll-contain border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] lg:block">
         <div className="min-h-full px-5 py-4">{SidebarContent}</div>
       </aside>
 
@@ -247,11 +247,11 @@ export default function DashboardSidebar({
           role="dialog"
           aria-modal="true"
           aria-label="Dashboard navigation"
-          className={`relative h-full w-[86vw] max-w-[320px] overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-2xl transition-transform duration-300 ease-out ${
+          className={`relative h-dvh w-[88vw] max-w-[300px] overflow-y-auto overscroll-contain border-r border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-2xl transition-transform duration-250 ease-out ${
             open ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="min-h-full px-4 py-4 min-[375px]:px-5">
+          <div className="min-h-full px-3.5 py-3 min-[375px]:px-4 min-[390px]:px-5">
             {SidebarContent}
           </div>
         </aside>

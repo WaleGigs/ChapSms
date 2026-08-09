@@ -29,28 +29,28 @@ const secondaryLink =
 
 export default function Hero() {
   return (
-    <section className="relative isolate overflow-hidden border-b border-[var(--border)] bg-[var(--background)] py-16 sm:py-20 lg:py-28">
+    <section className="relative isolate overflow-hidden border-b border-[var(--border)] bg-[var(--background)] py-10 min-[390px]:py-12 sm:py-20 lg:py-28">
       <div className="surface-grid pointer-events-none absolute inset-0 -z-20 opacity-65" />
       <div className="animate-pulse-soft pointer-events-none absolute -left-24 top-16 -z-10 h-72 w-72 rounded-full bg-blue-500/20 blur-3xl sm:h-96 sm:w-96" />
       <div className="animate-pulse-soft animation-delay-300 pointer-events-none absolute -right-32 bottom-0 -z-10 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl sm:h-96 sm:w-96" />
 
-      <div className="site-container grid items-center gap-12 lg:grid-cols-[minmax(0,1.02fr)_minmax(420px,0.98fr)] lg:gap-16">
+      <div className="site-container grid min-w-0 items-center gap-8 sm:gap-12 lg:grid-cols-[minmax(0,1.02fr)_minmax(420px,0.98fr)] lg:gap-16">
         <div className="animate-fade-up text-center lg:text-left">
           <Badge className="gap-2">
             <Sparkles size={14} />
             Modern SMS verification platform
           </Badge>
 
-          <h1 className="text-balance mt-6 text-[clamp(2.7rem,8vw,5.35rem)] font-black leading-[0.98] tracking-[-0.045em] text-[var(--foreground)]">
+          <h1 className="text-balance mt-5 text-[clamp(2rem,10vw,5.35rem)] font-black leading-[1.02] tracking-[-0.04em] text-[var(--foreground)] sm:mt-6 sm:leading-[0.98] sm:tracking-[-0.045em]">
             Receive verification codes with less friction.
           </h1>
 
-          <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-[var(--muted-foreground)] sm:text-lg sm:leading-8 lg:mx-0 lg:max-w-xl">
+          <p className="mx-auto mt-4 max-w-2xl text-[15px] leading-6 text-[var(--muted-foreground)] min-[390px]:text-base min-[390px]:leading-7 sm:mt-6 sm:text-lg sm:leading-8 lg:mx-0 lg:max-w-xl">
             Buy virtual numbers, receive OTP messages, manage wallet activity,
             and automate workflows through one clean ChapsSmS dashboard.
           </p>
 
-          <div className="relative z-30 mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap lg:justify-start">
+          <div className="relative z-30 mt-6 flex flex-col justify-center gap-2.5 min-[390px]:gap-3 sm:mt-8 sm:flex-row sm:flex-wrap lg:justify-start">
             <a
               href="/signup"
               className={primaryLink}
@@ -60,14 +60,14 @@ export default function Hero() {
             </a>
 
             <a
-              href="#how-it-works"
+              href="/login"
               className={secondaryLink}
             >
-              See how it works
+              Login
             </a>
           </div>
 
-          <div className="mt-9 grid gap-3 text-left sm:grid-cols-2">
+          <div className="mt-7 grid gap-2.5 text-left min-[390px]:gap-3 sm:mt-9 sm:grid-cols-2">
             {benefits.map((item) => {
               const Icon = item.icon;
 

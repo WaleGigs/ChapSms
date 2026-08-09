@@ -672,7 +672,7 @@ export default function WalletPage() {
       "expired";
 
     return (
-      <div className="mx-auto w-full max-w-xl">
+      <div className="mx-auto w-full min-w-0 max-w-xl">
         <button
           type="button"
           onClick={resetBankTransfer}
@@ -685,7 +685,7 @@ export default function WalletPage() {
         </button>
 
         <section className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
-          <div className="px-5 pb-6 pt-8 text-center sm:px-8">
+          <div className="px-4 pb-5 pt-6 text-center min-[390px]:px-5 sm:px-8 sm:pb-6 sm:pt-8">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
               {successful ? (
                 <Check
@@ -698,7 +698,7 @@ export default function WalletPage() {
               )}
             </div>
 
-            <h1 className="mt-6 text-2xl font-black tracking-tight text-[var(--foreground)]">
+            <h1 className="mt-5 text-xl font-black tracking-tight text-[var(--foreground)] min-[390px]:text-2xl">
               {successful
                 ? "Payment received"
                 : expired
@@ -715,7 +715,7 @@ export default function WalletPage() {
             </p>
           </div>
 
-          <div className="border-t border-[var(--border)] px-5 py-6 sm:px-8">
+          <div className="border-t border-[var(--border)] px-4 py-5 min-[390px]:px-5 sm:px-8 sm:py-6">
             <div className="divide-y divide-[var(--border)] rounded-2xl bg-[var(--muted)] px-4">
               <TransferRow
                 label="Bank"
@@ -854,7 +854,7 @@ export default function WalletPage() {
 
       <div className="mx-auto w-full max-w-5xl">
         <div className="mb-7">
-          <h1 className="text-3xl font-black tracking-tight text-[var(--foreground)]">
+          <h1 className="text-2xl font-black tracking-tight text-[var(--foreground)] sm:text-3xl">
             Add{" "}
             <span className="text-blue-600">
               Funds
@@ -866,13 +866,13 @@ export default function WalletPage() {
           </p>
         </div>
 
-        <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-8">
+        <section className="rounded-[22px] border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm min-[390px]:rounded-3xl min-[390px]:p-5 sm:p-8">
           <div className="text-center">
             <p className="text-xs font-bold uppercase tracking-[0.28em] text-[var(--muted-foreground)]">
               Amount to add
             </p>
 
-            <p className="mt-5 text-5xl font-black tracking-tight text-[var(--foreground)]">
+            <p className="mt-4 text-3xl font-black tracking-tight text-[var(--foreground)] min-[390px]:text-4xl sm:mt-5 sm:text-5xl">
               {numericAmount >
               0
                 ? formatNaira(
@@ -886,7 +886,7 @@ export default function WalletPage() {
             onSubmit={
               handleFundWallet
             }
-            className="mt-8"
+            className="mt-6 sm:mt-8"
           >
             <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
               {presetAmounts.map(
@@ -952,12 +952,12 @@ export default function WalletPage() {
                     )
                   }
                   placeholder="Enter amount"
-                  className="h-16 w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 text-2xl font-black text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20"
+                  className="h-14 w-full rounded-2xl border border-[var(--border)] bg-[var(--card)] pl-10 pr-4 text-base font-black text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 sm:h-16 sm:text-2xl"
                 />
               </div>
             </div>
 
-            <p className="mt-8 text-center text-[10px] font-bold uppercase tracking-[0.28em] text-[var(--muted-foreground)] sm:text-xs">
+            <p className="mt-6 text-center text-[9px] font-bold uppercase tracking-[0.22em] text-[var(--muted-foreground)] min-[390px]:text-[10px] sm:mt-8 sm:text-xs sm:tracking-[0.28em]">
               Pay with any option below
             </p>
 
@@ -1005,7 +1005,7 @@ export default function WalletPage() {
               </button>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1.5">
+            <div className="mt-4 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1 sm:mt-5 sm:p-1.5">
               <button
                 type="button"
                 onClick={() =>
@@ -1059,7 +1059,7 @@ export default function WalletPage() {
                   !scriptReady
                 )
               }
-              className="mt-7 h-14 w-full"
+              className="mt-6 h-12 w-full sm:mt-7 sm:h-14"
             >
               {busy ? (
                 <LoaderCircle
@@ -1107,7 +1107,7 @@ export default function WalletPage() {
           </form>
         </section>
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        <div className="mt-4 grid gap-3 sm:mt-5 sm:grid-cols-3 sm:gap-4">
           {[
             {
               icon: Zap,
@@ -1142,7 +1142,7 @@ export default function WalletPage() {
                   key={
                     item.title
                   }
-                  className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm"
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:p-5"
                 >
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--accent)] text-[var(--accent-foreground)]">
                     <Icon
@@ -1167,7 +1167,7 @@ export default function WalletPage() {
           )}
         </div>
 
-        <div className="mt-5 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 text-center shadow-sm">
+        <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 text-center shadow-sm sm:mt-5 sm:p-5">
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
             Current wallet balance
           </p>
@@ -1194,7 +1194,7 @@ function TransferRow({
         {label}
       </span>
 
-      <span className="min-w-0 flex-1 break-words text-right text-sm font-black text-[var(--foreground)] sm:text-base">
+      <span data-mobile-wrap="true" className="min-w-0 flex-1 break-all text-right text-[13px] font-black leading-5 text-[var(--foreground)] min-[390px]:break-words min-[390px]:text-sm sm:text-base">
         {value || "—"}
       </span>
 

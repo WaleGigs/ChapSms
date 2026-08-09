@@ -115,12 +115,12 @@ export default function Navbar() {
   return (
     <header
       ref={headerRef}
-      className="sticky top-0 z-[100] border-b border-[var(--border)] bg-white shadow-sm dark:bg-slate-950"
+      className="sticky top-0 z-[100] w-full max-w-full border-b border-[var(--border)] bg-white/95 shadow-sm backdrop-blur-xl dark:bg-slate-950/95"
     >
-      <nav className="site-container flex h-16 items-center justify-between gap-3 sm:h-[72px]">
+      <nav className="site-container flex h-[60px] min-w-0 items-center justify-between gap-2 min-[390px]:gap-3 sm:h-[72px]">
         <a
           href="/"
-          className="focus-ring rounded-lg text-xl font-black tracking-tight text-[var(--foreground)] sm:text-2xl"
+          className="focus-ring shrink-0 rounded-lg text-[17px] font-black tracking-tight text-[var(--foreground)] min-[390px]:text-lg sm:text-2xl"
           aria-label="ChapsSmS homepage"
         >
           Chaps
@@ -141,7 +141,7 @@ export default function Navbar() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 min-[390px]:gap-2 sm:gap-3">
           <ThemeToggle />
 
           {!authLoading && user ? (
@@ -199,7 +199,7 @@ export default function Navbar() {
       {menuOpen ? (
         <div
           id="mobile-navigation"
-          className="absolute inset-x-0 top-full z-[110] max-h-[calc(100dvh-4rem)] overflow-y-auto border-b border-[var(--border)] bg-white shadow-2xl dark:bg-slate-950 sm:max-h-[calc(100dvh-72px)] lg:hidden"
+          className="absolute inset-x-0 top-full z-[110] max-h-[calc(100dvh-60px)] overflow-y-auto border-b border-[var(--border)] bg-white shadow-2xl dark:bg-slate-950 sm:max-h-[calc(100dvh-72px)] lg:hidden"
         >
           <div className="site-container py-5">
             <div className="grid gap-1">
