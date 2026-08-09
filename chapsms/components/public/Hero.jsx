@@ -51,20 +51,22 @@ export default function Hero() {
           </p>
 
           <div className="relative z-30 mt-6 flex flex-col justify-center gap-2.5 min-[390px]:gap-3 sm:mt-8 sm:flex-row sm:flex-wrap lg:justify-start">
-            <a
+              <a
               href="/signup"
               className={primaryLink}
             >
-              Create free account
+             Get started
               <ArrowRight size={18} />
             </a>
-
-            <a
+  <a
               href="/login"
               className={secondaryLink}
             >
-              Login
+             Buy numbers now
             </a>
+          
+
+          
           </div>
 
           <div className="mt-7 grid gap-2.5 text-left min-[390px]:gap-3 sm:mt-9 sm:grid-cols-2">

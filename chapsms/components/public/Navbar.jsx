@@ -1,20 +1,9 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  ArrowRight,
-  Menu,
-  X,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 import ThemeToggle from "@/components/ui/ThemeToggle";
-import {
-  useAuth,
-} from "@/context/AuthContext";
+import { useAuth } from "@/context/AuthContext";
 
 const links = [
   { href: "#services", label: "Services" },
@@ -24,88 +13,11 @@ const links = [
   { href: "#faq", label: "FAQ" },
 ];
 
-const smallPrimary =
-  "focus-ring inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 active:scale-[0.98]";
-
-const mobilePrimary =
-  "focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.98]";
-
-const mobileSecondary =
-  "focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-5 py-3 text-base font-semibold text-[var(--foreground)] shadow-sm transition hover:bg-[var(--muted)] active:scale-[0.98]";
+const primaryAction =
+  "focus-ring inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-[13px] font-bold text-white shadow-sm shadow-blue-600/20 transition hover:bg-blue-700 active:scale-[0.98] min-[390px]:px-4 min-[390px]:text-sm";
 
 export default function Navbar() {
-  const {
-    user,
-    authLoading,
-  } = useAuth();
-
-  const headerRef =
-    useRef(null);
-
-  const [
-    menuOpen,
-    setMenuOpen,
-  ] = useState(false);
-
-  function closeMenu() {
-    setMenuOpen(false);
-  }
-
-  useEffect(() => {
-    function handleKeyDown(event) {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
-    }
-
-    function handleResize() {
-      if (window.innerWidth >= 1024) {
-        closeMenu();
-      }
-    }
-
-    function handlePointerDown(event) {
-      if (
-        menuOpen &&
-        headerRef.current &&
-        !headerRef.current.contains(event.target)
-      ) {
-        closeMenu();
-      }
-    }
-
-    window.addEventListener(
-      "keydown",
-      handleKeyDown,
-    );
-
-    window.addEventListener(
-      "resize",
-      handleResize,
-    );
-
-    document.addEventListener(
-      "pointerdown",
-      handlePointerDown,
-    );
-
-    return () => {
-      window.removeEventListener(
-        "keydown",
-        handleKeyDown,
-      );
-
-      window.removeEventListener(
-        "resize",
-        handleResize,
-      );
-
-      document.removeEventListener(
-        "pointerdown",
-        handlePointerDown,
-      );
-    };
-  }, [menuOpen]);
+  const { user, authLoading } = useAuth();
 
   const dashboardHref =
     user?.role === "admin"
@@ -113,14 +25,11 @@ export default function Navbar() {
       : "/buy-number";
 
   return (
-    <header
-      ref={headerRef}
-      className="sticky top-0 z-[100] w-full max-w-full border-b border-[var(--border)] bg-white/95 shadow-sm backdrop-blur-xl dark:bg-slate-950/95"
-    >
+    <header className="sticky top-0 z-[100] w-full max-w-full border-b border-[var(--border)] bg-white/95 shadow-sm backdrop-blur-xl dark:bg-slate-950/95">
       <nav className="site-container flex h-[60px] min-w-0 items-center justify-between gap-2 min-[390px]:gap-3 sm:h-[72px]">
         <a
           href="/"
-          className="focus-ring shrink-0 rounded-lg text-[17px] font-black tracking-tight text-[var(--foreground)] min-[390px]:text-lg sm:text-2xl"
+          className="focus-ring min-w-0 shrink rounded-lg text-[17px] font-black tracking-tight text-[var(--foreground)] min-[390px]:text-lg sm:shrink-0 sm:text-2xl"
           aria-label="ChapsSmS homepage"
         >
           Chaps
@@ -147,104 +56,31 @@ export default function Navbar() {
           {!authLoading && user ? (
             <a
               href={dashboardHref}
-              className={`${smallPrimary} hidden sm:inline-flex`}
+              className={primaryAction}
             >
-              Open dashboard
-              <ArrowRight size={16} />
+              <span className="sm:hidden">
+                Dashboard
+              </span>
+
+              <span className="hidden sm:inline">
+                Open dashboard
+              </span>
+
+              <ArrowRight
+                size={15}
+                className="hidden min-[390px]:block"
+              />
             </a>
-          ) : (
-            <>
-              <a
-                href="/login"
-                className="focus-ring hidden rounded-lg px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] sm:block"
-              >
-                Login
-              </a>
-
-              <a
-                href="/signup"
-                className={`${smallPrimary} hidden sm:inline-flex`}
-              >
-                Get started
-              </a>
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={() =>
-              setMenuOpen(
-                (current) =>
-                  !current,
-              )
-            }
-            aria-label={
-              menuOpen
-                ? "Close navigation menu"
-                : "Open navigation menu"
-            }
-            aria-expanded={menuOpen}
-            aria-controls="mobile-navigation"
-            className="focus-ring flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-sm transition hover:bg-[var(--muted)] lg:hidden"
-          >
-            {menuOpen ? (
-              <X size={20} />
-            ) : (
-              <Menu size={20} />
-            )}
-          </button>
+          ) : !authLoading ? (
+            <a
+              href="/login"
+              className={primaryAction}
+            >
+              Sign in
+            </a>
+          ) : null}
         </div>
       </nav>
-
-      {menuOpen ? (
-        <div
-          id="mobile-navigation"
-          className="absolute inset-x-0 top-full z-[110] max-h-[calc(100dvh-60px)] overflow-y-auto border-b border-[var(--border)] bg-white shadow-2xl dark:bg-slate-950 sm:max-h-[calc(100dvh-72px)] lg:hidden"
-        >
-          <div className="site-container py-5">
-            <div className="grid gap-1">
-              {links.map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  onClick={closeMenu}
-                  className="focus-ring flex min-h-12 items-center rounded-xl px-4 py-3 text-base font-semibold text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-                >
-                  {link.label}
-                </a>
-              ))}
-            </div>
-
-            <div className="mt-5 border-t border-[var(--border)] pt-5">
-              {!authLoading && user ? (
-                <a
-                  href={dashboardHref}
-                  className={mobilePrimary}
-                >
-                  Open dashboard
-                  <ArrowRight size={16} />
-                </a>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <a
-                    href="/signup"
-                    className={mobilePrimary}
-                  >
-                    Create free account
-                  </a>
-
-                  <a
-                    href="/login"
-                    className={mobileSecondary}
-                  >
-                    Login
-                  </a>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </header>
   );
 }

@@ -18,10 +18,7 @@ const services = [
   { name: "Telegram", icon: Send },
   { name: "TikTok", icon: Music2 },
   { name: "Discord", icon: Gamepad2 },
-  { name: "Google", icon: Mail },
-  { name: "Amazon", icon: ShoppingBag },
-  { name: "Netflix", icon: Video },
-  { name: "Facebook", icon: Users },
+  
 ];
 
 const routeLink =
