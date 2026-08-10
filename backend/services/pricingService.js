@@ -394,12 +394,22 @@ async function resolveEffectiveOperator({
       )
     : "any";
 }
-
-function createDefaultRule({ server, country, service, operator }) {
+function createDefaultRule({
+  server,
+  country,
+  service,
+  operator,
+}) {
   const markupPercent = finiteNonNegative(
     process.env.PRICE_MARKUP_PERCENT,
     0
   );
+
+  const defaultMinimumSellingPrice =
+    finiteNonNegative(
+      process.env.DEFAULT_MINIMUM_SELLING_PRICE,
+      1000
+    );
 
   return {
     _id: null,
@@ -411,7 +421,8 @@ function createDefaultRule({ server, country, service, operator }) {
     fixedSellingPrice: 0,
     markupPercent,
     fixedMarkup: 0,
-    minimumSellingPrice: 0,
+    minimumSellingPrice:
+      defaultMinimumSellingPrice,
     isActive: true,
     source: "environment_default",
   };
