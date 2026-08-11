@@ -2,340 +2,268 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const GOOGLE_SCRIPT_ID = "google-gsi-script";
+const GOOGLE_GSI_SRC = "https://accounts.google.com/gsi/client";
 
-function loadGoogleScript() {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") {
-      reject(
-        new Error(
-          "Google authentication is only available in the browser."
-        )
-      );
-      return;
-    }
+function getGoogleClientId() {
+  return String(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "").trim();
+}
 
-    if (window.google?.accounts?.id) {
-      resolve(window.google);
-      return;
-    }
+function loadGoogleIdentityServices() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Google sign-in can only run in the browser."));
+  }
 
-    const existingScript = document.getElementById(GOOGLE_SCRIPT_ID);
+  if (window.google?.accounts?.id) {
+    return Promise.resolve(window.google);
+  }
+
+  if (window.__chapsSmsGsiScriptPromise) {
+    return window.__chapsSmsGsiScriptPromise;
+  }
+
+  window.__chapsSmsGsiScriptPromise = new Promise((resolve, reject) => {
+    const existingScript = document.querySelector(
+      `script[src="${GOOGLE_GSI_SRC}"]`
+    );
+
+    const finish = () => {
+      if (window.google?.accounts?.id) {
+        resolve(window.google);
+        return;
+      }
+
+      reject(new Error("Google sign-in loaded, but the Google Identity API is unavailable."));
+    };
 
     if (existingScript) {
-      existingScript.addEventListener("load", () => {
+      if (window.google?.accounts?.id) {
         resolve(window.google);
-      });
+        return;
+      }
 
-      existingScript.addEventListener("error", () => {
-        reject(
-          new Error("Unable to load Google authentication.")
-        );
-      });
-
+      existingScript.addEventListener("load", finish, { once: true });
+      existingScript.addEventListener(
+        "error",
+        () => reject(new Error("Unable to load Google sign-in.")),
+        { once: true }
+      );
       return;
     }
 
     const script = document.createElement("script");
-
-    script.id = GOOGLE_SCRIPT_ID;
-    script.src = "https://accounts.google.com/gsi/client";
+    script.src = GOOGLE_GSI_SRC;
     script.async = true;
     script.defer = true;
-
-    script.onload = () => resolve(window.google);
-
-    script.onerror = () => {
-      reject(
-        new Error("Unable to load Google authentication.")
-      );
-    };
-
+    script.onload = finish;
+    script.onerror = () => reject(new Error("Unable to load Google sign-in."));
     document.head.appendChild(script);
+  }).catch((error) => {
+    delete window.__chapsSmsGsiScriptPromise;
+    throw error;
   });
+
+  return window.__chapsSmsGsiScriptPromise;
+}
+
+function normalizeButtonText(value) {
+  const allowed = new Set([
+    "signin_with",
+    "signup_with",
+    "continue_with",
+    "signin",
+  ]);
+
+  const normalized = String(value || "continue_with").trim();
+  return allowed.has(normalized) ? normalized : "continue_with";
+}
+
+function getButtonWidth(element) {
+  const parentWidth =
+    element?.parentElement?.getBoundingClientRect?.().width ||
+    element?.getBoundingClientRect?.().width ||
+    320;
+
+  return Math.max(200, Math.min(400, Math.floor(parentWidth)));
 }
 
 export default function GoogleAuthButton({
   onCredential,
   disabled = false,
-  textx = "Continue with Google",
+  text = "continue_with",
+  className = "",
 }) {
-  const initializedRef = useRef(false);
+  const buttonContainerRef = useRef(null);
+  const onCredentialRef = useRef(onCredential);
 
+  const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
-  const [isDark, setIsDark] = useState(false);
 
-  /*
-   * Detect ChapsSmS theme
-   */
   useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
+    onCredentialRef.current = onCredential;
+
+    if (typeof window !== "undefined") {
+      window.__chapsSmsGoogleCredentialHandler = onCredential;
     }
+  }, [onCredential]);
 
-    const updateTheme = () => {
-      const html = document.documentElement;
-
-      const dark =
-        html.getAttribute("data-theme") === "dark" ||
-        html.classList.contains("dark");
-
-      setIsDark(dark);
-    };
-
-    updateTheme();
-
-    const observer = new MutationObserver(updateTheme);
-
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme", "class"],
-    });
-
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
-
-  /*
-   * Load Google Identity Services
-   */
   useEffect(() => {
     let cancelled = false;
+    let resizeObserver = null;
+    let resizeTimer = null;
 
-    loadGoogleScript()
-      .then(() => {
+    const clientId = getGoogleClientId();
+
+    if (!clientId) {
+      setError(
+        "Google sign-in is not configured. Add NEXT_PUBLIC_GOOGLE_CLIENT_ID to the frontend environment."
+      );
+      setReady(false);
+      return undefined;
+    }
+
+    async function setupGoogleButton() {
+      try {
+        setError("");
+        setReady(false);
+
+        await loadGoogleIdentityServices();
+
+        if (cancelled || !buttonContainerRef.current) {
+          return;
+        }
+
+        const googleId = window.google?.accounts?.id;
+
+        if (!googleId) {
+          throw new Error("Google Identity Services is unavailable.");
+        }
+
+        /*
+         * Google recommends initialize() only once per page. In Next.js dev,
+         * React Strict Mode / HMR can mount effects more than once, so keep the
+         * initialized client ID on window and reuse it instead of reinitializing.
+         */
+        if (window.__chapsSmsGoogleInitializedClientId !== clientId) {
+          googleId.initialize({
+            client_id: clientId,
+            callback: (response) => {
+              const credential = String(response?.credential || "").trim();
+
+              if (!credential) {
+                console.error("Google sign-in returned no credential.");
+                return;
+              }
+
+              const handler =
+                window.__chapsSmsGoogleCredentialHandler ||
+                onCredentialRef.current;
+
+              if (typeof handler !== "function") {
+                console.error("Google sign-in credential handler is missing.");
+                return;
+              }
+
+              Promise.resolve(handler(credential, response)).catch((handlerError) => {
+                console.error("Google authentication callback failed:", handlerError);
+              });
+            },
+            ux_mode: "popup",
+            auto_select: false,
+            use_fedcm_for_button: true,
+          });
+
+          window.__chapsSmsGoogleInitializedClientId = clientId;
+        }
+
+        const render = () => {
+          const target = buttonContainerRef.current;
+
+          if (!target || cancelled) {
+            return;
+          }
+
+          target.innerHTML = "";
+
+          googleId.renderButton(target, {
+            type: "standard",
+            theme: "outline",
+            size: "large",
+            text: normalizeButtonText(text),
+            shape: "rectangular",
+            logo_alignment: "left",
+            width: getButtonWidth(target),
+          });
+
+          setReady(true);
+        };
+
+        render();
+
+        if (typeof ResizeObserver !== "undefined") {
+          resizeObserver = new ResizeObserver(() => {
+            window.clearTimeout(resizeTimer);
+            resizeTimer = window.setTimeout(render, 100);
+          });
+
+          if (buttonContainerRef.current.parentElement) {
+            resizeObserver.observe(buttonContainerRef.current.parentElement);
+          }
+        }
+
+        /*
+         * Deliberately DO NOT call google.accounts.id.prompt() here.
+         * This component is the explicit "Continue with Google" button, not One Tap.
+         * Avoiding prompt() also avoids FedCM prompt moment/status handling that is
+         * unnecessary for a user-clicked button.
+         */
+      } catch (setupError) {
         if (cancelled) {
           return;
         }
 
-        setReady(true);
-      })
-      .catch((error) => {
-        console.error("Google Auth:", error);
-      });
+        console.error("Google sign-in setup failed:", setupError);
+        setReady(false);
+        setError(
+          setupError?.message ||
+            "Google sign-in could not be loaded. Please refresh and try again."
+        );
+      }
+    }
+
+    setupGoogleButton();
 
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
+      window.clearTimeout(resizeTimer);
     };
-  }, []);
-
-  /*
-   * Initialize Google authentication
-   */
-  useEffect(() => {
-    if (!ready || typeof window === "undefined") {
-      return;
-    }
-
-    if (!window.google?.accounts?.id) {
-      return;
-    }
-
-    const clientId =
-      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-
-    if (!clientId) {
-      console.error(
-        "NEXT_PUBLIC_GOOGLE_CLIENT_ID is missing."
-      );
-      return;
-    }
-
-    /*
-     * Only initialize once.
-     */
-    if (initializedRef.current) {
-      return;
-    }
-
-    window.google.accounts.id.initialize({
-      client_id: clientId,
-
-      callback: (response) => {
-        if (disabled) {
-          return;
-        }
-
-        if (!response?.credential) {
-          return;
-        }
-
-        onCredential?.(response.credential);
-      },
-
-      auto_select: false,
-
-      cancel_on_tap_outside: true,
-    });
-
-    initializedRef.current = true;
-  }, [ready, disabled, onCredential]);
-
-  /*
-   * Trigger Google authentication
-   */
-  const handleGoogleLogin = () => {
-    if (disabled || !ready) {
-      return;
-    }
-
-    if (!window.google?.accounts?.id) {
-      console.error(
-        "Google authentication is not ready."
-      );
-      return;
-    }
-
-    /*
-     * Open Google's authentication flow.
-     */
-    window.google.accounts.id.prompt((notification) => {
-      if (
-        notification?.isNotDisplayed?.() ||
-        notification?.isSkippedMoment?.()
-      ) {
-        console.warn(
-          "Google authentication prompt was not displayed."
-        );
-      }
-    });
-  };
-
-  /*
-   * ChapsSmS UI colors
-   *
-   * These are deliberately matched to the
-   * login card rather than Google's default
-   * black button.
-   */
-  const buttonStyles = isDark
-    ? {
-        background:
-          "rgba(30, 41, 59, 0.72)",
-        border:
-          "1px solid rgba(71, 85, 105, 0.55)",
-        color: "#f8fafc",
-        hoverBackground:
-          "rgba(51, 65, 85, 0.82)",
-      }
-    : {
-        background: "#ffffff",
-        border:
-          "1px solid #d1d5db",
-        color: "#111827",
-        hoverBackground:
-          "#f8fafc",
-      };
-
-  if (!ready) {
-    return (
-      <div className="w-full">
-        <div
-          className="
-            h-12
-            w-full
-            animate-pulse
-            rounded-xl
-            border
-            border-[var(--border)]
-            bg-[var(--muted)]
-          "
-        />
-      </div>
-    );
-  }
+  }, [text]);
 
   return (
-    <div className="w-full">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={handleGoogleLogin}
-        className="
-          group
-          relative
-          flex
-          h-12
-          w-full
-          items-center
-          justify-center
-          gap-3
-          overflow-hidden
-          rounded-xl
-          font-medium
-          text-sm
-          transition-all
-          duration-200
-          ease-out
-          active:scale-[0.99]
-          disabled:cursor-not-allowed
-          disabled:opacity-50
-        "
-        style={{
-          background: buttonStyles.background,
-          border: buttonStyles.border,
-          color: buttonStyles.color,
-          boxShadow: isDark
-            ? "0 1px 2px rgba(0,0,0,0.12)"
-            : "0 1px 2px rgba(0,0,0,0.04)",
-        }}
-        onMouseEnter={(event) => {
-          if (!disabled) {
-            event.currentTarget.style.background =
-              buttonStyles.hoverBackground;
-          }
-        }}
-        onMouseLeave={(event) => {
-          if (!disabled) {
-            event.currentTarget.style.background =
-              buttonStyles.background;
-          }
-        }}
-        aria-label={textx}
+    <div className={className}>
+      <div
+        className={`relative w-full overflow-hidden rounded-md ${
+          disabled ? "pointer-events-none opacity-60" : ""
+        }`}
+        aria-disabled={disabled ? "true" : "false"}
       >
-        {/* Google logo */}
-        <span
-          className="
-            flex
-            h-7
-            w-7
-            shrink-0
-            items-center
-            justify-center
-            rounded-md
-            bg-white
-          "
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path
-              fill="#4285F4"
-              d="M21.35 12.23c0-.71-.06-1.39-.18-2.05H12v3.88h5.22a4.46 4.46 0 0 1-1.94 2.93v2.43h3.14c1.84-1.69 2.93-4.18 2.93-7.19Z"
-            />
-            <path
-              fill="#34A853"
-              d="M12 21.8c2.63 0 4.84-.87 6.45-2.38l-3.14-2.43c-.87.58-1.98.92-3.31.92-2.54 0-4.7-1.72-5.47-4.03H3.28v2.51A9.74 9.74 0 0 0 12 21.8Z"
-            />
-            <path
-              fill="#FBBC05"
-              d="M6.53 13.88a5.85 5.85 0 0 1 0-3.76V7.61H3.28a9.8 9.8 0 0 0 0 8.78l3.25-2.51Z"
-            />
-            <path
-              fill="#EA4335"
-              d="M12 6.09c1.43 0 2.72.49 3.73 1.45l2.8-2.8C16.84 3.17 14.63 2.2 12 2.2a9.74 9.74 0 0 0-8.72 5.41l3.25 2.51C6.3 7.81 8.46 6.09 12 6.09Z"
-            />
-          </svg>
-        </span>
+        {!ready && !error ? (
+          <div className="flex h-11 w-full items-center justify-center rounded-md border border-[var(--border)] bg-[var(--background)] px-4 text-sm font-semibold text-[var(--muted-foreground)]">
+            Loading Google sign-in...
+          </div>
+        ) : null}
 
-        <span className="truncate">
-          {textx}
-        </span>
-      </button>
+        <div
+          ref={buttonContainerRef}
+          className={ready ? "flex w-full justify-center" : "hidden"}
+        />
+      </div>
+
+      {error ? (
+        <p className="mt-2 text-center text-xs font-medium text-red-600" role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }

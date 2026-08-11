@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import toast from "react-hot-toast";
 import {
   CheckCircle2,
@@ -19,7 +18,6 @@ import {
 import { useCatalog } from "@/hooks/useCatalog";
 import { useOrders } from "@/hooks/useOrders";
 import { useWallet } from "@/hooks/useWallet";
-import { useAuth } from "@/context/AuthContext";
 import { catalogService } from "@/services/catalogService";
 import { orderService } from "@/services/orderService";
 
@@ -66,39 +64,74 @@ function getOrderId(order) {
   return order?._id || order?.id || "";
 }
 
-function readWalletBalance(walletState, user) {
-  const candidates = [
-    walletState?.balance,
-    walletState?.walletBalance,
-    walletState?.wallet?.balance,
-    walletState?.wallet,
-    walletState?.data?.balance,
-    walletState?.data?.wallet,
-    user?.wallet,
-    user?.walletBalance,
-  ];
 
-  for (const candidate of candidates) {
-    const value = Number(candidate);
+function getChapsSmsMessage(
+  value,
+  fallback = "ChapsSms could not complete this request. Please try again."
+) {
+  const code = String(
+    typeof value === "object"
+      ? value?.code || value?.response?.data?.code || ""
+      : ""
+  )
+    .trim()
+    .toUpperCase();
 
-    if (Number.isFinite(value)) {
-      return value;
-    }
+  const messages = {
+    NO_PRICE:
+      "ChapsSms does not currently have a live price for this selection. Try another server or service.",
+    NO_NUMBERS:
+      "ChapsSms does not currently have numbers available for this selection. Try another server or service.",
+    NO_STOCK:
+      "ChapsSms does not currently have numbers available for this selection.",
+    INVALID_COUNTRY:
+      "This country is not currently available on ChapsSms.",
+    INVALID_SERVICE:
+      "This service is not currently available on ChapsSms.",
+    INVALID_PRICE:
+      "ChapsSms could not retrieve a valid live price right now. Please try again.",
+    INVALID_PRICE_RESPONSE:
+      "ChapsSms could not retrieve a live price right now. Please try again.",
+    INSUFFICIENT_WALLET_BALANCE:
+      "Your ChapsSms wallet balance is too low for this purchase.",
+    UNSAFE_PAYMENT_CONFIGURATION:
+      "Number purchasing is temporarily unavailable on ChapsSms.",
+    CATALOG_LOAD_FAILED:
+      "ChapsSms could not load the available countries and services. Please try again.",
+    PRICE_LOOKUP_FAILED:
+      "ChapsSms could not retrieve a live price right now. Please try again.",
+    ORDER_CREATION_FAILED:
+      "ChapsSms could not purchase this number right now.",
+    ORDER_CANCELLATION_FAILED:
+      "ChapsSms could not cancel this order right now.",
+  };
+
+  if (messages[code]) {
+    return messages[code];
   }
 
-  return 0;
+  const message = String(
+    typeof value === "string"
+      ? value
+      : value?.message || value?.response?.data?.message || ""
+  ).trim();
+
+  // Only trust customer-facing messages that have already been branded
+  // by the ChapsSms backend. Everything else is replaced with the fallback.
+  if (/chapssms/i.test(message)) {
+    return message;
+  }
+
+  return fallback;
 }
 
 export default function BuyNumberPage() {
   const { createOrder } = useOrders();
-  const { user } = useAuth();
-
-  const walletState = useWallet();
 
   const {
     updateWalletBalance,
     refreshWallet,
-  } = walletState;
+  } = useWallet();
 
   const [selectedServer, setSelectedServer] = useState("server1");
 
@@ -165,17 +198,6 @@ export default function BuyNumberPage() {
 
   const estimatedPrice = Number(livePrice || 0);
 
-  const walletBalance =
-    readWalletBalance(
-      walletState,
-      user
-    );
-
-  const hasEnoughWalletBalance =
-    Number.isFinite(estimatedPrice) &&
-    estimatedPrice > 0 &&
-    walletBalance >= estimatedPrice;
-
   const serviceStock =
     liveStock === null || liveStock === undefined
       ? null
@@ -229,29 +251,6 @@ export default function BuyNumberPage() {
     },
     [clearActiveOrder, saveActiveOrder]
   );
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadWallet() {
-      try {
-        await refreshWallet();
-      } catch (error) {
-        if (active) {
-          console.error(
-            "Wallet refresh failed:",
-            error
-          );
-        }
-      }
-    }
-
-    loadWallet();
-
-    return () => {
-      active = false;
-    };
-  }, [refreshWallet]);
 
   useEffect(() => {
     if (!selectedCountryCode) {
@@ -347,7 +346,10 @@ export default function BuyNumberPage() {
         setLivePrice(null);
         setLiveStock(null);
         setPriceError(
-          error.message || "Unable to retrieve live price"
+          getChapsSmsMessage(
+            error,
+            "ChapsSms could not retrieve a live price right now. Try another server or try again."
+          )
         );
       } finally {
         if (!cancelled) {
@@ -420,7 +422,10 @@ export default function BuyNumberPage() {
 
         if (showToast) {
           toast.error(
-            error.message || "Could not refresh order"
+            getChapsSmsMessage(
+              error,
+              "ChapsSms could not refresh the order right now."
+            )
           );
         }
 
@@ -507,17 +512,6 @@ export default function BuyNumberPage() {
       return;
     }
 
-    if (!hasEnoughWalletBalance) {
-      toast.error(
-        `Insufficient wallet balance. You need ${formatNaira(
-          estimatedPrice
-        )} but your ChapsSmS wallet has ${formatNaira(
-          walletBalance
-        )}.`
-      );
-      return;
-    }
-
     try {
       setPurchasing(true);
 
@@ -565,24 +559,11 @@ export default function BuyNumberPage() {
     } catch (error) {
       console.error("Purchase failed:", error);
 
-      const errorCode =
-        error?.code ||
-        error?.data?.code;
-
-      if (
-        errorCode ===
-        "INSUFFICIENT_WALLET_BALANCE"
-      ) {
-        try {
-          await refreshWallet();
-        } catch {
-          // Keep the original purchase error.
-        }
-      }
-
       toast.error(
-        error.message ||
-          "Unable to purchase this number"
+        getChapsSmsMessage(
+          error,
+          "ChapsSms could not purchase this number right now."
+        )
       );
     } finally {
       setPurchasing(false);
@@ -618,7 +599,7 @@ async function handleCancel() {
 
   const confirmed =
     window.confirm(
-      "Cancel this order? A refund will only be issued if the provider confirms the cancellation."
+      "Cancel this order? A refund will only be issued after ChapsSms confirms the cancellation."
     );
 
   if (!confirmed) return;
@@ -659,10 +640,12 @@ async function handleCancel() {
     await refreshWallet();
 
     toast.success(
-      response.message ||
-        (response.refunded
+      getChapsSmsMessage(
+        response.message,
+        response.refunded
           ? "Order cancelled and wallet refunded"
-          : "Order cancelled")
+          : "Order cancelled"
+      )
     );
   } catch (error) {
     console.error(
@@ -682,8 +665,10 @@ async function handleCancel() {
     }
 
     toast.error(
-      error.message ||
-        "Unable to cancel order"
+      getChapsSmsMessage(
+        error,
+        "ChapsSms could not cancel this order right now."
+      )
     );
   } finally {
     setCancellingOrder(false);
@@ -926,7 +911,10 @@ async function handleCancel() {
             {catalogError && !countries.length && (
               <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
                 <p className="text-sm font-semibold text-red-700 dark:text-red-300">
-                  {catalogError}
+                  {getChapsSmsMessage(
+                    catalogError,
+                    "ChapsSms could not load the available countries and services. Please try again."
+                  )}
                 </p>
 
                 <button
@@ -998,17 +986,6 @@ async function handleCancel() {
                         {priceError}
                       </p>
                     )}
-
-                    <p
-                      className={`mt-2 text-xs font-bold ${
-                        hasEnoughWalletBalance ||
-                        estimatedPrice <= 0
-                          ? "text-[var(--muted-foreground)]"
-                          : "text-red-600 dark:text-red-400"
-                      }`}
-                    >
-                      Wallet: {formatNaira(walletBalance)}
-                    </p>
                   </div>
 
                   <div className="min-w-0 text-left min-[420px]:text-right">
@@ -1036,28 +1013,6 @@ async function handleCancel() {
                   </div>
                 </div>
 
-                {selectedService &&
-                  estimatedPrice > 0 &&
-                  !hasEnoughWalletBalance && (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/30">
-                      <p className="font-bold text-amber-800 dark:text-amber-300">
-                        Fund your wallet before buying this number.
-                      </p>
-
-                      <p className="mt-1 text-amber-700 dark:text-amber-400">
-                        Required: {formatNaira(estimatedPrice)} · Available:{" "}
-                        {formatNaira(walletBalance)}
-                      </p>
-
-                      <Link
-                        href="/wallet"
-                        className="mt-3 inline-flex font-black text-blue-600 hover:text-blue-700"
-                      >
-                        Fund wallet
-                      </Link>
-                    </div>
-                  )}
-
                 <Button
                   type="button"
                   onClick={handlePurchase}
@@ -1066,8 +1021,7 @@ async function handleCancel() {
                     catalogLoading ||
                     priceLoading ||
                     !selectedCountry ||
-                    !serviceIsAvailable ||
-                    !hasEnoughWalletBalance
+                    !serviceIsAvailable
                   }
                   className="h-12 w-full"
                 >
@@ -1086,12 +1040,6 @@ async function handleCancel() {
                         size={18}
                       />
                       Checking price...
-                    </>
-                  ) : !hasEnoughWalletBalance &&
-                    estimatedPrice > 0 ? (
-                    <>
-                      <Phone size={18} />
-                      Fund Wallet First
                     </>
                   ) : (
                     <>
@@ -1366,7 +1314,7 @@ async function handleCancel() {
                     initialSeconds={1200}
                     onExpire={() => {
                       toast.error(
-                        "The local countdown ended. Refreshing the provider status."
+                        "The local countdown ended. Refreshing the ChapsSms status."
                       );
 
                       checkCurrentOrder({
