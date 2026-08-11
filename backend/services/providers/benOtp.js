@@ -104,14 +104,15 @@ function normalizeBenOtpCountry(country) {
 }
 
 
-function getConfiguredBenOtpPools() {
-  return String(process.env.BENOTP_POOLS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
 
-function resolveBenOtpPool(pool, operator) {
+const POOL_CACHE_TTL_MS = Math.max(
+  1000,
+  Number(process.env.BENOTP_POOL_CACHE_TTL_MS || 15000)
+);
+
+const poolSelectionCache = new Map();
+
+function normalizePreferredPool(pool, operator) {
   const explicitPool = String(pool || "").trim();
 
   if (explicitPool) {
@@ -130,8 +131,73 @@ function resolveBenOtpPool(pool, operator) {
     return operatorValue;
   }
 
-  return getConfiguredBenOtpPools()[0] || "";
+  return "";
 }
+
+function getPoolCacheKey(country, service, preferredPool = "") {
+  return [
+    String(country || "").trim().toUpperCase(),
+    String(service || "").trim().toLowerCase(),
+    String(preferredPool || "").trim(),
+  ].join("::");
+}
+
+function getCachedPool(country, service, preferredPool = "") {
+  const key = getPoolCacheKey(
+    country,
+    service,
+    preferredPool
+  );
+
+  const cached = poolSelectionCache.get(key);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (
+    Date.now() - cached.cachedAt >
+    POOL_CACHE_TTL_MS
+  ) {
+    poolSelectionCache.delete(key);
+    return null;
+  }
+
+  return cached.pool || null;
+}
+
+function cachePool(
+  country,
+  service,
+  preferredPool,
+  pool
+) {
+  const key = getPoolCacheKey(
+    country,
+    service,
+    preferredPool
+  );
+
+  poolSelectionCache.set(key, {
+    cachedAt: Date.now(),
+    pool,
+  });
+}
+
+function clearCachedPool(
+  country,
+  service,
+  preferredPool = ""
+) {
+  poolSelectionCache.delete(
+    getPoolCacheKey(
+      country,
+      service,
+      preferredPool
+    )
+  );
+}
+
 
 function looksLikeHtmlResponse(contentType, responseText) {
   /*
@@ -283,6 +349,23 @@ function classifyProviderError(responseText) {
       retryable: false,
       rawResponse: value,
     });
+  }
+
+  if (
+    upper.includes("BAD_POOL") ||
+    upper.includes("INVALID_POOL") ||
+    upper.includes("POOL_NOT_FOUND") ||
+    upper.includes("POOL_UNAVAILABLE")
+  ) {
+    return createProviderError(
+      "The selected BenOTP pool is unavailable",
+      {
+        status: 409,
+        code: "POOL_UNAVAILABLE",
+        retryable: true,
+        rawResponse: value,
+      }
+    );
   }
 
   if (upper.startsWith("ERROR")) {
@@ -895,6 +978,394 @@ async function getCountries() {
   return countries;
 }
 
+
+function parsePoolsResponse(
+  value,
+  responseText
+) {
+  const parsed = parseJsonResponse(
+    value,
+    responseText,
+    "pools"
+  );
+
+  if (
+    !parsed ||
+    typeof parsed !== "object"
+  ) {
+    throw createProviderError(
+      "BenOTP returned an invalid pools response",
+      {
+        code: "INVALID_POOLS_RESPONSE",
+        retryable: true,
+        rawResponse: responseText,
+      }
+    );
+  }
+
+  if (parsed.success === false) {
+    const message = String(
+      parsed.message ||
+      parsed.error ||
+      "Pool lookup failed"
+    ).trim();
+
+    throw createProviderError(
+      message,
+      {
+        status: 409,
+        code: "NO_NUMBERS",
+        retryable: true,
+        rawResponse: responseText,
+      }
+    );
+  }
+
+  const rawPools =
+    parsed.available_pools ??
+    parsed.availablePools ??
+    parsed.pools ??
+    parsed.data?.available_pools ??
+    parsed.data?.availablePools ??
+    parsed.data?.pools ??
+    [];
+
+  const values = Array.isArray(rawPools)
+    ? rawPools
+    : rawPools &&
+      typeof rawPools === "object"
+    ? Object.values(rawPools)
+    : [];
+
+  return values
+    .map((item) => {
+      if (
+        !item ||
+        typeof item !== "object"
+      ) {
+        return null;
+      }
+
+      const id = String(
+        item.pool_id ??
+        item.poolId ??
+        item.id ??
+        item.pool ??
+        ""
+      ).trim();
+
+      if (!id) {
+        return null;
+      }
+
+      const price = Number(
+        item.price ??
+        item.final_price ??
+        item.original_price
+      );
+
+      const stock = Number(
+        item.stock ??
+        item.count ??
+        item.quantity ??
+        0
+      );
+
+      const availableValue =
+        item.available;
+
+      const available =
+        availableValue === undefined ||
+        availableValue === null
+          ? Number.isFinite(stock)
+            ? stock > 0
+            : true
+          : availableValue === true ||
+            String(availableValue)
+              .trim()
+              .toLowerCase() === "true" ||
+            String(availableValue).trim() === "1";
+
+      return {
+        id,
+        poolId: id,
+        operator: id,
+        providerId: id,
+        name: String(
+          item.pool_name ??
+          item.poolName ??
+          item.name ??
+          `Pool ${id}`
+        ).trim(),
+        price:
+          Number.isFinite(price) &&
+          price > 0
+            ? price
+            : null,
+        stock:
+          Number.isFinite(stock)
+            ? stock
+            : 0,
+        available,
+        raw: item,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function getPools({
+  country,
+  service,
+} = {}) {
+  const normalizedService =
+    normalizeRequired(
+      service,
+      "Service"
+    );
+
+  const normalizedCountry =
+    normalizeBenOtpCountry(
+      country
+    );
+
+  const response = await request(
+    {
+      action: "getPools",
+      country: normalizedCountry,
+      service: normalizedService,
+    },
+    {
+      retryable: true,
+    }
+  );
+
+  const pools =
+    parsePoolsResponse(
+      response.data,
+      response.text
+    );
+
+  return {
+    provider: PROVIDER_NAME,
+    country: normalizedCountry,
+    service: normalizedService,
+    pools,
+    raw: response.data,
+  };
+}
+
+function chooseBestPool(
+  pools,
+  preferredPool = ""
+) {
+  const availablePools =
+    (Array.isArray(pools)
+      ? pools
+      : []
+    ).filter(
+      (pool) =>
+        pool &&
+        pool.available !== false &&
+        Number(pool.stock || 0) > 0
+    );
+
+  if (preferredPool) {
+    const exact = availablePools.find(
+      (pool) =>
+        String(pool.id) ===
+        String(preferredPool)
+    );
+
+    if (!exact) {
+      throw createProviderError(
+        "The selected BenOTP pool is not available for this country and service",
+        {
+          status: 409,
+          code: "POOL_UNAVAILABLE",
+          retryable: true,
+        }
+      );
+    }
+
+    return exact;
+  }
+
+  if (!availablePools.length) {
+    throw createProviderError(
+      "No BenOTP numbers are currently available for this country and service",
+      {
+        status: 409,
+        code: "NO_NUMBERS",
+        retryable: true,
+      }
+    );
+  }
+
+  /*
+   * Automatic selection:
+   * 1. Prefer the pool with the most stock.
+   * 2. If stock is equal, prefer the lower price.
+   *
+   * The selected pool is cached briefly so providerManager's
+   * pre-purchase getPrice() and the following getNumber()
+   * are very likely to use the same pool.
+   */
+  return [...availablePools].sort(
+    (first, second) => {
+      const stockDifference =
+        Number(second.stock || 0) -
+        Number(first.stock || 0);
+
+      if (stockDifference !== 0) {
+        return stockDifference;
+      }
+
+      const firstPrice =
+        Number.isFinite(
+          Number(first.price)
+        )
+          ? Number(first.price)
+          : Number.POSITIVE_INFINITY;
+
+      const secondPrice =
+        Number.isFinite(
+          Number(second.price)
+        )
+          ? Number(second.price)
+          : Number.POSITIVE_INFINITY;
+
+      return firstPrice - secondPrice;
+    }
+  )[0];
+}
+
+async function resolvePoolForSelection({
+  country,
+  service,
+  pool,
+  operator,
+  refresh = false,
+}) {
+  const normalizedService =
+    normalizeRequired(
+      service,
+      "Service"
+    );
+
+  const normalizedCountry =
+    normalizeBenOtpCountry(
+      country
+    );
+
+  const preferredPool =
+    normalizePreferredPool(
+      pool,
+      operator
+    );
+
+  if (!refresh) {
+    const cached =
+      getCachedPool(
+        normalizedCountry,
+        normalizedService,
+        preferredPool
+      );
+
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const poolResponse =
+    await getPools({
+      country: normalizedCountry,
+      service: normalizedService,
+    });
+
+  const selected =
+    chooseBestPool(
+      poolResponse.pools,
+      preferredPool
+    );
+
+  cachePool(
+    normalizedCountry,
+    normalizedService,
+    preferredPool,
+    selected
+  );
+
+  if (
+    process.env.NODE_ENV !==
+    "production"
+  ) {
+    console.log(
+      "[BenOTP] selected pool:",
+      {
+        country:
+          normalizedCountry,
+        service:
+          normalizedService,
+        requestedPool:
+          preferredPool || "auto",
+        selectedPool:
+          selected.id,
+        poolName:
+          selected.name,
+        stock:
+          selected.stock,
+        poolPrice:
+          selected.price,
+      }
+    );
+  }
+
+  return selected;
+}
+
+async function getOperators({
+  country,
+  service,
+} = {}) {
+  const result =
+    await getPools({
+      country,
+      service,
+    });
+
+  const operators =
+    result.pools
+      .filter(
+        (pool) =>
+          pool.available !== false &&
+          Number(pool.stock || 0) > 0
+      )
+      .map((pool) => ({
+        id: pool.id,
+        operator: pool.id,
+        providerId: pool.id,
+        name: pool.name,
+        price: pool.price,
+        cost: pool.price,
+        stock: pool.stock,
+        count: pool.stock,
+        currency:
+          process.env.BENOTP_CURRENCY ||
+          "NGN",
+      }));
+
+  return {
+    provider: PROVIDER_NAME,
+    country: result.country,
+    service: result.service,
+    currency:
+      process.env.BENOTP_CURRENCY ||
+      "NGN",
+    operators,
+    raw: result.raw,
+  };
+}
+
 async function getPrice({
   service,
   country,
@@ -903,37 +1374,150 @@ async function getPrice({
   operator,
 }) {
   const normalizedService =
-    normalizeRequired(service, "Service");
+    normalizeRequired(
+      service,
+      "Service"
+    );
 
   const normalizedCountry =
-    normalizeBenOtpCountry(country);
+    normalizeBenOtpCountry(
+      country
+    );
 
-  const resolvedPool =
-    resolveBenOtpPool(pool, operator);
+  const preferredPool =
+    normalizePreferredPool(
+      pool,
+      operator
+    );
 
-  const response = await request(
-    {
-      action: "getPrice",
-      service: normalizedService,
+  let selectedPool =
+    await resolvePoolForSelection({
       country: normalizedCountry,
-      ...(areaCode
-        ? { areacode: String(areaCode).trim() }
-        : {}),
-      ...(resolvedPool
-        ? { pool: resolvedPool }
-        : {}),
-    },
-    {
-      retryable: true,
-    }
-  );
+      service: normalizedService,
+      pool,
+      operator,
+    });
 
-  return {
-    provider: PROVIDER_NAME,
-    service: normalizedService,
-    country: normalizedCountry,
-    ...parsePrice(response.text),
-  };
+  try {
+    const response =
+      await request(
+        {
+          action: "getPrice",
+          service:
+            normalizedService,
+          country:
+            normalizedCountry,
+          ...(areaCode
+            ? {
+                areacode:
+                  String(
+                    areaCode
+                  ).trim(),
+              }
+            : {}),
+          pool:
+            selectedPool.id,
+        },
+        {
+          retryable: true,
+        }
+      );
+
+    return {
+      provider:
+        PROVIDER_NAME,
+      service:
+        normalizedService,
+      country:
+        normalizedCountry,
+      operator:
+        selectedPool.id,
+      pool:
+        selectedPool.id,
+      poolName:
+        selectedPool.name,
+      ...parsePrice(
+        response.text
+      ),
+    };
+  } catch (error) {
+    /*
+     * Stock/pool availability can change after getPools.
+     * For quote requests it is safe to refresh once and try
+     * a newly selected pool. Number purchases are NOT retried.
+     */
+    if (
+      !preferredPool &&
+      (
+        error?.code ===
+          "NO_NUMBERS" ||
+        error?.code ===
+          "POOL_UNAVAILABLE"
+      )
+    ) {
+      clearCachedPool(
+        normalizedCountry,
+        normalizedService,
+        preferredPool
+      );
+
+      selectedPool =
+        await resolvePoolForSelection({
+          country:
+            normalizedCountry,
+          service:
+            normalizedService,
+          pool,
+          operator,
+          refresh: true,
+        });
+
+      const response =
+        await request(
+          {
+            action:
+              "getPrice",
+            service:
+              normalizedService,
+            country:
+              normalizedCountry,
+            ...(areaCode
+              ? {
+                  areacode:
+                    String(
+                      areaCode
+                    ).trim(),
+                }
+              : {}),
+            pool:
+              selectedPool.id,
+          },
+          {
+            retryable: true,
+          }
+        );
+
+      return {
+        provider:
+          PROVIDER_NAME,
+        service:
+          normalizedService,
+        country:
+          normalizedCountry,
+        operator:
+          selectedPool.id,
+        pool:
+          selectedPool.id,
+        poolName:
+          selectedPool.name,
+        ...parsePrice(
+          response.text
+        ),
+      };
+    }
+
+    throw error;
+  }
 }
 
 async function buyNumber({
@@ -944,10 +1528,13 @@ async function buyNumber({
   pool,
   operator,
 }) {
-  const normalizedQuantity = Number(quantity);
+  const normalizedQuantity =
+    Number(quantity);
 
   if (
-    !Number.isInteger(normalizedQuantity) ||
+    !Number.isInteger(
+      normalizedQuantity
+    ) ||
     normalizedQuantity < 1 ||
     normalizedQuantity > 10
   ) {
@@ -955,49 +1542,131 @@ async function buyNumber({
       "BenOTP quantity must be an integer between 1 and 10",
       {
         status: 400,
-        code: "INVALID_QUANTITY",
+        code:
+          "INVALID_QUANTITY",
         retryable: false,
       }
     );
   }
 
   const normalizedService =
-    normalizeRequired(service, "Service");
+    normalizeRequired(
+      service,
+      "Service"
+    );
 
   const normalizedCountry =
-    normalizeBenOtpCountry(country);
+    normalizeBenOtpCountry(
+      country
+    );
 
-  const resolvedPool =
-    resolveBenOtpPool(pool, operator);
+  const preferredPool =
+    normalizePreferredPool(
+      pool,
+      operator
+    );
 
-  const response = await request(
-    {
-      action: "getNumber",
-      service: normalizedService,
-      country: normalizedCountry,
-      quantity: normalizedQuantity,
-      ...(areaCode
-        ? { areacode: String(areaCode).trim() }
-        : {}),
-      ...(resolvedPool
-        ? { pool: resolvedPool }
-        : {}),
-    },
-    {
-      // Never retry a purchase automatically. The upstream service may
-      // already have created and charged the activation.
-      retryable: false,
+  const selectedPool =
+    await resolvePoolForSelection({
+      country:
+        normalizedCountry,
+      service:
+        normalizedService,
+      pool,
+      operator,
+    });
+
+  try {
+    const response =
+      await request(
+        {
+          action:
+            "getNumber",
+          service:
+            normalizedService,
+          country:
+            normalizedCountry,
+          quantity:
+            normalizedQuantity,
+          ...(areaCode
+            ? {
+                areacode:
+                  String(
+                    areaCode
+                  ).trim(),
+              }
+            : {}),
+          pool:
+            selectedPool.id,
+        },
+        {
+          /*
+           * A number purchase is a mutation. Never automatically retry
+           * an uncertain purchase because BenOTP may already have
+           * created and charged the activation.
+           */
+          retryable: false,
+        }
+      );
+
+    const bulkResult =
+      parseBulkNumbers(
+        response.text
+      );
+
+    const purchase =
+      bulkResult ||
+      parseSingleNumber(
+        response.text
+      );
+
+    /*
+     * Do not keep the pool cached after a purchase.
+     * Stock changed, so the next quote should refresh soon.
+     */
+    clearCachedPool(
+      normalizedCountry,
+      normalizedService,
+      preferredPool
+    );
+
+    if (bulkResult) {
+      return {
+        ...purchase,
+        operator:
+          selectedPool.id,
+        pool:
+          selectedPool.id,
+        poolName:
+          selectedPool.name,
+      };
     }
-  );
 
-  const bulkResult =
-    parseBulkNumbers(response.text);
+    return {
+      ...purchase,
+      operator:
+        selectedPool.id,
+      pool:
+        selectedPool.id,
+      poolName:
+        selectedPool.name,
+    };
+  } catch (error) {
+    if (
+      error?.code ===
+        "NO_NUMBERS" ||
+      error?.code ===
+        "POOL_UNAVAILABLE"
+    ) {
+      clearCachedPool(
+        normalizedCountry,
+        normalizedService,
+        preferredPool
+      );
+    }
 
-  if (bulkResult) {
-    return bulkResult;
+    throw error;
   }
-
-  return parseSingleNumber(response.text);
 }
 
 async function getOrder(orderId) {
@@ -1104,6 +1773,8 @@ module.exports = {
   getBalance,
   getServices,
   getCountries,
+  getPools,
+  getOperators,
   getPrice,
   buyNumber,
   getOrder,
