@@ -34,12 +34,85 @@ function normalizeServer(value) {
 }
 
 function extractProviderError(error) {
-  return (
+  const code = String(error?.code || "").trim().toUpperCase();
+
+  const messages = {
+    NO_PRICE:
+      "ChapsSms does not currently have a live price for this selection.",
+    NO_NUMBERS:
+      "ChapsSms does not currently have a number available for this selection.",
+    NO_STOCK:
+      "ChapsSms does not currently have a number available for this selection.",
+    INVALID_COUNTRY:
+      "This country is not currently supported on ChapsSms.",
+    INVALID_SERVICE:
+      "This service is not currently supported on ChapsSms.",
+    PROVIDER_BALANCE_LOW:
+      "ChapsSms service is temporarily unavailable. Please try another server.",
+    INVALID_API_KEY:
+      "ChapsSms service is temporarily unavailable. Please try again later.",
+    INVALID_PRICE:
+      "ChapsSms could not retrieve a valid price right now.",
+    INVALID_PRICE_RESPONSE:
+      "ChapsSms could not retrieve a live price right now.",
+    INVALID_UPSTREAM_RESPONSE:
+      "ChapsSms received an invalid response from the SMS service. Please try again.",
+    EMPTY_RESPONSE:
+      "ChapsSms could not complete the request right now.",
+    PROVIDER_ERROR:
+      "ChapsSms could not complete the request right now.",
+    BENOTP_REQUEST_FAILED:
+      "ChapsSms could not connect to the SMS service right now.",
+    SMSBOWER_REQUEST_FAILED:
+      "ChapsSms could not connect to the SMS service right now.",
+    INVALID_PURCHASE_RESPONSE:
+      "ChapsSms could not complete the number purchase. Please try again.",
+  };
+
+  if (messages[code]) {
+    return messages[code];
+  }
+
+  const rawMessage = String(
     error?.message ||
-    error?.response?.data?.message ||
-    error?.response?.data?.error ||
-    "Provider request failed"
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      ""
   );
+
+  if (/benotp|ben otp|smsbower|sms bower/i.test(rawMessage)) {
+    return "ChapsSms could not complete this request. Please try again.";
+  }
+
+  return rawMessage || "ChapsSms could not complete this request. Please try again.";
+}
+
+function getPublicOrderErrorCode(
+  error,
+  fallback = "CHAPSSMS_ORDER_FAILED"
+) {
+  const code = String(error?.code || "").trim().toUpperCase();
+
+  const safeCodes = new Set([
+    "INSUFFICIENT_WALLET_BALANCE",
+    "UNSAFE_PAYMENT_CONFIGURATION",
+    "INVALID_ENVIRONMENT_MODE",
+    "INVALID_SERVER",
+    "NO_PRICE",
+    "NO_NUMBERS",
+    "NO_STOCK",
+    "INVALID_COUNTRY",
+    "INVALID_SERVICE",
+    "INVALID_PRICE",
+    "OPERATION_NOT_SUPPORTED",
+    "ORDER_NOT_FOUND",
+  ]);
+
+  if (safeCodes.has(code)) {
+    return code;
+  }
+
+  return fallback;
 }
 
 function sanitizeOrder(order) {
@@ -472,7 +545,7 @@ exports.createOrder =
               "MOCK_SMS_PROVIDER_NOT_CONFIGURED",
 
             message:
-              "Test number purchasing is disabled because a mock SMS provider is not configured. Test wallet funds cannot be used with SMSBower or BenOTP.",
+              "Test number purchasing is disabled on ChapsSms because a mock SMS service is not configured. Test wallet funds cannot be used for live number purchases.",
           });
       }
 
@@ -493,7 +566,7 @@ exports.createOrder =
               "UNSAFE_PAYMENT_CONFIGURATION",
 
             message:
-              "Number purchasing is disabled because Flutterwave is in test mode while the SMS providers are live. Switch both systems to live before accepting real purchases.",
+              "Number purchasing is temporarily disabled on ChapsSms because payment testing is still enabled. Switch the payment and SMS systems to live before accepting real purchases.",
           });
       }
 
@@ -1216,8 +1289,10 @@ exports.createOrder =
           success: false,
 
           code:
-            error.code ||
-            "ORDER_CREATION_FAILED",
+            getPublicOrderErrorCode(
+              error,
+              "ORDER_CREATION_FAILED",
+            ),
 
           message:
             extractProviderError(
@@ -1847,8 +1922,10 @@ exports.cancelOrder =
           success: false,
 
           code:
-            error.code ||
-            "ORDER_CANCELLATION_FAILED",
+            getPublicOrderErrorCode(
+              error,
+              "ORDER_CANCELLATION_FAILED",
+            ),
 
           message:
             extractProviderError(

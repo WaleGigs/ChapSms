@@ -33,6 +33,88 @@ function createCatalogError(
   return error;
 }
 
+
+function getPublicChapsSmsMessage(
+  error,
+  fallback = "ChapsSms could not complete this request. Please try again."
+) {
+  const code = String(error?.code || "").trim().toUpperCase();
+
+  const messages = {
+    NO_PRICE:
+      "ChapsSms does not currently have a live price for this country and service. Try another server or service.",
+    NO_NUMBERS:
+      "ChapsSms does not currently have numbers available for this selection. Try another server or service.",
+    NO_STOCK:
+      "ChapsSms does not currently have numbers available for this selection.",
+    INVALID_COUNTRY:
+      "This country is not currently available on ChapsSms.",
+    INVALID_SERVICE:
+      "This service is not currently available on ChapsSms.",
+    INVALID_PRICE:
+      "ChapsSms could not retrieve a valid live price right now. Please try again.",
+    INVALID_PRICE_RESPONSE:
+      "ChapsSms could not retrieve a live price right now. Please try again.",
+    INVALID_UPSTREAM_RESPONSE:
+      "ChapsSms could not retrieve a live response right now. Please try again.",
+    EMPTY_RESPONSE:
+      "ChapsSms could not retrieve a live response right now. Please try again.",
+    PROVIDER_ERROR:
+      "ChapsSms service is temporarily unavailable. Please try again shortly.",
+    PROVIDER_BALANCE_LOW:
+      "ChapsSms service is temporarily unavailable. Please try another server.",
+    INVALID_API_KEY:
+      "ChapsSms service is temporarily unavailable. Please try again later.",
+    BENOTP_REQUEST_FAILED:
+      "ChapsSms could not connect to the SMS service. Please try again.",
+    SMSBOWER_REQUEST_FAILED:
+      "ChapsSms could not connect to the SMS service. Please try again.",
+  };
+
+  if (messages[code]) {
+    return messages[code];
+  }
+
+  const rawMessage = String(
+    error?.message ||
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      ""
+  );
+
+  if (/benotp|ben otp|smsbower|sms bower/i.test(rawMessage)) {
+    return fallback;
+  }
+
+  return fallback;
+}
+
+function getPublicChapsSmsCode(
+  error,
+  fallback = "CHAPSSMS_REQUEST_FAILED"
+) {
+  const code = String(error?.code || "").trim().toUpperCase();
+
+  const safeCodes = new Set([
+    "INVALID_SERVER",
+    "NO_PRICE",
+    "NO_NUMBERS",
+    "NO_STOCK",
+    "INVALID_COUNTRY",
+    "INVALID_SERVICE",
+    "INVALID_PRICE",
+    "INVALID_PRICE_RESPONSE",
+    "EMPTY_RESPONSE",
+    "OPERATION_NOT_SUPPORTED",
+  ]);
+
+  if (safeCodes.has(code)) {
+    return code;
+  }
+
+  return fallback;
+}
+
 function normalizeServer(value) {
   const server = String(value || "").trim().toLowerCase();
 
@@ -316,8 +398,14 @@ exports.getCatalog = async (req, res) => {
 
     return res.status(Number(error.status) || 500).json({
       success: false,
-      message: error.message || "Unable to load catalog",
-      code: error.code || "CATALOG_LOAD_FAILED",
+      message: getPublicChapsSmsMessage(
+        error,
+        "ChapsSms could not load the available countries and services. Please try again."
+      ),
+      code: getPublicChapsSmsCode(
+        error,
+        "CATALOG_LOAD_FAILED"
+      ),
     });
   }
 };
@@ -424,8 +512,14 @@ exports.getPrice = async (req, res) => {
 
     return res.status(Number(error.status) || 500).json({
       success: false,
-      message: error.message || "Unable to retrieve live price",
-      code: error.code || "PRICE_LOOKUP_FAILED",
+      message: getPublicChapsSmsMessage(
+        error,
+        "ChapsSms could not retrieve a live price right now. Please try again."
+      ),
+      code: getPublicChapsSmsCode(
+        error,
+        "PRICE_LOOKUP_FAILED"
+      ),
     });
   }
 };
