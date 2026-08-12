@@ -1,4 +1,4 @@
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const { OAuth2Client } = require("google-auth-library");
 
 const User = require("../models/User");
@@ -142,36 +142,67 @@ function verificationTiming(user) {
 }
 
 async function ensureWallet(userId) {
-  let wallet = await Wallet.findOne({
-    user: userId,
-  });
-
-  if (wallet) {
-    return wallet;
-  }
-
+  /*
+   * IMPORTANT PERFORMANCE FIX:
+   *
+   * Wallet contains an embedded transactions array. Authentication only needs
+   * the current balance, so never load the entire transaction history here.
+   *
+   * findOneAndUpdate + $setOnInsert keeps wallet creation atomic while the
+   * projection keeps the auth response lightweight as the customer's wallet
+   * history grows.
+   */
   try {
-    wallet = await Wallet.create({
-      user: userId,
-      balance: 0,
-    });
+    const wallet =
+      await Wallet.findOneAndUpdate(
+        {
+          user: userId,
+        },
+        {
+          $setOnInsert: {
+            user: userId,
+            balance: 0,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          setDefaultsOnInsert: true,
+          projection: {
+            balance: 1,
+          },
+        }
+      ).lean();
+
+    if (!wallet) {
+      throw new Error(
+        "Could not create the user wallet"
+      );
+    }
+
+    return wallet;
   } catch (error) {
+    /*
+     * A unique user index protects one-wallet-per-user. If two requests race
+     * to create the same wallet, recover by reading the existing balance only.
+     */
     if (error?.code !== 11000) {
       throw error;
     }
 
-    wallet = await Wallet.findOne({
-      user: userId,
-    });
-  }
+    const wallet =
+      await Wallet.findOne({
+        user: userId,
+      })
+        .select("balance")
+        .lean();
 
-  if (!wallet) {
-    throw new Error(
-      "Could not create the user wallet"
-    );
-  }
+    if (!wallet) {
+      throw error;
+    }
 
-  return wallet;
+    return wallet;
+  }
 }
 
 function sanitizeGoogleUsernamePart(value) {
@@ -671,7 +702,7 @@ exports.resendVerificationCode =
       }
 
       /*
-       * Preserve the currently active code. If the email provider rejects the new email,
+       * Preserve the currently active code. If SMTP rejects the new email,
        * restore this state so the database does not contain a code that the
        * user never received.
        */
@@ -760,7 +791,7 @@ exports.resendVerificationCode =
           accountCreated: true,
           email: user.email,
           message:
-            "The verification email could not be delivered by our email provider. Please try Resend Code again.",
+            "The verification email was not accepted by the email server. Check the backend SMTP logs and try Resend Code again.",
           ...verificationTiming(
             user
           ),
@@ -1026,6 +1057,9 @@ exports.login = async (
   req,
   res
 ) => {
+  const startedAt =
+    Date.now();
+
   try {
     const email =
       normalizeEmail(
@@ -1048,10 +1082,17 @@ exports.login = async (
       });
     }
 
+    const userLookupStartedAt =
+      Date.now();
+
     const user =
       await User.findOne({
         email,
       }).select("+password");
+
+    const userLookupMs =
+      Date.now() -
+      userLookupStartedAt;
 
     if (!user) {
       return res.status(401).json({
@@ -1101,11 +1142,18 @@ exports.login = async (
       });
     }
 
+    const bcryptStartedAt =
+      Date.now();
+
     const passwordMatch =
       await bcrypt.compare(
         password,
         user.password
       );
+
+    const bcryptMs =
+      Date.now() -
+      bcryptStartedAt;
 
     if (!passwordMatch) {
       return res.status(401).json({
@@ -1115,23 +1163,50 @@ exports.login = async (
       });
     }
 
-    user.lastLogin =
+    const walletStartedAt =
+      Date.now();
+
+    const wallet =
+      await ensureWallet(
+        user._id
+      );
+
+    const walletMs =
+      Date.now() -
+      walletStartedAt;
+
+    /*
+     * Updating lastLogin is useful metadata, but the customer should not wait
+     * for an extra MongoDB write before receiving their JWT.
+     */
+    const loginTime =
       new Date();
 
-    const [
-      wallet,
-    ] =
-      await Promise.all([
-        ensureWallet(
-          user._id
-        ),
-        user.save(),
-      ]);
+    user.lastLogin =
+      loginTime;
 
     const token =
       generateToken(user);
 
-    return res.json({
+    const totalMs =
+      Date.now() -
+      startedAt;
+
+    /*
+     * DevTools can show exactly which part of a warm login is slow.
+     * This is safe performance metadata; it contains no credentials.
+     */
+    res.set(
+      "Server-Timing",
+      [
+        `user_lookup;dur=${userLookupMs}`,
+        `password_check;dur=${bcryptMs}`,
+        `wallet;dur=${walletMs}`,
+        `login_total;dur=${totalMs}`,
+      ].join(", ")
+    );
+
+    res.json({
       success: true,
       message:
         "Login successful",
@@ -1141,6 +1216,54 @@ exports.login = async (
         wallet.balance
       ),
     });
+
+    /*
+     * Persist lastLogin after the response is already on its way.
+     * Failure here must never turn a successful authentication into a slow
+     * or failed customer login.
+     */
+    void User.updateOne(
+      {
+        _id: user._id,
+      },
+      {
+        $set: {
+          lastLogin:
+            loginTime,
+        },
+      }
+    ).catch(
+      (lastLoginError) => {
+        console.error(
+          "Could not update lastLogin:",
+          {
+            userId:
+              String(
+                user._id
+              ),
+            message:
+              lastLoginError
+                ?.message,
+          }
+        );
+      }
+    );
+
+    if (
+      totalMs > 1500
+    ) {
+      console.warn(
+        "[Auth performance] Slow warm login:",
+        {
+          totalMs,
+          userLookupMs,
+          bcryptMs,
+          walletMs,
+        }
+      );
+    }
+
+    return;
   } catch (error) {
     console.error(
       "Login error:",
@@ -1149,7 +1272,8 @@ exports.login = async (
 
     return res.status(500).json({
       success: false,
-      message: "Login failed",
+      message:
+        "Login failed",
     });
   }
 };
@@ -1173,22 +1297,10 @@ exports.getMe = async (
         });
     }
 
-    /*
-     * User and wallet are independent lookups once the JWT user ID is known,
-     * so perform them in parallel to make session restoration faster.
-     */
-    const [
-      user,
-      existingWallet,
-    ] =
-      await Promise.all([
-        User.findById(
-          userId
-        ),
-        Wallet.findOne({
-          user: userId,
-        }),
-      ]);
+    const user =
+      await User.findById(
+        userId
+      );
 
     if (!user) {
       return res
@@ -1210,11 +1322,18 @@ exports.getMe = async (
         });
     }
 
-    const wallet =
-      existingWallet ||
-      (await ensureWallet(
-        user._id
-      ));
+    let wallet =
+      await Wallet.findOne({
+        user: user._id,
+      });
+
+    if (!wallet) {
+      wallet =
+        await Wallet.create({
+          user: user._id,
+          balance: 0,
+        });
+    }
 
     return res.json({
       success: true,
@@ -1327,7 +1446,7 @@ exports.forgotPassword =
             code:
               "EMAIL_DELIVERY_FAILED",
             message:
-              "We could not send the password reset email. Please try again in a moment.",
+              "We could not send the password reset email. Check the SMTP settings and try again.",
           });
       }
 
