@@ -56,6 +56,23 @@ function createApiError(
   return error;
 }
 
+function normalizeEmailPayload(
+  value
+) {
+  if (
+    value &&
+    typeof value === "object"
+  ) {
+    return value;
+  }
+
+  return {
+    email: String(value || "")
+      .trim()
+      .toLowerCase(),
+  };
+}
+
 function createRequestController(
   externalSignal,
   timeoutMs
@@ -96,8 +113,7 @@ function createRequestController(
         timedOut = true;
 
         if (
-          !controller.signal
-            .aborted
+          !controller.signal.aborted
         ) {
           controller.abort();
         }
@@ -133,14 +149,6 @@ function createRequestController(
   };
 }
 
-/**
- * Start the Render/API connection before the customer presses Login.
- *
- * This is a real visitor-triggered warm-up request, not an artificial
- * keep-alive scheduler. If the backend is already awake, it returns quickly.
- * If a free Render instance is asleep, waking starts while the customer is
- * still reading/typing on the page.
- */
 export async function warmBackend({
   force = false,
 } = {}) {
@@ -183,15 +191,8 @@ export async function warmBackend({
             {
               method: "GET",
               cache: "no-store",
-
-              /*
-               * No cookies are needed for this public health/warm-up route.
-               * Keeping this request simple also avoids an unnecessary CORS
-               * preflight.
-               */
               credentials:
                 "omit",
-
               signal:
                 controller.signal,
             }
@@ -207,11 +208,6 @@ export async function warmBackend({
 
         return true;
       } catch {
-        /*
-         * Warming is best-effort. Do not show an error just because the
-         * pre-warm request failed; the actual auth request will report
-         * a useful message if the backend is unavailable.
-         */
         return false;
       } finally {
         window.clearTimeout(
@@ -333,9 +329,6 @@ async function request(
     );
   }
 
-  /*
-   * Any successful API request proves the backend is awake.
-   */
   backendWarmUntil =
     Date.now() +
     BACKEND_WARM_TTL_MS;
@@ -344,9 +337,7 @@ async function request(
 }
 
 /*
- * Begin waking the backend as soon as this client module loads.
- * AuthContext imports authService, so this normally starts before the
- * customer finishes typing their email/password.
+ * Start warming on genuine visitor traffic as soon as this client module loads.
  */
 if (
   typeof window !==
@@ -365,126 +356,162 @@ if (
     .catch(() => false);
 }
 
+/*
+ * NAMED EXPORTS
+ * These are required by pages such as:
+ *
+ * import { forgotPassword } from "@/services/auth.service";
+ * import { resetPassword } from "@/services/auth.service";
+ */
+
+export function register(
+  payload
+) {
+  return request(
+    "/auth/register",
+    {
+      method: "POST",
+      body: payload,
+      timeoutMs: 90000,
+    }
+  );
+}
+
+export function login(
+  payload
+) {
+  return request(
+    "/auth/login",
+    {
+      method: "POST",
+      body: payload,
+      timeoutMs: 75000,
+    }
+  );
+}
+
+export function googleAuth(
+  credential
+) {
+  return request(
+    "/auth/google",
+    {
+      method: "POST",
+      body: {
+        credential,
+      },
+      timeoutMs: 75000,
+    }
+  );
+}
+
+/*
+ * Compatibility alias for code calling authService.google().
+ */
+export const google =
+  googleAuth;
+
+export function verifyEmail(
+  payload
+) {
+  return request(
+    "/auth/verify-email",
+    {
+      method: "POST",
+      body: payload,
+    }
+  );
+}
+
+export function resendVerification(
+  emailOrPayload
+) {
+  return request(
+    "/auth/resend-verification",
+    {
+      method: "POST",
+      body:
+        normalizeEmailPayload(
+          emailOrPayload
+        ),
+      timeoutMs: 90000,
+    }
+  );
+}
+
+export const resendVerificationCode =
+  resendVerification;
+
+export const resendCode =
+  resendVerification;
+
+export function forgotPassword(
+  emailOrPayload
+) {
+  return request(
+    "/auth/forgot-password",
+    {
+      method: "POST",
+      body:
+        normalizeEmailPayload(
+          emailOrPayload
+        ),
+      timeoutMs: 90000,
+    }
+  );
+}
+
+export function resetPassword(
+  payload
+) {
+  return request(
+    "/auth/reset-password",
+    {
+      method: "POST",
+      body: payload,
+    }
+  );
+}
+
+export function changePassword(
+  payload,
+  token
+) {
+  return request(
+    "/auth/change-password",
+    {
+      method: "POST",
+      body: payload,
+      token,
+    }
+  );
+}
+
+export function getMe(
+  token
+) {
+  return request(
+    "/auth/me",
+    {
+      token,
+    }
+  );
+}
+
 export const authService = {
   warmBackend,
-
-  register(payload) {
-    return request(
-      "/auth/register",
-      {
-        method: "POST",
-        body: payload,
-
-        /*
-         * Registration may include email delivery and can legitimately
-         * take longer than a normal read request.
-         */
-        timeoutMs: 90000,
-      }
-    );
-  },
-
-  login(payload) {
-    /*
-     * Do not wait for warmBackend() here. The warm-up request may already
-     * be in progress, and sending login immediately lets Render queue the
-     * real request behind the same spin-up instead of adding another wait.
-     */
-    return request(
-      "/auth/login",
-      {
-        method: "POST",
-        body: payload,
-        timeoutMs: 75000,
-      }
-    );
-  },
-
-  google(credential) {
-    return request(
-      "/auth/google",
-      {
-        method: "POST",
-        body: {
-          credential,
-        },
-        timeoutMs: 75000,
-      }
-    );
-  },
-
-  verifyEmail(payload) {
-    return request(
-      "/auth/verify-email",
-      {
-        method: "POST",
-        body: payload,
-      }
-    );
-  },
-
-  resendVerification(
-    email
-  ) {
-    return request(
-      "/auth/resend-verification",
-      {
-        method: "POST",
-        body: {
-          email,
-        },
-        timeoutMs: 90000,
-      }
-    );
-  },
-
-  forgotPassword(email) {
-    return request(
-      "/auth/forgot-password",
-      {
-        method: "POST",
-        body: {
-          email,
-        },
-        timeoutMs: 90000,
-      }
-    );
-  },
-
-  resetPassword(
-    payload
-  ) {
-    return request(
-      "/auth/reset-password",
-      {
-        method: "POST",
-        body: payload,
-      }
-    );
-  },
-
-  changePassword(
-    payload,
-    token
-  ) {
-    return request(
-      "/auth/change-password",
-      {
-        method: "POST",
-        body: payload,
-        token,
-      }
-    );
-  },
-
-  getMe(token) {
-    return request(
-      "/auth/me",
-      {
-        token,
-      }
-    );
-  },
+  register,
+  login,
+  google: googleAuth,
+  googleAuth,
+  verifyEmail,
+  resendVerification,
+  resendVerificationCode,
+  resendCode,
+  forgotPassword,
+  resetPassword,
+  changePassword,
+  getMe,
 };
 
 export default authService;
