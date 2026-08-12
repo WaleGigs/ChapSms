@@ -459,7 +459,7 @@ export default function LoginPage() {
         >
           {loading
             ? "Logging in..."
-            : "Login securely"}
+            : "Login"}
         </Button>
       </form>
 
