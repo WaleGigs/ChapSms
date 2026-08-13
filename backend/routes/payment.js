@@ -4,49 +4,76 @@ const router = express.Router();
 
 const {
   initializePayment,
-  initializeBankTransfer,
-  getBankTransferStatus,
   verifyPayment,
-  handleWebhook,
+  handleWebhook: handleFlutterwaveWebhook,
 } = require("../controllers/paymentController");
+
+const {
+  getVirtualAccount,
+  createVirtualAccount,
+  verifyTransaction: verifyNeuraPayTransaction,
+  handleWebhook: handleNeuraPayWebhook,
+} = require("../controllers/neurapayController");
 
 const {
   protect,
 } = require("../middleware/authMiddleware");
 
 /*
- * Flutterwave calls this endpoint directly, so do not add protect here.
+ * ============================================================
+ * FLUTTERWAVE
+ * ============================================================
+ * Keep the existing endpoint so your current Flutterwave dashboard
+ * configuration continues to work:
  *
- * The controller exports handleWebhook. A flutterwaveWebhook compatibility
- * alias is also included in the updated controller.
+ *   POST /api/payment/webhook
  */
 router.post(
   "/webhook",
-  handleWebhook
-);
-
-router.post(
-  "/bank-transfer",
-  protect,
-  initializeBankTransfer
-);
-
-router.get(
-  "/bank-transfer/:txRef/status",
-  protect,
-  getBankTransferStatus
+  handleFlutterwaveWebhook,
 );
 
 router.post(
   "/initialize",
   protect,
-  initializePayment
+  initializePayment,
 );
 
 router.post(
   "/verify",
   protect,
-  verifyPayment
+  verifyPayment,
+);
+
+/*
+ * ============================================================
+ * NEURAPAY
+ * ============================================================
+ * Configure NeuraPay Webhook URL as:
+ *
+ *   https://YOUR-BACKEND/api/payment/neurapay/webhook
+ */
+router.post(
+  "/neurapay/webhook",
+  handleNeuraPayWebhook,
+);
+
+router.get(
+  "/neurapay/account",
+  protect,
+  getVirtualAccount,
+);
+
+router.post(
+  "/neurapay/account",
+  protect,
+  createVirtualAccount,
+);
+
+router.post(
+  "/neurapay/verify",
+  protect,
+  verifyNeuraPayTransaction,
 );
 
 module.exports = router;
