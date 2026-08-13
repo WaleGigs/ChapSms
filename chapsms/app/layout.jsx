@@ -3,7 +3,7 @@ import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import ThemeProvider from "@/components/ThemeProvider";
 import { Toaster } from "react-hot-toast";
-
+import TikTokPixel from "@/components/analytics/TikTokPixel";
 export const metadata = {
   title: "ChapsSmS",
   description:
@@ -15,6 +15,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+       <head>
+        <TikTokPixel />
+      </head>
       <body>
         <ThemeProvider>
           <AuthProvider>
