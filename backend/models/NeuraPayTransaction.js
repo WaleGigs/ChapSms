@@ -151,6 +151,42 @@ const neuraPayTransactionSchema =
         type: Date,
         default: null,
       },
+
+      /*
+       * TikTok Events API delivery state.
+       * This lets duplicate NeuraPay webhooks/manual verification safely
+       * retry an event that previously failed without creating duplicate
+       * TikTok conversions.
+       */
+      tiktokEventId: {
+        type: String,
+        default: "",
+        trim: true,
+        index: true,
+      },
+
+      tiktokEventSent: {
+        type: Boolean,
+        default: false,
+        index: true,
+      },
+
+      tiktokEventSentAt: {
+        type: Date,
+        default: null,
+      },
+
+      tiktokEventAttempts: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      tiktokEventLastError: {
+        type: String,
+        default: "",
+        trim: true,
+      },
     },
     {
       timestamps: true,

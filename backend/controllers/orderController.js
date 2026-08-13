@@ -503,7 +503,13 @@ async function completePurchaseTransaction({
           amount,
 
         "transactions.$.description":
-          `${service} (${country}) - ${server}`,
+          `Number purchase - ${service} - ${country} - ${server}`,
+
+        "transactions.$.serviceName":
+          service,
+
+        "transactions.$.countryName":
+          country,
 
         "transactions.$.orderId":
           orderId,
@@ -792,7 +798,13 @@ exports.createOrder =
                     balanceField,
 
                     description:
-                      `Reserved for ${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
+                      `Number purchase - ${normalizedServiceName || normalizedService} - ${normalizedCountryName || normalizedCountry} - ${normalizedServer}`,
+
+                    serviceName:
+                      normalizedServiceName || normalizedService,
+
+                    countryName:
+                      normalizedCountryName || normalizedCountry,
 
                     status:
                       "pending",
@@ -1335,6 +1347,337 @@ exports.createOrder =
         });
     }
   };
+
+
+/*
+ * Repairs interrupted wallet reservations.
+ *
+ * A purchase reservation is created BEFORE the provider request so the
+ * customer cannot spend provider balance without first having funds.
+ * If the Node process is interrupted after that atomic reservation but
+ * before the order is saved/refunded, the transaction can otherwise remain
+ * pending indefinitely.
+ *
+ * This recovery only touches pending purchase reservations older than
+ * STALE_ORDER_RESERVATION_MS (default 10 minutes).
+ */
+exports.recoverStaleReservations = async (req, res) => {
+  try {
+    const staleAfterMs = Math.max(
+      2 * 60 * 1000,
+      Number(
+        process.env.STALE_ORDER_RESERVATION_MS ||
+          10 * 60 * 1000
+      )
+    );
+
+    const cutoff = new Date(
+      Date.now() - staleAfterMs
+    );
+
+    let wallet = await Wallet.findOne({
+      user: req.user._id,
+    });
+
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        code: "WALLET_NOT_FOUND",
+        message: "Wallet not found",
+      });
+    }
+
+    const staleReservations = (
+      Array.isArray(wallet.transactions)
+        ? wallet.transactions
+        : []
+    ).filter((transaction) => {
+      const createdAt = transaction?.createdAt
+        ? new Date(transaction.createdAt)
+        : null;
+
+      return (
+        String(transaction?.type || "").toLowerCase() === "purchase" &&
+        String(transaction?.status || "").toLowerCase() === "pending" &&
+        transaction?.reference &&
+        createdAt &&
+        !Number.isNaN(createdAt.getTime()) &&
+        createdAt <= cutoff
+      );
+    });
+
+    let refundedCount = 0;
+    let completedCount = 0;
+    let refundedAmount = 0;
+
+    for (const reservation of staleReservations) {
+      const reservationReference = String(
+        reservation.reference || ""
+      ).trim().toUpperCase();
+
+      const amount = Number(
+        reservation.amount || 0
+      );
+
+      if (
+        !reservationReference ||
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        continue;
+      }
+
+      /*
+       * First try the exact reservation reference. This works for all orders
+       * created after the updated Order model is deployed.
+       */
+      let matchingOrder = await Order.findOne({
+        user: req.user._id,
+        walletReservationReference:
+          reservationReference,
+      });
+
+      /*
+       * Compatibility for an interrupted order created by an older schema
+       * that discarded walletReservationReference.
+       *
+       * A narrow time/amount/server match prevents an existing unrelated
+       * order from being mistaken for this reservation.
+       */
+      if (!matchingOrder) {
+        const reservationTime =
+          new Date(
+            reservation.createdAt
+          ).getTime();
+
+        matchingOrder =
+          await Order.findOne({
+            user: req.user._id,
+            server:
+              reservation.server ||
+              undefined,
+            sellingPrice: amount,
+            createdAt: {
+              $gte: new Date(
+                reservationTime -
+                  60 * 1000
+              ),
+              $lte: new Date(
+                reservationTime +
+                  5 * 60 * 1000
+              ),
+            },
+          }).sort({
+            createdAt: 1,
+          });
+      }
+
+      if (matchingOrder) {
+        const serviceName =
+          matchingOrder.serviceName ||
+          matchingOrder.service ||
+          reservation.serviceName ||
+          "Number";
+
+        const countryName =
+          matchingOrder.countryName ||
+          matchingOrder.country ||
+          reservation.countryName ||
+          "";
+
+        const result =
+          await Wallet.updateOne(
+            {
+              user: req.user._id,
+              transactions: {
+                $elemMatch: {
+                  reference:
+                    reservationReference,
+                  status: "pending",
+                },
+              },
+            },
+            {
+              $set: {
+                "transactions.$[purchase].status":
+                  "completed",
+                "transactions.$[purchase].orderId":
+                  matchingOrder._id,
+                "transactions.$[purchase].serviceName":
+                  serviceName,
+                "transactions.$[purchase].countryName":
+                  countryName,
+                "transactions.$[purchase].description":
+                  `Number purchase - ${serviceName}${countryName ? ` - ${countryName}` : ""} - ${matchingOrder.server || reservation.server || "server"}`,
+              },
+            },
+            {
+              arrayFilters: [
+                {
+                  "purchase.reference":
+                    reservationReference,
+                  "purchase.status":
+                    "pending",
+                },
+              ],
+              runValidators: true,
+            }
+          );
+
+        if (result.modifiedCount > 0) {
+          completedCount += 1;
+        }
+
+        continue;
+      }
+
+      const balanceField = [
+        "balance",
+        "testBalance",
+      ].includes(
+        reservation.balanceField
+      )
+        ? reservation.balanceField
+        : reservation.environment ===
+            "test"
+          ? "testBalance"
+          : "balance";
+
+      const refundReference =
+        `${reservationReference}-RECOVERY-REFUND`
+          .toUpperCase();
+
+      const recovered =
+        await Wallet.findOneAndUpdate(
+          {
+            user: req.user._id,
+
+            transactions: {
+              $elemMatch: {
+                reference:
+                  reservationReference,
+                status: "pending",
+              },
+            },
+
+            "transactions.reference": {
+              $ne:
+                refundReference,
+            },
+          },
+          {
+            $inc: {
+              [balanceField]:
+                amount,
+            },
+
+            $set: {
+              "transactions.$[purchase].status":
+                "failed",
+
+              "transactions.$[purchase].description":
+                "Interrupted number purchase automatically refunded",
+            },
+
+            $push: {
+              transactions: {
+                $each: [
+                  {
+                    type: "refund",
+                    amount,
+                    environment:
+                      reservation.environment ||
+                      "live",
+                    balanceField,
+                    description:
+                      "Automatic refund for interrupted number purchase",
+                    status:
+                      "completed",
+                    reference:
+                      refundReference,
+                    server:
+                      reservation.server ||
+                      null,
+                    currency:
+                      "NGN",
+                    serviceName:
+                      reservation.serviceName ||
+                      "",
+                    countryName:
+                      reservation.countryName ||
+                      "",
+                  },
+                ],
+                $position: 0,
+              },
+            },
+          },
+          {
+            new: true,
+            runValidators: true,
+            arrayFilters: [
+              {
+                "purchase.reference":
+                  reservationReference,
+                "purchase.status":
+                  "pending",
+              },
+            ],
+          }
+        );
+
+      if (recovered) {
+        refundedCount += 1;
+        refundedAmount += amount;
+        wallet = recovered;
+      }
+    }
+
+    const latestWallet =
+      await Wallet.findOne({
+        user: req.user._id,
+      });
+
+    return res.json({
+      success: true,
+      repaired:
+        refundedCount +
+        completedCount,
+      refundedCount,
+      completedCount,
+      refundedAmount,
+      walletBalance:
+        Number(
+          latestWallet?.balance || 0
+        ),
+      message:
+        refundedCount > 0
+          ? `Recovered ${refundedCount} interrupted purchase reservation(s) and returned ₦${refundedAmount.toLocaleString("en-NG")} to the wallet.`
+          : completedCount > 0
+            ? `Reconciled ${completedCount} completed purchase reservation(s).`
+            : "No stale purchase reservations needed recovery.",
+    });
+  } catch (error) {
+    console.error(
+      "Recover stale reservations error:",
+      error
+    );
+
+    return res
+      .status(
+        error.status || 500
+      )
+      .json({
+        success: false,
+        code:
+          error.code ||
+          "RESERVATION_RECOVERY_FAILED",
+        message:
+          error.message ||
+          "Unable to recover stale purchase reservations",
+      });
+  }
+};
 
 exports.checkOrder = async (req, res) => {
   try {

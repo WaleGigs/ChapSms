@@ -30,10 +30,6 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
 
-    /*
-     * Customer-facing country name captured at purchase time.
-     * Keep this separate from the provider country ID/code.
-     */
     countryName: {
       type: String,
       default: "",
@@ -48,11 +44,6 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
 
-    /*
-     * Customer-facing service name captured from the catalog.
-     * Examples: "WhatsApp", "Telegram", "Google".
-     * This prevents Order History from showing raw IDs such as "wa" or "1012".
-     */
     serviceName: {
       type: String,
       default: "",
@@ -156,6 +147,28 @@ const orderSchema = new mongoose.Schema(
     pricingSnapshot: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
+    },
+
+
+    paymentEnvironment: {
+      type: String,
+      enum: ["test", "live"],
+      default: "live",
+      index: true,
+    },
+
+    walletBalanceField: {
+      type: String,
+      enum: ["testBalance", "balance"],
+      default: "balance",
+    },
+
+    walletReservationReference: {
+      type: String,
+      default: "",
+      trim: true,
+      uppercase: true,
+      index: true,
     },
 
     server: {

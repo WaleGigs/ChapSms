@@ -16,6 +16,11 @@ const {
   normalizeProviderChannel,
 } = require("../services/neurapayService");
 
+const {
+  isTikTokEventsApiConfigured,
+  sendTikTokPurchase,
+} = require("../services/tiktokEventsService");
+
 function requireEnvironment(
   name
 ) {
@@ -719,10 +724,167 @@ async function verifyAndCredit({
     wallet,
     account,
     transaction,
+    record,
     creditedAmount,
     creditBasis,
     alreadyCredited,
   };
+}
+
+async function reportTikTokPurchase(
+  result
+) {
+  const record =
+    result?.record;
+
+  if (!record) {
+    return {
+      sent: false,
+      skipped: true,
+      reason:
+        "transaction-record-missing",
+    };
+  }
+
+  if (record.tiktokEventSent) {
+    return {
+      sent: true,
+      skipped: true,
+      reason:
+        "already-sent",
+    };
+  }
+
+  if (
+    !isTikTokEventsApiConfigured()
+  ) {
+    return {
+      sent: false,
+      skipped: true,
+      reason:
+        "not-configured",
+    };
+  }
+
+  const reference =
+    String(
+      result?.transaction
+        ?.reference ||
+        record.reference ||
+        ""
+    )
+      .trim()
+      .toUpperCase();
+
+  const eventId =
+    `neurapay:${reference}`;
+
+  record.tiktokEventId =
+    eventId;
+  record.tiktokEventAttempts =
+    Number(
+      record.tiktokEventAttempts ||
+        0
+    ) + 1;
+
+  try {
+    const response =
+      await sendTikTokPurchase({
+        eventId,
+        eventTime:
+          result?.transaction
+            ?.created_at ||
+          record.providerCreatedAt ||
+          record.createdAt,
+
+        /*
+         * TikTok receives only SHA-256 hashes of these identifiers.
+         * No NeuraPay sender bank/account details, BVN/NIN/CAC, or OTP
+         * data is sent to TikTok.
+         */
+        email:
+          result?.account
+            ?.customerEmail ||
+          "",
+        externalId:
+          String(
+            result?.account
+              ?.user ||
+              ""
+          ),
+        value:
+          result?.creditedAmount,
+        currency: "NGN",
+        orderId:
+          reference,
+        pageUrl:
+          String(
+            process.env
+              .TIKTOK_EVENT_PAGE_URL ||
+              "https://chapssms.com/wallet"
+          ).trim(),
+      });
+
+    record.tiktokEventSent =
+      true;
+    record.tiktokEventSentAt =
+      new Date();
+    record.tiktokEventLastError =
+      "";
+
+    await record.save();
+
+    console.log(
+      "[TikTok Events API] NeuraPay Purchase sent:",
+      {
+        reference,
+        eventId,
+        testMode:
+          response?.testMode ===
+          true,
+      }
+    );
+
+    return {
+      sent: true,
+      testMode:
+        response?.testMode === true,
+    };
+  } catch (error) {
+    record.tiktokEventLastError =
+      String(
+        error?.message ||
+          "TikTok Events API request failed"
+      ).slice(0, 500);
+
+    await record
+      .save()
+      .catch(() => {});
+
+    /*
+     * IMPORTANT:
+     * A TikTok outage must never turn a successfully credited customer
+     * payment into a failed NeuraPay webhook. The payment remains correct;
+     * a duplicate signed webhook or manual verification can retry TikTok
+     * because tiktokEventSent remains false.
+     */
+    console.error(
+      "[TikTok Events API] NeuraPay Purchase failed:",
+      {
+        reference,
+        eventId,
+        message:
+          error?.message,
+      }
+    );
+
+    return {
+      sent: false,
+      error:
+        error?.message ||
+        "TikTok Events API request failed",
+    };
+  }
 }
 
 function isValidWebhookSignature(
@@ -1106,6 +1268,14 @@ exports.verifyTransaction =
             "manual.verification",
         });
 
+      /*
+       * Best-effort TikTok recovery. This does not affect whether the
+       * wallet credit itself is considered successful.
+       */
+      await reportTikTokPurchase(
+        result
+      );
+
       return res
         .status(200)
         .json({
@@ -1226,6 +1396,18 @@ exports.handleWebhook =
           reference,
           eventName,
         });
+
+      /*
+       * This is the authoritative NeuraPay paid-conversion point:
+       * signature verified -> NeuraPay status API verified -> wallet
+       * credited/idempotently confirmed -> TikTok Events API Purchase.
+       *
+       * TikTok delivery is deliberately best-effort and cannot break the
+       * already successful customer payment.
+       */
+      await reportTikTokPurchase(
+        result
+      );
 
       console.log(
         "[NeuraPay] verified wallet funding:",

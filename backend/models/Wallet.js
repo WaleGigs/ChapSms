@@ -123,6 +123,19 @@ const transactionSchema =
         ],
         default: null,
       },
+
+      serviceName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      countryName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
     },
     {
       timestamps: true,

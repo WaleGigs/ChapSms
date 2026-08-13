@@ -1,9 +1,8 @@
 const mongoose = require("mongoose");
 
-const User = require("../models/User");
-const Wallet = require("../models/Wallet");
 const PricingRule = require("../models/PricingRule");
 const Order = require("../models/Order");
+const Wallet = require("../models/Wallet");
 const providerManager = require(
   "../services/providers/providerManager"
 );
@@ -72,174 +71,6 @@ function ruleResponse(rule) {
     updatedAt: rule.updatedAt,
   };
 }
-
-
-async function deactivateCompetingRules(
-  rule,
-  userId
-) {
-  if (!rule?.isActive) {
-    return;
-  }
-
-  await PricingRule.updateMany(
-    {
-      _id: {
-        $ne: rule._id,
-      },
-      server: rule.server,
-      country: rule.country,
-      service: rule.service,
-      isActive: true,
-    },
-    {
-      $set: {
-        isActive: false,
-        updatedBy: userId,
-      },
-    }
-  );
-}
-
-exports.getOperators = async (
-  req,
-  res
-) => {
-  try {
-    const server =
-      pricingService.normalizeServer(
-        req.query.server
-      );
-
-    const country =
-      pricingService.normalizeCountry(
-        req.query.country
-      );
-
-    const service =
-      pricingService.normalizeService(
-        req.query.service
-      );
-
-    const result =
-      await providerManager.getOperators({
-        server,
-        country,
-        service,
-      });
-
-    const operators = (
-      Array.isArray(result?.operators)
-        ? result.operators
-        : []
-    )
-      .map((operator) => {
-        const id = String(
-          operator.id ??
-          operator.operator ??
-          operator.providerId ??
-          ""
-        ).trim();
-
-        const price = Number(
-          operator.price
-        );
-
-        const stock = Number(
-          operator.stock
-        );
-
-        if (
-          !id ||
-          !Number.isFinite(price) ||
-          price <= 0
-        ) {
-          return null;
-        }
-
-        const currency = String(
-          operator.currency ||
-          result.currency ||
-          "NGN"
-        )
-          .trim()
-          .toUpperCase();
-
-        return {
-          id,
-          operator: id,
-          name:
-            String(
-              operator.name ||
-              `Operator ${id}`
-            ).trim(),
-          price,
-          stock:
-            Number.isFinite(stock) &&
-            stock >= 0
-              ? stock
-              : 0,
-          currency,
-          priceNgn:
-            pricingService
-              .convertProviderCostToNaira(
-                price,
-                currency
-              ),
-        };
-      })
-      .filter(Boolean)
-      .sort((first, second) => {
-        if (
-          first.price !==
-          second.price
-        ) {
-          return (
-            first.price -
-            second.price
-          );
-        }
-
-        return (
-          second.stock -
-          first.stock
-        );
-      });
-
-    if (!operators.length) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "No operators are currently available for this country and service",
-        code: "NO_OPERATORS",
-      });
-    }
-
-    return res.json({
-      success: true,
-      server,
-      country,
-      service,
-      currency:
-        result.currency || null,
-      operators,
-    });
-  } catch (error) {
-    return res
-      .status(
-        error.status || 500
-      )
-      .json({
-        success: false,
-        message:
-          error.message ||
-          "Unable to load operators",
-        code:
-          error.code ||
-          "OPERATORS_LOAD_FAILED",
-      });
-  }
-};
 
 exports.listRules = async (req, res) => {
   try {
@@ -320,11 +151,6 @@ exports.upsertRule = async (req, res) => {
       }
     );
 
-    await deactivateCompetingRules(
-      rule,
-      req.user._id
-    );
-
     return res.status(201).json({
       success: true,
       rule: ruleResponse(rule),
@@ -375,11 +201,6 @@ exports.updateRule = async (req, res) => {
     });
 
     await existing.save();
-
-    await deactivateCompetingRules(
-      existing,
-      req.user._id
-    );
 
     return res.json({
       success: true,
@@ -505,76 +326,53 @@ exports.getDashboardSummary = async (req, res) => {
       match.server = pricingService.normalizeServer(req.query.server);
     }
 
-    const [resultRows, totalUsers, walletRows] = await Promise.all([
-      Order.aggregate([
-        { $match: match },
-        {
-          $facet: {
-            totals: [
-              { $match: { refunded: { $ne: true } } },
-              {
-                $group: {
-                  _id: null,
-                  totalOrders: { $sum: 1 },
-                  totalRevenue: {
-                    $sum: { $ifNull: ["$sellingPrice", "$price"] },
-                  },
-                  totalProviderCost: {
-                    $sum: { $ifNull: ["$providerCostNgn", 0] },
-                  },
-                  totalProfit: {
-                    $sum: { $ifNull: ["$profit", 0] },
-                  },
+    const [result] = await Order.aggregate([
+      { $match: match },
+      {
+        $facet: {
+          totals: [
+            { $match: { refunded: { $ne: true } } },
+            {
+              $group: {
+                _id: null,
+                totalOrders: { $sum: 1 },
+                totalRevenue: {
+                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
                 },
-              },
-            ],
-            statuses: [
-              {
-                $group: {
-                  _id: "$status",
-                  count: { $sum: 1 },
+                totalProviderCost: {
+                  $sum: { $ifNull: ["$providerCostNgn", 0] },
                 },
+                totalProfit: { $sum: { $ifNull: ["$profit", 0] } },
               },
-            ],
-            servers: [
-              { $match: { refunded: { $ne: true } } },
-              {
-                $group: {
-                  _id: "$server",
-                  orders: { $sum: 1 },
-                  revenue: {
-                    $sum: { $ifNull: ["$sellingPrice", "$price"] },
-                  },
-                  providerCost: {
-                    $sum: { $ifNull: ["$providerCostNgn", 0] },
-                  },
-                  profit: {
-                    $sum: { $ifNull: ["$profit", 0] },
-                  },
-                },
-              },
-            ],
-          },
-        },
-      ]),
-
-      User.countDocuments({}),
-
-      // LIVE balance only. Do not include testBalance here.
-      Wallet.aggregate([
-        { $match: { currency: "NGN" } },
-        {
-          $group: {
-            _id: null,
-            usersBalance: {
-              $sum: { $ifNull: ["$balance", 0] },
             },
-          },
+          ],
+          statuses: [
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+              },
+            },
+          ],
+          servers: [
+            { $match: { refunded: { $ne: true } } },
+            {
+              $group: {
+                _id: "$server",
+                orders: { $sum: 1 },
+                revenue: {
+                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
+                },
+                providerCost: {
+                  $sum: { $ifNull: ["$providerCostNgn", 0] },
+                },
+                profit: { $sum: { $ifNull: ["$profit", 0] } },
+              },
+            },
+          ],
         },
-      ]),
+      },
     ]);
-
-    const result = resultRows?.[0] || {};
 
     const totals = result?.totals?.[0] || {
       totalOrders: 0,
@@ -584,7 +382,7 @@ exports.getDashboardSummary = async (req, res) => {
     };
 
     const statuses = Object.fromEntries(
-      (result?.statuses || []).map((item) => [item._id, item.count]),
+      (result?.statuses || []).map((item) => [item._id, item.count])
     );
 
     const servers = Object.fromEntries(
@@ -596,15 +394,13 @@ exports.getDashboardSummary = async (req, res) => {
           providerCost: item.providerCost,
           profit: item.profit,
         },
-      ]),
+      ])
     );
 
     return res.json({
       success: true,
       summary: {
         ...totals,
-        totalUsers: Number(totalUsers || 0),
-        usersBalance: Number(walletRows?.[0]?.usersBalance || 0),
         waitingOrders: statuses.waiting || 0,
         receivedOrders: statuses.received || 0,
         cancelledOrders: statuses.cancelled || 0,
@@ -624,8 +420,6 @@ exports.getDashboardSummary = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Admin dashboard summary error:", error);
-
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || "Unable to load dashboard summary",
@@ -723,3 +517,242 @@ exports.getSales = async (req, res) => {
     });
   }
 };
+
+exports.getPayments = async (req, res) => {
+  try {
+    const page = parsePositiveInteger(
+      req.query.page,
+      1,
+      100000
+    );
+    const limit = parsePositiveInteger(
+      req.query.limit,
+      50,
+      100
+    );
+
+    const match = {};
+
+    if (req.query.type) {
+      match["transactions.type"] =
+        String(req.query.type)
+          .trim()
+          .toLowerCase();
+    }
+
+    if (req.query.status) {
+      match["transactions.status"] =
+        String(req.query.status)
+          .trim()
+          .toLowerCase();
+    }
+
+    const dateRange =
+      createDateRange(req.query);
+
+    if (dateRange) {
+      match["transactions.createdAt"] =
+        dateRange;
+    }
+
+    const search = String(
+      req.query.search || ""
+    ).trim();
+
+    const pipeline = [
+      {
+        $unwind:
+          "$transactions",
+      },
+      ...(Object.keys(match).length
+        ? [{ $match: match }]
+        : []),
+      {
+        $lookup: {
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "customer",
+        },
+      },
+      {
+        $unwind: {
+          path: "$customer",
+          preserveNullAndEmptyArrays:
+            true,
+        },
+      },
+      ...(search
+        ? [
+            {
+              $match: {
+                $or: [
+                  {
+                    "customer.email": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "customer.username": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "transactions.reference": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "transactions.transactionId": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "transactions.description": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "transactions.paymentGateway": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                ],
+              },
+            },
+          ]
+        : []),
+      {
+        $sort: {
+          "transactions.createdAt":
+            -1,
+        },
+      },
+      {
+        $facet: {
+          rows: [
+            {
+              $skip:
+                (page - 1) *
+                limit,
+            },
+            {
+              $limit:
+                limit,
+            },
+            {
+              $project: {
+                _id: 0,
+                id: {
+                  $toString:
+                    "$transactions._id",
+                },
+                walletId: {
+                  $toString:
+                    "$_id",
+                },
+                userId: {
+                  $toString:
+                    "$user",
+                },
+                customer: {
+                  username:
+                    "$customer.username",
+                  firstName:
+                    "$customer.firstName",
+                  lastName:
+                    "$customer.lastName",
+                  email:
+                    "$customer.email",
+                },
+                type:
+                  "$transactions.type",
+                amount:
+                  "$transactions.amount",
+                status:
+                  "$transactions.status",
+                reference:
+                  "$transactions.reference",
+                transactionId:
+                  "$transactions.transactionId",
+                gateway:
+                  "$transactions.paymentGateway",
+                method:
+                  "$transactions.paymentMethod",
+                description:
+                  "$transactions.description",
+                server:
+                  "$transactions.server",
+                serviceName:
+                  "$transactions.serviceName",
+                countryName:
+                  "$transactions.countryName",
+                environment:
+                  "$transactions.environment",
+                createdAt:
+                  "$transactions.createdAt",
+              },
+            },
+          ],
+          meta: [
+            {
+              $count:
+                "total",
+            },
+          ],
+        },
+      },
+    ];
+
+    const [result] =
+      await Wallet.aggregate(
+        pipeline
+      );
+
+    const payments =
+      result?.rows || [];
+
+    const total =
+      result?.meta?.[0]?.total ||
+      0;
+
+    return res.json({
+      success: true,
+      payments,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.max(
+          1,
+          Math.ceil(
+            total / limit
+          )
+        ),
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Admin wallet payments error:",
+      error
+    );
+
+    return res
+      .status(
+        error.status || 500
+      )
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Unable to load latest payment history",
+      });
+  }
+};
+
