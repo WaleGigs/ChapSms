@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -13,9 +14,9 @@ import {
   Search,
 } from "lucide-react";
 
-import { transactions } from "@/data/transactions/transactions";
 import { useOrders } from "@/hooks/useOrders";
 import { catalogService } from "@/services/catalogService";
+import { api } from "@/lib/api";
 
 const COMMON_SERVICE_NAMES = {
   wa: "WhatsApp",
@@ -197,6 +198,169 @@ function getOrderCountryName(order) {
   return humanizeCode(rawCountry);
 }
 
+function titleCase(value) {
+  const text = String(value || "")
+    .trim()
+    .replace(/[-_]+/g, " ");
+
+  if (!text) {
+    return "—";
+  }
+
+  return text.replace(
+    /\b\w/g,
+    (character) => character.toUpperCase()
+  );
+}
+
+function getPaymentTypeLabel(transaction) {
+  const type = String(
+    transaction?.type || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const labels = {
+    deposit: "Deposit",
+    purchase: "Purchase",
+    refund: "Refund",
+    withdraw: "Withdrawal",
+  };
+
+  return labels[type] || titleCase(type);
+}
+
+function getPaymentMethodLabel(transaction) {
+  const gateway = String(
+    transaction?.paymentGateway || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const paymentMethod = String(
+    transaction?.paymentMethod || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const type = String(
+    transaction?.type || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (gateway === "neurapay") {
+    return paymentMethod === "bank_transfer"
+      ? "NeuraPay Bank Transfer"
+      : "NeuraPay";
+  }
+
+  if (gateway === "flutterwave") {
+    if (paymentMethod === "card") {
+      return "Flutterwave Card";
+    }
+
+    if (
+      paymentMethod === "bank" ||
+      paymentMethod === "bank_transfer"
+    ) {
+      return "Flutterwave Bank Transfer";
+    }
+
+    return "Flutterwave";
+  }
+
+  if (type === "purchase") {
+    return (
+      String(transaction?.description || "").trim() ||
+      "Wallet Purchase"
+    );
+  }
+
+  if (type === "refund") {
+    return (
+      String(transaction?.description || "").trim() ||
+      "Wallet Refund"
+    );
+  }
+
+  if (paymentMethod) {
+    return titleCase(paymentMethod);
+  }
+
+  if (gateway) {
+    return titleCase(gateway);
+  }
+
+  return (
+    String(transaction?.description || "").trim() ||
+    "Wallet"
+  );
+}
+
+function normalizeWalletTransaction(transaction, index) {
+  const reference = String(
+    transaction?.reference ||
+      transaction?.transactionId ||
+      transaction?._id ||
+      transaction?.id ||
+      ""
+  ).trim();
+
+  const date =
+    transaction?.createdAt ||
+    transaction?.updatedAt ||
+    transaction?.date ||
+    null;
+
+  return {
+    ...transaction,
+
+    // key is only for React and is never shown as a fake transaction ID.
+    rowKey:
+      String(transaction?._id || "").trim() ||
+      reference ||
+      `${date || "wallet"}-${index}`,
+
+    id: reference || "—",
+    type: getPaymentTypeLabel(transaction),
+    method: getPaymentMethodLabel(transaction),
+    status:
+      String(transaction?.status || "completed")
+        .trim()
+        .toLowerCase(),
+    date,
+    amount: Number(transaction?.amount || 0),
+    rawType:
+      String(transaction?.type || "")
+        .trim()
+        .toLowerCase(),
+    environment:
+      String(transaction?.environment || "")
+        .trim()
+        .toLowerCase(),
+  };
+}
+
+function extractWalletFromResponse(response) {
+  if (response?.wallet) {
+    return response.wallet;
+  }
+
+  if (response?.data?.wallet) {
+    return response.data.wallet;
+  }
+
+  if (
+    response?.data &&
+    typeof response.data === "object"
+  ) {
+    return response.data;
+  }
+
+  return response || {};
+}
+
 export default function TransactionsPage() {
   const {
     orders,
@@ -228,6 +392,26 @@ export default function TransactionsPage() {
     refreshing,
     setRefreshing,
   ] = useState(false);
+
+  const [
+    paymentTransactions,
+    setPaymentTransactions,
+  ] = useState([]);
+
+  const [
+    paymentsLoading,
+    setPaymentsLoading,
+  ] = useState(false);
+
+  const [
+    paymentsLoaded,
+    setPaymentsLoaded,
+  ] = useState(false);
+
+  const [
+    paymentsError,
+    setPaymentsError,
+  ] = useState("");
 
   /*
    * Existing orders were saved with raw provider service IDs such as
@@ -411,6 +595,74 @@ export default function TransactionsPage() {
       orderSearch,
     ]);
 
+  const loadPayments = useCallback(
+    async ({ force = false } = {}) => {
+      if (paymentsLoading) {
+        return;
+      }
+
+      if (paymentsLoaded && !force) {
+        return;
+      }
+
+      try {
+        setPaymentsLoading(true);
+        setPaymentsError("");
+
+        /*
+         * IMPORTANT:
+         * Read the authenticated customer's REAL wallet from the API.
+         * Do not import anything from data/transactions/transactions.
+         */
+        const response = await api("/wallet");
+        const wallet = extractWalletFromResponse(response);
+
+        const rawTransactions = Array.isArray(
+          wallet?.transactions
+        )
+          ? wallet.transactions
+          : [];
+
+        const normalized = rawTransactions
+          .map(normalizeWalletTransaction)
+          .sort((left, right) => {
+            const leftTime = left?.date
+              ? new Date(left.date).getTime()
+              : 0;
+            const rightTime = right?.date
+              ? new Date(right.date).getTime()
+              : 0;
+
+            return rightTime - leftTime;
+          });
+
+        setPaymentTransactions(normalized);
+        setPaymentsLoaded(true);
+      } catch (error) {
+        console.error(
+          "Real payment history loading failed:",
+          error
+        );
+
+        setPaymentsError(
+          error?.message ||
+            "Unable to load payment history"
+        );
+      } finally {
+        setPaymentsLoading(false);
+      }
+    },
+    [paymentsLoaded, paymentsLoading]
+  );
+
+  useEffect(() => {
+    if (activeTab !== "payments") {
+      return;
+    }
+
+    loadPayments().catch(() => {});
+  }, [activeTab, loadPayments]);
+
   const filteredPayments =
     useMemo(() => {
       const query =
@@ -419,34 +671,44 @@ export default function TransactionsPage() {
           .toLowerCase();
 
       if (!query) {
-        return transactions;
+        return paymentTransactions;
       }
 
-      return transactions.filter(
+      return paymentTransactions.filter(
         (transaction) =>
           [
             transaction?.id,
             transaction?.type,
+            transaction?.rawType,
             transaction?.amount,
             transaction?.method,
+            transaction?.paymentGateway,
+            transaction?.paymentMethod,
             transaction?.status,
             transaction?.date,
+            transaction?.description,
+            transaction?.environment,
           ]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
             .includes(query)
       );
-    }, [paymentSearch]);
+    }, [
+      paymentTransactions,
+      paymentSearch,
+    ]);
 
   async function handleRefresh() {
     try {
       setRefreshing(true);
 
-      if (
-        activeTab === "orders"
-      ) {
+      if (activeTab === "orders") {
         await refreshOrders();
+      } else {
+        await loadPayments({
+          force: true,
+        });
       }
     } finally {
       setRefreshing(false);
@@ -470,6 +732,21 @@ export default function TransactionsPage() {
           }
         )}`
       : "₦0.00";
+  }
+
+  function formatWalletTransactionAmount(transaction) {
+    const value = formatMoney(transaction?.amount);
+    const type = String(transaction?.rawType || "").toLowerCase();
+
+    if (type === "purchase" || type === "withdraw") {
+      return `-${value}`;
+    }
+
+    if (type === "deposit" || type === "refund") {
+      return `+${value}`;
+    }
+
+    return value;
   }
 
   function formatDate(value) {
@@ -866,6 +1143,23 @@ export default function TransactionsPage() {
                   />
                 </div>
 
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  disabled={refreshing || paymentsLoading}
+                  aria-label="Refresh payment history"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
+                >
+                  <RefreshCw
+                    size={17}
+                    className={
+                      refreshing || paymentsLoading
+                        ? "animate-spin"
+                        : ""
+                    }
+                  />
+                </button>
+
                 <Link
                   href="/wallet"
                   className="flex h-11 items-center justify-center rounded-xl bg-blue-600 px-4 text-sm font-bold text-white transition hover:bg-blue-700"
@@ -875,11 +1169,29 @@ export default function TransactionsPage() {
               </div>
             </div>
 
-            {filteredPayments.length ===
-            0 ? (
+            {paymentsLoading && !paymentsLoaded ? (
+              <div className="flex min-h-[220px] items-center justify-center text-sm font-semibold text-[var(--muted-foreground)]">
+                Loading real payment history...
+              </div>
+            ) : paymentsError && !paymentsLoaded ? (
+              <div className="flex min-h-[220px] flex-col items-center justify-center px-4 text-center">
+                <p className="text-sm font-semibold text-red-600 dark:text-red-300">
+                  {paymentsError}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    loadPayments({ force: true })
+                  }
+                  className="mt-4 rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-bold text-[var(--foreground)]"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : filteredPayments.length === 0 ? (
               <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
                 <p className="text-sm font-semibold text-[var(--muted-foreground)]">
-                  No payments yet.
+                  No real wallet transactions yet.
                 </p>
               </div>
             ) : (
@@ -891,7 +1203,7 @@ export default function TransactionsPage() {
                     ) => (
                       <article
                         key={
-                          transaction.id
+                          transaction.rowKey
                         }
                         className="rounded-2xl border border-[var(--border)] bg-[var(--muted)]/45 p-4"
                       >
@@ -931,8 +1243,8 @@ export default function TransactionsPage() {
                           </div>
 
                           <p className="shrink-0 text-lg font-black text-[var(--foreground)]">
-                            {formatMoney(
-                              transaction.amount
+                            {formatWalletTransactionAmount(
+                              transaction
                             )}
                           </p>
                         </div>
@@ -979,7 +1291,7 @@ export default function TransactionsPage() {
                         ) => (
                           <tr
                             key={
-                              transaction.id
+                              transaction.rowKey
                             }
                             className="border-b border-[var(--border)] last:border-0"
                           >
@@ -1013,8 +1325,8 @@ export default function TransactionsPage() {
                               )}
                             </td>
                             <td className="py-4 text-right font-black text-[var(--foreground)]">
-                              {formatMoney(
-                                transaction.amount
+                              {formatWalletTransactionAmount(
+                                transaction
                               )}
                             </td>
                           </tr>
