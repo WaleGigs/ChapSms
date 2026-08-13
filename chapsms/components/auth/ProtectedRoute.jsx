@@ -19,23 +19,45 @@ export default function ProtectedRoute({
     if (!authLoading && !user) {
       router.replace("/login");
     }
-  }, [authLoading, user, router]);
+  }, [
+    authLoading,
+    user,
+    router,
+  ]);
 
-  if (authLoading || !user) {
+  /*
+   * CRITICAL:
+   * If a successful login already put the user in AuthContext, render
+   * immediately even if an older session-restore operation had not yet
+   * finished. The authenticated user is the strongest signal here.
+   */
+  if (user) {
+    return children;
+  }
+
+  if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--background)]">
         <div className="text-center">
           <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
 
           <p className="mt-4 text-sm text-[var(--muted-foreground)]">
-            {authLoading
-              ? "Loading your account..."
-              : "Redirecting to login..."}
+            Loading your account...
           </p>
         </div>
       </div>
     );
   }
 
-  return children;
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[var(--background)]">
+      <div className="text-center">
+        <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
+
+        <p className="mt-4 text-sm text-[var(--muted-foreground)]">
+          Redirecting to login...
+        </p>
+      </div>
+    </div>
+  );
 }

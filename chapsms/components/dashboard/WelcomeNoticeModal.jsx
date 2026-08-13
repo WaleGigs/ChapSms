@@ -17,7 +17,11 @@ import {
   useAuth,
 } from "@/context/AuthContext";
 
-const NOTICE_DELAY_MS = 500;
+/*
+ * Give the dashboard time to paint and become interactive before
+ * displaying a non-critical announcement.
+ */
+const NOTICE_DELAY_MS = 1400;
 
 export default function WelcomeNoticeModal({
   whatsappChannelUrl =
@@ -27,7 +31,6 @@ export default function WelcomeNoticeModal({
 }) {
   const {
     user,
-    authLoading,
   } = useAuth();
 
   const [open, setOpen] =
@@ -35,15 +38,13 @@ export default function WelcomeNoticeModal({
 
   useEffect(() => {
     if (
-      authLoading ||
       !user ||
       user?.role === "admin"
     ) {
       return undefined;
     }
 
-    let shouldShow =
-      false;
+    let shouldShow = false;
 
     try {
       const pending =
@@ -55,18 +56,14 @@ export default function WelcomeNoticeModal({
         shouldShow = true;
 
         /*
-         * Consume immediately so route changes/refreshes do not
-         * show this same login announcement twice.
+         * Consume once. It will not repeatedly appear if the user
+         * changes route while already logged in.
          */
         window.sessionStorage.removeItem(
           LOGIN_ANNOUNCEMENT_KEY
         );
       }
     } catch {
-      /*
-       * No storage = do not repeatedly annoy the user on every
-       * render. The login itself remains unaffected.
-       */
       shouldShow = false;
     }
 
@@ -74,20 +71,50 @@ export default function WelcomeNoticeModal({
       return undefined;
     }
 
-    const timer =
-      window.setTimeout(() => {
-        setOpen(true);
-      }, NOTICE_DELAY_MS);
+    let frameOne = 0;
+    let frameTwo = 0;
+    let timer = 0;
+
+    /*
+     * Two animation frames guarantee that React has committed the
+     * authenticated dashboard before we even start the notice delay.
+     */
+    frameOne =
+      window.requestAnimationFrame(
+        () => {
+          frameTwo =
+            window.requestAnimationFrame(
+              () => {
+                timer =
+                  window.setTimeout(
+                    () => {
+                      setOpen(true);
+                    },
+                    NOTICE_DELAY_MS
+                  );
+              }
+            );
+        }
+      );
 
     return () => {
-      window.clearTimeout(
-        timer
-      );
+      if (frameOne) {
+        window.cancelAnimationFrame(
+          frameOne
+        );
+      }
+
+      if (frameTwo) {
+        window.cancelAnimationFrame(
+          frameTwo
+        );
+      }
+
+      if (timer) {
+        window.clearTimeout(timer);
+      }
     };
-  }, [
-    authLoading,
-    user,
-  ]);
+  }, [user]);
 
   useEffect(() => {
     if (!open) {
@@ -95,8 +122,7 @@ export default function WelcomeNoticeModal({
     }
 
     const previousOverflow =
-      document.body.style
-        .overflow;
+      document.body.style.overflow;
 
     document.body.style.overflow =
       "hidden";
@@ -211,12 +237,7 @@ export default function WelcomeNoticeModal({
             id="login-announcement-description"
             className="mx-auto max-w-sm text-center text-sm leading-7 text-[var(--muted-foreground)] sm:text-base"
           >
-            Join our official WhatsApp
-            channel to receive service
-            updates, maintenance notices,
-            availability information and
-            important ChapsSmS
-            announcements.
+            Join our official WhatsApp channel to receive service updates, maintenance notices, availability information and important ChapsSmS announcements.
           </p>
 
           <div className="mt-6 space-y-3">
@@ -274,13 +295,9 @@ export default function WelcomeNoticeModal({
 
           {!whatsappChannelUrl ? (
             <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-center text-xs font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-              Add
-              {" "}
-              NEXT_PUBLIC_WHATSAPP_CHANNEL_URL
-              {" "}
-              to your frontend environment
-              variables to activate the
-              WhatsApp button.
+              Add{" "}
+              NEXT_PUBLIC_WHATSAPP_CHANNEL_URL{" "}
+              to your frontend environment variables to activate the WhatsApp button.
             </p>
           ) : null}
         </div>

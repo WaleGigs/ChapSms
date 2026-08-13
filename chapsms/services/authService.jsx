@@ -9,7 +9,7 @@
  * while newer auth pages import:
  *   "@/services/auth.service"
  *
- * Keep one implementation in auth.service.js and re-export it here so
+ * Keep one implementation in auth.service.jsx and re-export it here so
  * both import styles resolve to exactly the same authentication service.
  */
 

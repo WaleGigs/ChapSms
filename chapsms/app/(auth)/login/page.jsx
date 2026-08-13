@@ -1,21 +1,27 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useState,
 } from "react";
+
 import {
   useRouter,
 } from "next/navigation";
+
 import Link from "next/link";
+
 import {
   Mail,
 } from "lucide-react";
+
 import toast from "react-hot-toast";
 
 import {
   useAuth,
 } from "@/context/AuthContext";
+
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
@@ -58,9 +64,7 @@ function getRequestedPath() {
 }
 
 function getDestination(user) {
-  if (
-    user?.role === "admin"
-  ) {
+  if (user?.role === "admin") {
     return "/admin";
   }
 
@@ -71,8 +75,7 @@ function getDestination(user) {
 }
 
 export default function LoginPage() {
-  const router =
-    useRouter();
+  const router = useRouter();
 
   const {
     login,
@@ -105,12 +108,22 @@ export default function LoginPage() {
     setGoogleLoading,
   ] = useState(false);
 
+  /*
+   * Start downloading the most common post-login route while the
+   * customer is still entering credentials.
+   *
+   * This reduces the client-side route transition after auth succeeds.
+   */
+  useEffect(() => {
+    router.prefetch("/buy-number");
+    router.prefetch("/dashboard");
+    router.prefetch("/admin");
+  }, [router]);
+
   const currentErrors =
     useMemo(
       () =>
-        validateLoginForm(
-          form
-        ),
+        validateLoginForm(form),
       [form]
     );
 
@@ -186,13 +199,19 @@ export default function LoginPage() {
         "Login successful"
     );
 
+    /*
+     * router.replace() is enough.
+     *
+     * The previous code immediately called router.refresh() after
+     * replace(). That forces an additional App Router refresh while the
+     * route is already changing and can make a successful login look
+     * several seconds slower.
+     */
     router.replace(
       getDestination(
         response?.user
       )
     );
-
-    router.refresh();
   }
 
   async function handleSubmit(
@@ -271,10 +290,7 @@ export default function LoginPage() {
         return;
       }
 
-      setSubmitError(
-        message
-      );
-
+      setSubmitError(message);
       toast.error(message);
     } finally {
       setLoading(false);
@@ -310,10 +326,7 @@ export default function LoginPage() {
         error?.message ||
         "Google login failed. Please try again.";
 
-      setSubmitError(
-        message
-      );
-
+      setSubmitError(message);
       toast.error(message);
     } finally {
       setGoogleLoading(false);
@@ -332,9 +345,7 @@ export default function LoginPage() {
         </h1>
 
         <p className="mt-3 text-sm leading-7 text-[var(--muted-foreground)] sm:text-base">
-          Login to manage your
-          wallet, orders, and
-          virtual numbers.
+          Login to manage your wallet, orders, and virtual numbers.
         </p>
       </div>
 
@@ -360,9 +371,11 @@ export default function LoginPage() {
 
       <div className="my-6 flex items-center gap-3">
         <span className="h-px flex-1 bg-[var(--border)]" />
+
         <span className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
           or use email
         </span>
+
         <span className="h-px flex-1 bg-[var(--border)]" />
       </div>
 
@@ -464,8 +477,7 @@ export default function LoginPage() {
       </form>
 
       <p className="mt-6 text-center text-sm text-[var(--muted-foreground)]">
-        Don&apos;t have an
-        account?{" "}
+        Don&apos;t have an account?{" "}
 
         <Link
           href="/signup"
