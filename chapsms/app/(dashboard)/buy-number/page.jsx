@@ -20,6 +20,9 @@ import { useOrders } from "@/hooks/useOrders";
 import { useWallet } from "@/hooks/useWallet";
 import { catalogService } from "@/services/catalogService";
 import { orderService } from "@/services/orderService";
+import {
+  trackNumberPurchased,
+} from "@/lib/tiktokEvents";
 
 import SearchableCountrySelect from "@/components/dashboard/SearchableCountrySelect";
 import SearchableServiceSelect from "@/components/dashboard/SearchableServiceSelect";
@@ -217,43 +220,6 @@ export default function BuyNumberPage() {
   ].includes(orderStatus);
 
   const currentOrderId = getOrderId(currentOrder);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    orderService
-      .recoverPendingPurchases()
-      .then(async (result) => {
-        if (
-          cancelled ||
-          !result?.repaired
-        ) {
-          return;
-        }
-
-        await refreshWallet();
-
-        if (
-          result.refundedCount > 0
-        ) {
-          toast.success(
-            result.message ||
-              "An interrupted purchase was refunded to your wallet."
-          );
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "Pending purchase recovery failed:",
-          error
-        );
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshWallet]);
-
 
   const saveActiveOrder = useCallback((order) => {
     const orderId = getOrderId(order);
@@ -540,6 +506,16 @@ export default function BuyNumberPage() {
     }
 
     if (
+      Number.isFinite(serviceStock) &&
+      serviceStock <= 0
+    ) {
+      toast.error(
+        "ChapsSms does not currently have numbers available for this selection."
+      );
+      return;
+    }
+
+    if (
       !Number.isFinite(estimatedPrice) ||
       estimatedPrice <= 0
     ) {
@@ -592,9 +568,58 @@ export default function BuyNumberPage() {
 
       pollingAttempts.current = 0;
 
+      /*
+       * The backend has returned a real created order at this point.
+       * Track product usage separately from wallet-funding revenue so
+       * TikTok does not count the same customer money twice as Purchase.
+       */
+      trackNumberPurchased({
+        value:
+          response?.order?.price ??
+          estimatedPrice,
+        currency: "NGN",
+        orderId:
+          response?.order?._id ||
+          response?.order?.id,
+        serviceName:
+          response?.order?.serviceName ||
+          selectedService?.name ||
+          selectedService?.title ||
+          selectedService?.label ||
+          "Virtual number",
+      });
+
       toast.success("Number purchased successfully");
     } catch (error) {
       console.error("Purchase failed:", error);
+
+      /*
+       * The backend reserves the wallet before asking the provider for a
+       * number. If the provider returns NO_NUMBERS, the backend immediately
+       * reverses that reservation. Always fetch the authoritative wallet
+       * here so the customer never keeps seeing the temporary deduction.
+       */
+      try {
+        if (
+          error?.data?.walletBalance !==
+            undefined &&
+          error?.data?.walletBalance !==
+            null
+        ) {
+          updateWalletBalance(
+            Number(
+              error.data.walletBalance
+            )
+          );
+        }
+
+        await refreshWallet();
+      } catch (walletRefreshError) {
+        console.error(
+          "Wallet refresh after failed purchase also failed:",
+          walletRefreshError
+        );
+      }
 
       toast.error(
         getChapsSmsMessage(
@@ -1128,9 +1153,10 @@ async function handleCancel() {
 
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                 Use this number on{" "}
-                {currentOrder.serviceName ||
-                  selectedService?.name ||
-                  formatName(currentOrder.service)}{" "}
+                {formatName(
+                  currentOrder.service ||
+                    selectedService?.name
+                )}{" "}
                 and request the verification code.
               </p>
             </div>
@@ -1175,6 +1201,17 @@ async function handleCancel() {
                 {getStatusLabel()}
               </span>
 
+              <p className="mt-3 text-sm text-[var(--muted-foreground)]">
+                {selectedCountry?.flag ||
+                  currentOrder.country}{" "}
+                {selectedCountry?.eng ||
+                  formatName(currentOrder.country)}
+
+                <span className="mx-2">•</span>
+
+                {selectedService?.name ||
+                  formatName(currentOrder.service)}
+              </p>
             </div>
 
             <div className="w-full rounded-xl bg-[var(--muted)] px-4 py-3 text-left sm:w-auto sm:text-right">

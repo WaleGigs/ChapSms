@@ -11,6 +11,7 @@ import Script from "next/script";
 import toast from "react-hot-toast";
 import {
   Building2,
+  Clock3,
   Copy,
   CreditCard,
   Landmark,
@@ -38,6 +39,26 @@ function formatNaira(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function formatCountdown(seconds) {
+  const safe =
+    Math.max(
+      0,
+      Number(seconds) || 0,
+    );
+
+  const minutes =
+    Math.floor(
+      safe / 60,
+    );
+
+  const remainingSeconds =
+    safe % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(
+    remainingSeconds,
+  ).padStart(2, "0")}`;
 }
 
 async function copyText(value) {
@@ -103,6 +124,13 @@ export default function WalletPage() {
   const [verifying, setVerifying] = useState(false);
   const flutterwaveModalRef = useRef(null);
   const checkoutTrackedRef = useRef(new Set());
+  const purchaseTrackedRef = useRef(new Set());
+  const [flutterwaveBankTransfer, setFlutterwaveBankTransfer] =
+    useState(null);
+  const [flutterwaveBankChecking, setFlutterwaveBankChecking] =
+    useState(false);
+  const [flutterwaveBankSeconds, setFlutterwaveBankSeconds] =
+    useState(0);
 
   // NeuraPay state
   const [account, setAccount] = useState(null);
@@ -162,6 +190,227 @@ export default function WalletPage() {
     return () => window.clearInterval(interval);
   }, [gateway, account, neurapayFundingActive, refreshWallet]);
 
+  async function completeFlutterwaveBankTransfer(
+    status,
+  ) {
+    if (
+      !status?.credited ||
+      !flutterwaveBankTransfer
+    ) {
+      return false;
+    }
+
+    if (
+      status.walletBalance !==
+        undefined
+    ) {
+      updateWalletBalance(
+        Number(
+          status.walletBalance,
+        ),
+      );
+    }
+
+    const trackingKey =
+      `flutterwave:${flutterwaveBankTransfer.txRef}`;
+
+    if (
+      !purchaseTrackedRef
+        .current
+        .has(
+          trackingKey,
+        ) &&
+      String(
+        status.paymentEnvironment ||
+          "live",
+      ).toLowerCase() ===
+        "live"
+    ) {
+      purchaseTrackedRef
+        .current
+        .add(
+          trackingKey,
+        );
+
+      trackWalletFundingPurchase({
+        value:
+          status.amountCredited ||
+          status.amount ||
+          flutterwaveBankTransfer.amount,
+        currency:
+          status.currency ||
+          flutterwaveBankTransfer.currency ||
+          "NGN",
+        gateway:
+          "Flutterwave",
+        reference:
+          flutterwaveBankTransfer.txRef,
+      });
+    }
+
+    await refreshWallet();
+
+    toast.success(
+      status.newlyCredited
+        ? "Payment received. Wallet funded successfully."
+        : "Payment confirmed. Your wallet is funded."
+    );
+
+    setFlutterwaveBankTransfer(
+      null,
+    );
+    setFlutterwaveBankSeconds(
+      0,
+    );
+
+    return true;
+  }
+
+  const checkFlutterwaveBankTransfer =
+    useCallback(
+      async ({
+        refreshProvider = false,
+        silent = false,
+      } = {}) => {
+        const txRef =
+          flutterwaveBankTransfer
+            ?.txRef;
+
+        if (
+          !txRef ||
+          flutterwaveBankChecking
+        ) {
+          return null;
+        }
+
+        try {
+          setFlutterwaveBankChecking(
+            true,
+          );
+
+          const status =
+            await paymentService
+              .getPaymentStatus(
+                txRef,
+                {
+                  refresh:
+                    refreshProvider,
+                },
+              );
+
+          if (
+            status?.credited
+          ) {
+            await completeFlutterwaveBankTransfer(
+              status,
+            );
+          } else if (
+            !silent &&
+            refreshProvider
+          ) {
+            toast(
+              "Payment is not confirmed yet. ChapsSms will keep checking automatically."
+            );
+          }
+
+          return status;
+        } catch (error) {
+          if (!silent) {
+            toast.error(
+              error?.message ||
+                "Unable to check this Flutterwave transfer"
+            );
+          }
+
+          return null;
+        } finally {
+          setFlutterwaveBankChecking(
+            false,
+          );
+        }
+      },
+      [
+        flutterwaveBankTransfer,
+        flutterwaveBankChecking,
+        refreshWallet,
+        updateWalletBalance,
+      ],
+    );
+
+  useEffect(() => {
+    if (
+      !flutterwaveBankTransfer
+        ?.txRef
+    ) {
+      return undefined;
+    }
+
+    const updateCountdown = () => {
+      const expiresAt =
+        new Date(
+          flutterwaveBankTransfer
+            .expiresAt,
+        ).getTime();
+
+      if (
+        Number.isNaN(
+          expiresAt,
+        )
+      ) {
+        setFlutterwaveBankSeconds(
+          0,
+        );
+        return;
+      }
+
+      setFlutterwaveBankSeconds(
+        Math.max(
+          0,
+          Math.ceil(
+            (expiresAt -
+              Date.now()) /
+              1000,
+          ),
+        ),
+      );
+    };
+
+    updateCountdown();
+
+    const countdown =
+      window.setInterval(
+        updateCountdown,
+        1000,
+      );
+
+    const poll =
+      window.setInterval(
+        () => {
+          if (
+            document.visibilityState ===
+            "visible"
+          ) {
+            checkFlutterwaveBankTransfer({
+              silent: true,
+            });
+          }
+        },
+        6000,
+      );
+
+    return () => {
+      window.clearInterval(
+        countdown,
+      );
+      window.clearInterval(
+        poll,
+      );
+    };
+  }, [
+    flutterwaveBankTransfer,
+    checkFlutterwaveBankTransfer,
+  ]);
+
   async function handleFlutterwavePayment(event) {
     event.preventDefault();
 
@@ -170,8 +419,14 @@ export default function WalletPage() {
       return;
     }
 
-    if (!scriptReady || typeof window.FlutterwaveCheckout !== "function") {
-      toast.error("Flutterwave checkout is still loading. Try again in a moment.");
+    if (
+      paymentMethod === "card" &&
+      (
+        !scriptReady ||
+        typeof window.FlutterwaveCheckout !== "function"
+      )
+    ) {
+      toast.error("Flutterwave card checkout is still loading. Try again in a moment.");
       return;
     }
 
@@ -183,8 +438,8 @@ export default function WalletPage() {
         paymentMethod,
       });
 
-      if (!checkout?.txRef || !checkout?.publicKey) {
-        throw new Error("The server did not return valid Flutterwave checkout details");
+      if (!checkout?.txRef) {
+        throw new Error("The server did not return a valid Flutterwave payment reference");
       }
 
       trackCheckoutOnce(
@@ -196,6 +451,37 @@ export default function WalletPage() {
         }
       );
 
+      /*
+       * BANK TRANSFER:
+       * Flutterwave generated the temporary account on our backend.
+       * Display it directly inside ChapsSms — no redirect and no hosted page.
+       */
+      if (paymentMethod === "bank") {
+        if (
+          !checkout?.bankTransfer?.accountNumber ||
+          !checkout?.bankTransfer?.bankName
+        ) {
+          throw new Error(
+            "Flutterwave did not return bank-transfer details"
+          );
+        }
+
+        setFlutterwaveBankTransfer({
+          txRef: checkout.txRef,
+          amount: checkout.amount,
+          currency: checkout.currency || "NGN",
+          environment: checkout.environment,
+          ...checkout.bankTransfer,
+        });
+
+        setFunding(false);
+        return;
+      }
+
+      if (!checkout?.publicKey) {
+        throw new Error("The server did not return valid Flutterwave card checkout details");
+      }
+
       let verificationStarted = false;
 
       const modal = window.FlutterwaveCheckout({
@@ -203,7 +489,7 @@ export default function WalletPage() {
         tx_ref: checkout.txRef,
         amount: checkout.amount,
         currency: checkout.currency || "NGN",
-        payment_options: checkout.paymentOptions,
+        payment_options: "card",
         customer: checkout.customer,
         meta: checkout.meta,
         customizations: {
@@ -213,9 +499,6 @@ export default function WalletPage() {
         configurations: {
           session_duration: 10,
           max_retry_attempt: 5,
-        },
-        bank_transfer_options: {
-          expires: 3600,
         },
         callback: async (payment) => {
           verificationStarted = true;
@@ -231,11 +514,6 @@ export default function WalletPage() {
               updateWalletBalance(Number(result.walletBalance));
             }
 
-            /*
-             * Only report REAL, newly credited funding as TikTok Purchase.
-             * Test-mode funding and a repeated "already credited" verification
-             * are not new advertising conversions.
-             */
             const alreadyCredited =
               result?.alreadyCredited === true ||
               /already credited/i.test(
@@ -275,7 +553,7 @@ export default function WalletPage() {
           flutterwaveModalRef.current = null;
           if (!verificationStarted) {
             setFunding(false);
-            toast("Flutterwave payment cancelled");
+            toast("Flutterwave card payment cancelled");
           }
         },
       });
@@ -286,6 +564,19 @@ export default function WalletPage() {
       toast.error(error?.message || "Unable to start Flutterwave payment");
       setFunding(false);
     }
+  }
+
+  function handleCancelFlutterwaveBankTransfer() {
+    setFlutterwaveBankTransfer(
+      null,
+    );
+    setFlutterwaveBankSeconds(
+      0,
+    );
+
+    toast(
+      "Funding screen closed. The temporary Flutterwave account will expire automatically."
+    );
   }
 
   async function handleCreateNeuraPayAccount() {
@@ -478,18 +769,22 @@ export default function WalletPage() {
           </div>
 
           {gateway === "flutterwave" ? (
-            <form onSubmit={handleFlutterwavePayment} className="mt-6">
+            <div className="mt-6">
               <div className="rounded-2xl border border-blue-500/25 bg-blue-500/5 p-4">
-                <p className="font-black text-[var(--foreground)]">Flutterwave secure checkout</p>
+                <p className="font-black text-[var(--foreground)]">
+                  Flutterwave secure payment
+                </p>
                 <p className="mt-1 text-sm leading-6 text-[var(--muted-foreground)]">
-                  Pay {formatNaira(numericAmount)} by bank transfer or card inside Flutterwave checkout.
+                  Bank-transfer instructions stay directly on ChapsSms. Card payments open only Flutterwave&apos;s secure inline overlay.
                 </p>
               </div>
 
               <div className="mt-5 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1.5">
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod("bank")}
+                  onClick={() => {
+                    setPaymentMethod("bank");
+                  }}
                   className={`flex min-h-14 items-center justify-center gap-2 rounded-xl text-sm font-black transition ${
                     paymentMethod === "bank"
                       ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
@@ -502,7 +797,10 @@ export default function WalletPage() {
 
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod("card")}
+                  onClick={() => {
+                    setPaymentMethod("card");
+                    setFlutterwaveBankTransfer(null);
+                  }}
                   className={`flex min-h-14 items-center justify-center gap-2 rounded-xl text-sm font-black transition ${
                     paymentMethod === "card"
                       ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
@@ -514,28 +812,181 @@ export default function WalletPage() {
                 </button>
               </div>
 
-              <Button
-                type="submit"
-                disabled={flutterwaveBusy || !scriptReady}
-                className="mt-7 h-14 w-full"
-              >
-                {flutterwaveBusy ? (
-                  <LoaderCircle size={19} className="animate-spin" />
-                ) : (
-                  <Wallet size={19} />
-                )}
+              {paymentMethod === "bank" && flutterwaveBankTransfer ? (
+                <div className="mt-6">
+                  <div className="text-center">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/20">
+                      <Building2 size={28} />
+                    </div>
+                    <h2 className="mt-5 text-2xl font-black text-[var(--foreground)]">
+                      Transfer to complete
+                    </h2>
+                    <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+                      Send the exact amount below. Your ChapsSms wallet is credited automatically after Flutterwave confirms the transfer.
+                    </p>
+                  </div>
 
-                {verifying
-                  ? "Verifying payment..."
-                  : funding
-                    ? "Opening Flutterwave..."
-                    : `Pay ${formatNaira(numericAmount)} with Flutterwave`}
-              </Button>
+                  <div className="mt-6 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--muted)]">
+                    {[
+                      {
+                        label: "Bank",
+                        value: flutterwaveBankTransfer.bankName,
+                        copy: false,
+                      },
+                      {
+                        label: "Account number",
+                        value: flutterwaveBankTransfer.accountNumber,
+                        copy: true,
+                      },
+                      flutterwaveBankTransfer.transferNote
+                        ? {
+                            label: "Transfer note",
+                            value: flutterwaveBankTransfer.transferNote,
+                            copy: true,
+                          }
+                        : null,
+                      {
+                        label: "Amount",
+                        value: formatNaira(
+                          flutterwaveBankTransfer.transferAmount
+                        ),
+                        raw: flutterwaveBankTransfer.transferAmount,
+                        copy: true,
+                      },
+                    ]
+                      .filter(Boolean)
+                      .map((item, index, items) => (
+                        <div
+                          key={item.label}
+                          className={`flex items-center gap-4 px-5 py-4 ${
+                            index < items.length - 1
+                              ? "border-b border-[var(--border)]"
+                              : ""
+                          }`}
+                        >
+                          <p className="w-28 shrink-0 text-sm font-semibold text-[var(--muted-foreground)]">
+                            {item.label}
+                          </p>
+                          <p className="min-w-0 flex-1 break-words text-right text-base font-black text-[var(--foreground)]">
+                            {item.value || "—"}
+                          </p>
+                          {item.copy ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleCopy(
+                                  item.raw ?? item.value
+                                )
+                              }
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)]"
+                              aria-label={`Copy ${item.label}`}
+                            >
+                              <Copy size={16} />
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                  </div>
 
-              <p className="mt-3 text-center text-xs text-[var(--muted-foreground)]">
-                Use Flutterwave&apos;s close (×) control to cancel before completing payment.
-              </p>
-            </form>
+                  <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    <Clock3 size={18} className="mt-0.5 shrink-0" />
+                    <p>
+                      This account is for this transaction only and expires in{" "}
+                      <strong>
+                        {formatCountdown(flutterwaveBankSeconds)}
+                      </strong>.
+                    </p>
+                  </div>
+
+                  <div className="mt-5 flex items-center justify-center gap-2 text-sm font-bold text-[var(--muted-foreground)]">
+                    <LoaderCircle
+                      size={17}
+                      className={
+                        flutterwaveBankChecking
+                          ? "animate-spin"
+                          : "animate-pulse"
+                      }
+                    />
+                    Waiting for payment...
+                  </div>
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      className="h-14 w-full"
+                      disabled={flutterwaveBankChecking}
+                      onClick={() =>
+                        checkFlutterwaveBankTransfer({
+                          refreshProvider: true,
+                          silent: false,
+                        })
+                      }
+                    >
+                      {flutterwaveBankChecking ? (
+                        <LoaderCircle size={18} className="animate-spin" />
+                      ) : (
+                        <RefreshCw size={18} />
+                      )}
+                      I have paid — check status
+                    </Button>
+
+                    <button
+                      type="button"
+                      onClick={handleCancelFlutterwaveBankTransfer}
+                      className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-4 text-sm font-black text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]"
+                    >
+                      <XCircle size={18} />
+                      Cancel
+                    </button>
+                  </div>
+
+                  <p className="mt-3 text-center text-xs leading-5 text-[var(--muted-foreground)]">
+                    Closing this screen does not reverse a transfer you already sent. Flutterwave&apos;s temporary account expires automatically.
+                  </p>
+                </div>
+              ) : (
+                <form
+                  onSubmit={handleFlutterwavePayment}
+                  className="mt-6"
+                >
+                  <Button
+                    type="submit"
+                    disabled={
+                      flutterwaveBusy ||
+                      (
+                        paymentMethod === "card" &&
+                        !scriptReady
+                      )
+                    }
+                    className="h-14 w-full"
+                  >
+                    {flutterwaveBusy ? (
+                      <LoaderCircle size={19} className="animate-spin" />
+                    ) : paymentMethod === "bank" ? (
+                      <Landmark size={19} />
+                    ) : (
+                      <Wallet size={19} />
+                    )}
+
+                    {verifying
+                      ? "Verifying payment..."
+                      : funding
+                        ? paymentMethod === "bank"
+                          ? "Generating bank account..."
+                          : "Opening secure card payment..."
+                        : paymentMethod === "bank"
+                          ? `Generate account for ${formatNaira(numericAmount)}`
+                          : `Pay ${formatNaira(numericAmount)} by card`}
+                  </Button>
+
+                  <p className="mt-3 text-center text-xs text-[var(--muted-foreground)]">
+                    {paymentMethod === "bank"
+                      ? "The bank account and exact transfer amount will appear here on ChapsSms."
+                      : "Card details are entered only inside Flutterwave's secure inline overlay."}
+                  </p>
+                </form>
+              )}
+            </div>
           ) : (
             <div className="mt-6">
               {!neurapayFundingActive ? (
@@ -693,7 +1144,7 @@ export default function WalletPage() {
             {
               icon: Building2,
               title: "Two gateways",
-              text: "Use Flutterwave card/bank checkout or your NeuraPay reserved account.",
+              text: "Flutterwave bank details stay on ChapsSms; card uses the secure inline overlay.",
             },
             {
               icon: ShieldCheck,

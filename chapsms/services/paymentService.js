@@ -26,6 +26,26 @@ export const paymentService = {
       }),
     });
   },
+
+  async getPaymentStatus(
+    txRef,
+    {
+      refresh = false,
+    } = {},
+  ) {
+    const reference =
+      encodeURIComponent(
+        String(txRef || "").trim(),
+      );
+
+    return api(
+      `/payment/status/${reference}${
+        refresh
+          ? "?refresh=1"
+          : ""
+      }`
+    );
+  },
 };
 
 export default paymentService;
