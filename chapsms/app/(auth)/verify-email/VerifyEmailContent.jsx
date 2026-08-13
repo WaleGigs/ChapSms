@@ -26,6 +26,9 @@ import Button from "@/components/ui/Button";
 import {
   authService,
 } from "@/services/auth.service";
+import {
+  trackCompleteRegistration,
+} from "@/lib/tiktokEvents";
 
 function normalizeEmail(value) {
   return String(value || "")
@@ -331,6 +334,17 @@ export default function VerifyEmailContent() {
             )
           );
       }
+
+      /*
+       * TikTok conversion tracking:
+       * Fire CompleteRegistration only AFTER the backend has confirmed
+       * that the six-digit email verification code is valid.
+       *
+       * Do not fire this on the signup form itself, because users who
+       * never verify their email should not be counted as completed
+       * registrations.
+       */
+      trackCompleteRegistration();
 
       toast.success(
         response?.message ||
