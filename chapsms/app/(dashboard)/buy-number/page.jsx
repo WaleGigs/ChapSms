@@ -218,6 +218,43 @@ export default function BuyNumberPage() {
 
   const currentOrderId = getOrderId(currentOrder);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    orderService
+      .recoverPendingPurchases()
+      .then(async (result) => {
+        if (
+          cancelled ||
+          !result?.repaired
+        ) {
+          return;
+        }
+
+        await refreshWallet();
+
+        if (
+          result.refundedCount > 0
+        ) {
+          toast.success(
+            result.message ||
+              "An interrupted purchase was refunded to your wallet."
+          );
+        }
+      })
+      .catch((error) => {
+        console.error(
+          "Pending purchase recovery failed:",
+          error
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshWallet]);
+
+
   const saveActiveOrder = useCallback((order) => {
     const orderId = getOrderId(order);
 
@@ -1091,10 +1128,9 @@ async function handleCancel() {
 
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                 Use this number on{" "}
-                {formatName(
-                  currentOrder.service ||
-                    selectedService?.name
-                )}{" "}
+                {currentOrder.serviceName ||
+                  selectedService?.name ||
+                  formatName(currentOrder.service)}{" "}
                 and request the verification code.
               </p>
             </div>
@@ -1139,17 +1175,6 @@ async function handleCancel() {
                 {getStatusLabel()}
               </span>
 
-              <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-                {selectedCountry?.flag ||
-                  currentOrder.country}{" "}
-                {selectedCountry?.eng ||
-                  formatName(currentOrder.country)}
-
-                <span className="mx-2">•</span>
-
-                {selectedService?.name ||
-                  formatName(currentOrder.service)}
-              </p>
             </div>
 
             <div className="w-full rounded-xl bg-[var(--muted)] px-4 py-3 text-left sm:w-auto sm:text-right">

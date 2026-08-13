@@ -79,6 +79,12 @@ export const orderService = {
     });
   },
 
+  async recoverPendingPurchases() {
+    return api("/orders/recover-pending", {
+      method: "POST",
+    });
+  },
+
   async getOrders() {
     const response =
       await api("/orders");

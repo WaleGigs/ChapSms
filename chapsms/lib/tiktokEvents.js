@@ -15,8 +15,7 @@ export function trackTikTokEvent(
   eventName,
   parameters = {}
 ) {
-  const ttq =
-    getTikTokQueue();
+  const ttq = getTikTokQueue();
 
   if (
     !ttq ||
@@ -25,11 +24,7 @@ export function trackTikTokEvent(
     return false;
   }
 
-  ttq.track(
-    eventName,
-    parameters
-  );
-
+  ttq.track(eventName, parameters);
   return true;
 }
 
@@ -42,75 +37,43 @@ export function trackCompleteRegistration() {
 export function trackInitiateCheckout({
   value,
   currency = "NGN",
+  description = "ChapsSms wallet funding started",
 } = {}) {
-  const amount =
-    Number(value);
+  const amount = Number(value);
 
   return trackTikTokEvent(
     "InitiateCheckout",
     {
-      ...(Number.isFinite(amount) &&
-      amount > 0
+      ...(Number.isFinite(amount) && amount > 0
         ? {
             value: amount,
             currency,
           }
         : {}),
-    }
-  );
-}
-
-/*
- * Wallet funding is a ChapsSms-specific action rather than an actual
- * SMS-number purchase, so this is intentionally a CUSTOM TikTok event.
- *
- * TikTok custom events can be used for reporting/audiences, but standard
- * events are generally the better choice for campaign optimization.
- */
-export function trackWalletFunded({
-  value,
-  currency = "NGN",
-  description =
-    "ChapsSms wallet funded",
-} = {}) {
-  const amount =
-    Number(value);
-
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    return false;
-  }
-
-  return trackTikTokEvent(
-    "WalletFunded",
-    {
-      value: amount,
-      currency,
       description,
     }
   );
 }
 
 /*
- * Use Purchase for the actual successful SMS-number purchase.
- * Fire this ONLY after your ChapsSms backend confirms the order.
+ * IMPORTANT BUSINESS MAPPING
+ * --------------------------
+ * A successful wallet funding is the point where ChapsSms actually
+ * receives customer money. That is therefore the TikTok standard
+ * Purchase conversion used for ad reporting/value measurement.
+ *
+ * Do NOT also report a later wallet-balance spend as another Purchase,
+ * otherwise the same customer money would be counted twice as revenue.
  */
-export function trackPurchase({
+export function trackWalletFundingPurchase({
   value,
   currency = "NGN",
-  contentId,
-  description =
-    "Virtual number purchase",
+  gateway = "",
+  reference = "",
 } = {}) {
-  const amount =
-    Number(value);
+  const amount = Number(value);
 
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
+  if (!Number.isFinite(amount) || amount <= 0) {
     return false;
   }
 
@@ -119,18 +82,47 @@ export function trackPurchase({
     {
       value: amount,
       currency,
-      description,
-      content_type:
-        "product",
-      ...(contentId
+      content_type: "product",
+      content_ids: reference
+        ? [String(reference)]
+        : ["wallet-funding"],
+      description: gateway
+        ? `ChapsSms wallet funded via ${gateway}`
+        : "ChapsSms wallet funded",
+    }
+  );
+}
+
+/*
+ * This is intentionally a custom event rather than another Purchase.
+ * The money was already counted when the wallet was funded.
+ */
+export function trackNumberPurchased({
+  value,
+  currency = "NGN",
+  orderId,
+  serviceName = "Virtual number",
+} = {}) {
+  const amount = Number(value);
+
+  return trackTikTokEvent(
+    "NumberPurchased",
+    {
+      ...(Number.isFinite(amount) && amount > 0
         ? {
-            content_ids: [
-              String(
-                contentId
-              ),
-            ],
+            value: amount,
+            currency,
           }
         : {}),
+      content_type: "product",
+      ...(orderId
+        ? {
+            content_ids: [String(orderId)],
+          }
+        : {}),
+      description: String(
+        serviceName || "Virtual number"
+      ),
     }
   );
 }

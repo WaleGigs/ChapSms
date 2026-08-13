@@ -271,10 +271,42 @@ function getPaymentMethodLabel(transaction) {
   }
 
   if (type === "purchase") {
-    return (
-      String(transaction?.description || "").trim() ||
-      "Wallet Purchase"
-    );
+    const serviceName = String(
+      transaction?.serviceName || ""
+    ).trim();
+
+    const countryName = String(
+      transaction?.countryName || ""
+    ).trim();
+
+    const server = String(
+      transaction?.server || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const serverLabel =
+      server === "server1"
+        ? "Server 1"
+        : server === "server2"
+          ? "Server 2"
+          : "";
+
+    const friendlyParts = [
+      serviceName,
+      countryName,
+      serverLabel,
+    ].filter(Boolean);
+
+    /*
+     * Never expose provider IDs such as:
+     *   "Reserved for wa (187...)"
+     * Existing legacy rows without friendly metadata simply show
+     * "Number purchase".
+     */
+    return friendlyParts.length
+      ? friendlyParts.join(" • ")
+      : "Number purchase";
   }
 
   if (type === "refund") {
@@ -614,6 +646,17 @@ export default function TransactionsPage() {
          * Read the authenticated customer's REAL wallet from the API.
          * Do not import anything from data/transactions/transactions.
          */
+        try {
+          await api("/orders/recover-pending", {
+            method: "POST",
+          });
+        } catch (recoveryError) {
+          console.error(
+            "Pending purchase recovery failed:",
+            recoveryError
+          );
+        }
+
         const response = await api("/wallet");
         const wallet = extractWalletFromResponse(response);
 

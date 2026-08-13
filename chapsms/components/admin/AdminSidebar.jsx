@@ -4,43 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ArrowLeft,
+  BarChart3,
   BadgeDollarSign,
   CreditCard,
-  LayoutDashboard,
   ReceiptText,
-  Settings,
   ShieldCheck,
-  Users,
-  WalletCards,
   X,
 } from "lucide-react";
 
 const links = [
   {
-    href: "/admin/dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
+    href: "/admin",
+    label: "Overview",
+    icon: BarChart3,
     exact: true,
-  },
-  {
-    href: "/admin/users",
-    label: "Users",
-    icon: Users,
-  },
-  {
-    href: "/admin/orders",
-    label: "Orders",
-    icon: ReceiptText,
-  },
-  {
-    href: "/admin/wallets",
-    label: "Wallets",
-    icon: WalletCards,
-  },
-  {
-    href: "/admin/payments",
-    label: "Payments",
-    icon: CreditCard,
   },
   {
     href: "/admin/pricing",
@@ -48,9 +25,14 @@ const links = [
     icon: BadgeDollarSign,
   },
   {
-    href: "/admin/settings",
-    label: "Settings",
-    icon: Settings,
+    href: "/admin/orders",
+    label: "Sales & Profit",
+    icon: ReceiptText,
+  },
+  {
+    href: "/admin/payments",
+    label: "Payment History",
+    icon: CreditCard,
   },
 ];
 
@@ -75,7 +57,7 @@ export default function AdminSidebar({
     <div className="flex min-h-full flex-col">
       <div className="sticky top-0 z-20 -mx-4 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 pb-4 pt-1 min-[375px]:-mx-5 min-[375px]:px-5">
         <Link
-          href="/admin/dashboard"
+          href="/admin"
           onClick={onClose}
           className="flex items-center gap-3"
         >
@@ -87,7 +69,6 @@ export default function AdminSidebar({
             <p className="text-lg font-black tracking-tight text-[var(--foreground)]">
               Chaps<span className="text-blue-600">SmS</span>
             </p>
-
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
               Admin Console
             </p>
@@ -104,10 +85,16 @@ export default function AdminSidebar({
         </button>
       </div>
 
-      <nav
-        className="mt-6 space-y-1.5"
-        aria-label="Admin navigation"
-      >
+      <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
+        <p className="text-xs font-black uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">
+          Pricing Control
+        </p>
+        <p className="mt-2 text-sm leading-6 text-blue-700/80 dark:text-blue-300/80">
+          Manage provider cost, customer price and profit for both servers.
+        </p>
+      </div>
+
+      <nav className="mt-6 space-y-1.5" aria-label="Admin navigation">
         {links.map((item) => {
           const Icon = item.icon;
           const active = isActive(item);
@@ -117,22 +104,14 @@ export default function AdminSidebar({
               key={item.href}
               href={item.href}
               onClick={onClose}
-              aria-current={
-                active
-                  ? "page"
-                  : undefined
-              }
+              aria-current={active ? "page" : undefined}
               className={`flex min-h-12 items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition active:scale-[0.98] ${
                 active
                   ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20"
                   : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
               }`}
             >
-              <Icon
-                size={18}
-                className="shrink-0"
-              />
-
+              <Icon size={18} className="shrink-0" />
               <span>{item.label}</span>
             </Link>
           );
@@ -155,9 +134,7 @@ export default function AdminSidebar({
   return (
     <>
       <aside className="sticky top-0 hidden h-screen overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] lg:block">
-        <div className="min-h-full px-5 py-4">
-          {content}
-        </div>
+        <div className="min-h-full px-5 py-4">{content}</div>
       </aside>
 
       <div
@@ -180,9 +157,7 @@ export default function AdminSidebar({
           aria-modal="true"
           aria-label="Admin navigation"
           className={`relative h-full w-[86vw] max-w-[330px] overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] shadow-2xl transition-transform duration-300 ease-out ${
-            open
-              ? "translate-x-0"
-              : "-translate-x-full"
+            open ? "translate-x-0" : "-translate-x-full"
           }`}
         >
           <div className="min-h-full px-4 py-4 min-[375px]:px-5">

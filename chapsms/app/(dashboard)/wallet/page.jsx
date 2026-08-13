@@ -26,6 +26,10 @@ import Button from "@/components/ui/Button";
 import { useWallet } from "@/hooks/useWallet";
 import { paymentService } from "@/services/paymentService";
 import { neurapayService } from "@/services/neurapayService";
+import {
+  trackInitiateCheckout,
+  trackWalletFundingPurchase,
+} from "@/lib/tiktokEvents";
 
 const presetAmounts = [500, 1000, 2000, 5000, 10000, 20000];
 
@@ -98,6 +102,7 @@ export default function WalletPage() {
   const [funding, setFunding] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const flutterwaveModalRef = useRef(null);
+  const checkoutTrackedRef = useRef(new Set());
 
   // NeuraPay state
   const [account, setAccount] = useState(null);
@@ -109,6 +114,16 @@ export default function WalletPage() {
 
   const numericAmount = useMemo(() => Number(amount) || 0, [amount]);
   const flutterwaveBusy = funding || verifying;
+
+
+  function trackCheckoutOnce(key, details) {
+    if (checkoutTrackedRef.current.has(key)) {
+      return;
+    }
+
+    checkoutTrackedRef.current.add(key);
+    trackInitiateCheckout(details);
+  }
 
   const loadNeuraPayAccount = useCallback(async () => {
     try {
@@ -172,6 +187,15 @@ export default function WalletPage() {
         throw new Error("The server did not return valid Flutterwave checkout details");
       }
 
+      trackCheckoutOnce(
+        `flutterwave:${checkout.txRef}`,
+        {
+          value: checkout.amount,
+          currency: checkout.currency || "NGN",
+          description: `ChapsSms Flutterwave ${paymentMethod} funding started`,
+        }
+      );
+
       let verificationStarted = false;
 
       const modal = window.FlutterwaveCheckout({
@@ -205,6 +229,34 @@ export default function WalletPage() {
 
             if (result?.walletBalance !== undefined) {
               updateWalletBalance(Number(result.walletBalance));
+            }
+
+            /*
+             * Only report REAL, newly credited funding as TikTok Purchase.
+             * Test-mode funding and a repeated "already credited" verification
+             * are not new advertising conversions.
+             */
+            const alreadyCredited =
+              result?.alreadyCredited === true ||
+              /already credited/i.test(
+                String(result?.message || "")
+              );
+
+            if (
+              !alreadyCredited &&
+              String(result?.paymentEnvironment || "live").toLowerCase() === "live"
+            ) {
+              trackWalletFundingPurchase({
+                value:
+                  result?.amountCredited ??
+                  checkout.amount,
+                currency:
+                  result?.currency ||
+                  checkout.currency ||
+                  "NGN",
+                gateway: "Flutterwave",
+                reference: checkout.txRef,
+              });
             }
 
             await refreshWallet();
@@ -252,6 +304,18 @@ export default function WalletPage() {
 
       setAccount(nextAccount);
       setNeurapayFundingActive(true);
+
+      if (numericAmount >= 100) {
+        trackCheckoutOnce(
+          `neurapay:${numericAmount}`,
+          {
+            value: numericAmount,
+            currency: "NGN",
+            description: "ChapsSms NeuraPay bank-transfer funding started",
+          }
+        );
+      }
+
       toast.success(response?.message || "NeuraPay funding account ready");
     } catch (error) {
       console.error("NeuraPay account creation failed:", error);
@@ -276,16 +340,13 @@ export default function WalletPage() {
     try {
       setCheckingBalance(true);
       await refreshWallet();
-      toast(
-        "Wallet refreshed. If a successful NeuraPay transfer is still missing, use the payment reference verification below."
-      );
+      toast.success("Wallet balance refreshed");
     } catch (error) {
       toast.error(error?.message || "Unable to refresh wallet");
     } finally {
       setCheckingBalance(false);
     }
   }
-
 
   function handleCancelNeuraPayFunding() {
     /*
@@ -394,6 +455,17 @@ export default function WalletPage() {
               onClick={() => {
                 setGateway("neurapay");
                 setNeurapayFundingActive(true);
+
+                if (account && numericAmount >= 100) {
+                  trackCheckoutOnce(
+                    `neurapay:${numericAmount}`,
+                    {
+                      value: numericAmount,
+                      currency: "NGN",
+                      description: "ChapsSms NeuraPay bank-transfer funding started",
+                    }
+                  );
+                }
               }}
               className={`min-h-12 rounded-xl text-sm font-black transition ${
                 gateway === "neurapay"
@@ -555,7 +627,7 @@ export default function WalletPage() {
                           ) : (
                             <RefreshCw size={19} />
                           )}
-                          {checkingBalance ? "Refreshing wallet..." : "Refresh wallet"}
+                          {checkingBalance ? "Checking balance..." : "I have paid — check wallet"}
                         </Button>
 
                         <button

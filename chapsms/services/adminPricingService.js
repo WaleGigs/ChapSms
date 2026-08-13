@@ -239,4 +239,27 @@ export const adminPricingService = {
       })}`
     );
   },
+
+  async getPayments({
+    page = 1,
+    limit = 50,
+    type = "",
+    status = "",
+    search = "",
+    dateFrom = "",
+    dateTo = "",
+  } = {}) {
+    return api(
+      `/admin/pricing/payments${buildQuery({
+        page,
+        limit,
+        type,
+        status,
+        search,
+        dateFrom,
+        dateTo,
+      })}`
+    );
+  },
+
 };
