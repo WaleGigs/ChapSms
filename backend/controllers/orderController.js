@@ -125,6 +125,29 @@ function sanitizeOrder(order) {
       ? order.toObject()
       : { ...order };
 
+  /*
+   * Legacy orders may have been created before serviceName/countryName
+   * fields existed. If an older pricing snapshot contains friendly labels,
+   * expose them before removing the private pricing snapshot.
+   */
+  if (!String(data.serviceName || "").trim()) {
+    data.serviceName =
+      String(
+        data.pricingSnapshot?.serviceName ||
+          data.pricingSnapshot?.service?.name ||
+          ""
+      ).trim();
+  }
+
+  if (!String(data.countryName || "").trim()) {
+    data.countryName =
+      String(
+        data.pricingSnapshot?.countryName ||
+          data.pricingSnapshot?.country?.name ||
+          ""
+      ).trim();
+  }
+
   delete data.provider;
   delete data.providerResponse;
   delete data.providerPrice;
@@ -551,7 +574,7 @@ exports.createOrder =
 
       /*
        * Most important safety gate:
-       * test Flutterwave money cannot reach a live SMS provider.
+       * test payment money cannot reach a live SMS provider.
        */
       if (
         paymentEnvironment !==
@@ -1076,7 +1099,15 @@ exports.createOrder =
             country:
               normalizedCountry,
 
+            countryName:
+              normalizedCountryName ||
+              normalizedCountry,
+
             service:
+              normalizedService,
+
+            serviceName:
+              normalizedServiceName ||
               normalizedService,
 
             operator:
@@ -1175,9 +1206,11 @@ exports.createOrder =
           finalAmount,
 
         service:
+          normalizedServiceName ||
           normalizedService,
 
         country:
+          normalizedCountryName ||
           normalizedCountry,
 
         server:
@@ -1721,7 +1754,7 @@ exports.cancelOrder =
                     balanceField,
 
                     description:
-                      `Refund for cancelled ${claimedOrder.service} activation`,
+                      `Refund for cancelled ${claimedOrder.serviceName || claimedOrder.service} activation`,
 
                     status:
                       "completed",
