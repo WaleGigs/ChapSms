@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  CircleDollarSign,
   CreditCard,
   MessageSquareText,
   ReceiptText,
@@ -38,6 +39,16 @@ export default function AdminOverviewPage() {
       ) : null}
 
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+        <AdminSummaryCard
+          label="Total revenue"
+          value={formatNaira(
+            summary?.totalRevenue
+          )}
+          description="Customer selling price collected"
+          icon={CircleDollarSign}
+          loading={loading}
+        />
+
         <AdminSummaryCard
           label="Total profit"
           value={formatNaira(
