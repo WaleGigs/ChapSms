@@ -24,10 +24,22 @@ function isFlutterwaveTimeout(error) {
     error?.message || "",
   ).toLowerCase();
 
+  const responseStatus = Number(
+    error?.response?.status || 0,
+  );
+
+  const responseMessage = String(
+    error?.response?.data?.message || "",
+  ).toLowerCase();
+
   return (
     code === "ECONNABORTED" ||
     code === "ETIMEDOUT" ||
-    message.includes("timeout")
+    responseStatus === 503 ||
+    message.includes("timeout") ||
+    responseMessage.includes(
+      "an error occurred. please contact support",
+    )
   );
 }
 
@@ -243,8 +255,9 @@ function parseFlutterwaveExpiration(
   }
 
   /*
-   * Flutterwave was asked for a 60-minute PWBT account.
-   * This fallback is only used if Flutterwave returns an unparsable date.
+   * Flutterwave dynamic virtual accounts normally expire after the
+   * transaction window returned in expiry_date. Fall back to 60 minutes
+   * only if Flutterwave returns an unparsable date.
    */
   return new Date(
     Date.now() +
@@ -261,51 +274,60 @@ async function createFlutterwaveBankTransferCharge({
       "FLW_SECRET_KEY",
     );
 
+  const displayName =
+    String(
+      getCustomerName(user) ||
+        "ChapsSms Customer",
+    ).trim();
+
+  const nameParts =
+    displayName
+      .split(/\s+/)
+      .filter(Boolean);
+
+  const firstName =
+    String(
+      user?.firstName ||
+        nameParts[0] ||
+        "ChapsSms",
+    ).trim();
+
+  const lastName =
+    String(
+      user?.lastName ||
+        nameParts.slice(1).join(" ") ||
+        "Customer",
+    ).trim();
+
+  /*
+   * Use Flutterwave Dynamic Virtual Accounts for the bank-transfer UX.
+   * The account details are returned to our backend and then rendered
+   * directly on chapssms.com. The customer is never redirected away.
+   */
   const response =
     await axios.post(
-      `${FLW_BASE_URL}/charges?type=bank_transfer`,
+      `${FLW_BASE_URL}/virtual-account-numbers`,
       {
-        tx_ref:
-          payment.txRef,
-
-        amount:
-          payment.amount,
-
-        currency:
-          payment.currency,
-
         email:
           user.email,
-
-        fullname:
-          getCustomerName(
-            user,
-          ),
-
+        amount:
+          payment.amount,
+        currency:
+          payment.currency,
+        tx_ref:
+          payment.txRef,
+        firstname:
+          firstName,
+        lastname:
+          lastName,
         narration:
           "ChapsSms Wallet Funding",
-
-        bank_transfer_options: {
-          expires: 3600,
-        },
-
-        meta: {
-          userId:
-            String(
-              payment.user,
-            ),
-
-          paymentId:
-            String(
-              payment._id,
-            ),
-
-          environment:
-            payment.environment,
-        },
+        is_permanent:
+          false,
       },
       {
-        timeout: FLW_HTTP_TIMEOUT_MS,
+        timeout:
+          FLW_HTTP_TIMEOUT_MS,
 
         headers: {
           Authorization:
@@ -318,31 +340,28 @@ async function createFlutterwaveBankTransferCharge({
       },
     );
 
-  const authorization =
-    response.data?.meta
-      ?.authorization;
+  const data =
+    response.data?.data || {};
 
   const accountNumber =
     String(
-      authorization
-        ?.transfer_account ||
-        "",
+      data.account_number || "",
     ).trim();
 
   const bankName =
     String(
-      authorization
-        ?.transfer_bank ||
-        "",
+      data.bank_name || "",
     ).trim();
 
   const transferAmount =
     Number(
-      authorization
-        ?.transfer_amount,
+      data.amount ??
+        payment.amount,
     );
 
   if (
+    response.data?.status !==
+      "success" ||
     !accountNumber ||
     !bankName ||
     !Number.isFinite(
@@ -352,7 +371,8 @@ async function createFlutterwaveBankTransferCharge({
   ) {
     const error =
       new Error(
-        "Flutterwave did not return valid bank-transfer instructions",
+        response.data?.message ||
+          "Flutterwave did not return valid bank-transfer instructions",
       );
 
     error.status = 502;
@@ -364,8 +384,8 @@ async function createFlutterwaveBankTransferCharge({
   return {
     transferReference:
       String(
-        authorization
-          ?.transfer_reference ||
+        data.order_ref ||
+          data.flw_ref ||
           payment.txRef,
       ).trim(),
 
@@ -374,17 +394,15 @@ async function createFlutterwaveBankTransferCharge({
 
     transferNote:
       String(
-        authorization
-          ?.transfer_note ||
-          "",
+        data.note ||
+          "Transfer the exact amount shown to this account",
       ).trim(),
 
     transferAmount,
 
     expiresAt:
       parseFlutterwaveExpiration(
-        authorization
-          ?.account_expiration,
+        data.expiry_date,
       ),
   };
 }
@@ -921,13 +939,13 @@ exports.initializePayment =
         .json({
           success: false,
           message: timedOut
-            ? "Flutterwave is taking longer than expected to generate the bank account. Please try again. Your ChapsSms wallet was not charged."
+            ? "Flutterwave is temporarily taking too long to generate the bank account. Please wait a moment and try again. Your ChapsSms wallet was not charged."
             : error.response
                 ?.data?.message ||
               error.message ||
               "Unable to initialize payment",
           code: timedOut
-            ? "FLUTTERWAVE_TIMEOUT"
+            ? "FLUTTERWAVE_TEMPORARY_UNAVAILABLE"
             : error.code ||
               "PAYMENT_INITIALIZATION_FAILED",
         });
