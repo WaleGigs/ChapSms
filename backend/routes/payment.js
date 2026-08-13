@@ -6,22 +6,28 @@ const {
   initializePayment,
   verifyPayment,
   getPaymentStatus,
-  handleWebhook,
+  handleWebhook: handleFlutterwaveWebhook,
 } = require("../controllers/paymentController");
+
+const {
+  getVirtualAccount,
+  createVirtualAccount,
+  verifyTransaction: verifyNeuraPayTransaction,
+  handleWebhook: handleNeuraPayWebhook,
+} = require("../controllers/neurapayController");
 
 const {
   protect,
 } = require("../middleware/authMiddleware");
 
 /*
- * Flutterwave calls this endpoint directly, so do not add protect here.
- *
- * The controller exports handleWebhook. A flutterwaveWebhook compatibility
- * alias is also included in the updated controller.
+ * ============================================================
+ * FLUTTERWAVE
+ * ============================================================
  */
 router.post(
   "/webhook",
-  handleWebhook
+  handleFlutterwaveWebhook
 );
 
 router.post(
@@ -40,6 +46,36 @@ router.get(
   "/status/:txRef",
   protect,
   getPaymentStatus
+);
+
+/*
+ * ============================================================
+ * NEURAPAY
+ * ============================================================
+ * The webhook is public but authenticated by NeuraPay's HMAC
+ * signature inside neurapayController. Customer routes are protected.
+ */
+router.post(
+  "/neurapay/webhook",
+  handleNeuraPayWebhook
+);
+
+router.get(
+  "/neurapay/account",
+  protect,
+  getVirtualAccount
+);
+
+router.post(
+  "/neurapay/account",
+  protect,
+  createVirtualAccount
+);
+
+router.post(
+  "/neurapay/verify",
+  protect,
+  verifyNeuraPayTransaction
 );
 
 module.exports = router;

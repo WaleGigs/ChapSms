@@ -7,6 +7,30 @@ const Wallet = require("../models/Wallet");
 const FLW_BASE_URL =
   "https://api.flutterwave.com/v3";
 
+const FLW_HTTP_TIMEOUT_MS = Math.max(
+  30000,
+  Number(
+    process.env.FLW_HTTP_TIMEOUT_MS ||
+      60000,
+  ),
+);
+
+function isFlutterwaveTimeout(error) {
+  const code = String(
+    error?.code || "",
+  ).toUpperCase();
+
+  const message = String(
+    error?.message || "",
+  ).toLowerCase();
+
+  return (
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    message.includes("timeout")
+  );
+}
+
 const VALID_PAYMENT_MODES = [
   "test",
   "live",
@@ -139,7 +163,7 @@ async function fetchFlutterwaveTransaction(
         transactionId,
       )}/verify`,
       {
-        timeout: 20000,
+        timeout: FLW_HTTP_TIMEOUT_MS,
 
         headers: {
           Authorization:
@@ -165,7 +189,7 @@ async function fetchFlutterwaveTransactionByReference(
     await axios.get(
       `${FLW_BASE_URL}/transactions/verify_by_reference`,
       {
-        timeout: 20000,
+        timeout: FLW_HTTP_TIMEOUT_MS,
 
         params: {
           tx_ref: txRef,
@@ -281,7 +305,7 @@ async function createFlutterwaveBankTransferCharge({
         },
       },
       {
-        timeout: 20000,
+        timeout: FLW_HTTP_TIMEOUT_MS,
 
         headers: {
           Authorization:
@@ -849,18 +873,30 @@ exports.initializePayment =
           },
         });
     } catch (error) {
+      const timedOut =
+        isFlutterwaveTimeout(error);
+
       if (
         payment &&
         !payment.credited
       ) {
-        payment.status =
-          "failed";
+        /*
+         * A network timeout does not prove Flutterwave rejected the charge.
+         * Keep the local record pending rather than falsely marking it failed.
+         * A normal provider/API error can still be marked failed.
+         */
+        payment.status = timedOut
+          ? "pending"
+          : "failed";
+
         payment.failureReason =
           String(
-            error.response
-              ?.data?.message ||
-              error.message ||
-              "Payment initialization failed",
+            timedOut
+              ? "Flutterwave account generation timed out before ChapsSms received a response"
+              : error.response
+                  ?.data?.message ||
+                error.message ||
+                "Payment initialization failed",
           ).slice(0, 500);
 
         await payment
@@ -877,19 +913,23 @@ exports.initializePayment =
 
       return res
         .status(
-          error.status ||
-            500,
+          timedOut
+            ? 504
+            : error.status ||
+              500,
         )
         .json({
           success: false,
-          message:
-            error.response
-              ?.data?.message ||
-            error.message ||
-            "Unable to initialize payment",
-          code:
-            error.code ||
-            "PAYMENT_INITIALIZATION_FAILED",
+          message: timedOut
+            ? "Flutterwave is taking longer than expected to generate the bank account. Please try again. Your ChapsSms wallet was not charged."
+            : error.response
+                ?.data?.message ||
+              error.message ||
+              "Unable to initialize payment",
+          code: timedOut
+            ? "FLUTTERWAVE_TIMEOUT"
+            : error.code ||
+              "PAYMENT_INITIALIZATION_FAILED",
         });
     }
   };
