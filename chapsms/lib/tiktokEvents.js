@@ -1,37 +1,19 @@
 "use client";
 
 function getTikTokQueue() {
-  if (
-    typeof window === "undefined" ||
-    !window.ttq
-  ) {
-    return null;
-  }
-
+  if (typeof window === "undefined" || !window.ttq) return null;
   return window.ttq;
 }
 
-export function trackTikTokEvent(
-  eventName,
-  parameters = {}
-) {
+export function trackTikTokEvent(eventName, parameters = {}) {
   const ttq = getTikTokQueue();
-
-  if (
-    !ttq ||
-    typeof ttq.track !== "function"
-  ) {
-    return false;
-  }
-
+  if (!ttq || typeof ttq.track !== "function") return false;
   ttq.track(eventName, parameters);
   return true;
 }
 
 export function trackCompleteRegistration() {
-  return trackTikTokEvent(
-    "CompleteRegistration"
-  );
+  return trackTikTokEvent("CompleteRegistration");
 }
 
 export function trackInitiateCheckout({
@@ -40,31 +22,24 @@ export function trackInitiateCheckout({
   description = "ChapsSms wallet funding started",
 } = {}) {
   const amount = Number(value);
+  const hasAmount = Number.isFinite(amount) && amount > 0;
 
-  return trackTikTokEvent(
-    "InitiateCheckout",
-    {
-      ...(Number.isFinite(amount) && amount > 0
-        ? {
-            value: amount,
-            currency,
-          }
-        : {}),
-      description,
-    }
-  );
+  return trackTikTokEvent("InitiateCheckout", {
+    content_id: "wallet-funding",
+    content_type: "product",
+    content_name: "ChapsSms Wallet Funding",
+    quantity: 1,
+    description,
+    ...(hasAmount
+      ? {
+          price: amount,
+          value: amount,
+          currency,
+        }
+      : {}),
+  });
 }
 
-/*
- * IMPORTANT BUSINESS MAPPING
- * --------------------------
- * A successful wallet funding is the point where ChapsSms actually
- * receives customer money. That is therefore the TikTok standard
- * Purchase conversion used for ad reporting/value measurement.
- *
- * Do NOT also report a later wallet-balance spend as another Purchase,
- * otherwise the same customer money would be counted twice as revenue.
- */
 export function trackWalletFundingPurchase({
   value,
   currency = "NGN",
@@ -72,31 +47,22 @@ export function trackWalletFundingPurchase({
   reference = "",
 } = {}) {
   const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return false;
-  }
-
-  return trackTikTokEvent(
-    "Purchase",
-    {
-      value: amount,
-      currency,
-      content_type: "product",
-      content_ids: reference
-        ? [String(reference)]
-        : ["wallet-funding"],
-      description: gateway
-        ? `ChapsSms wallet funded via ${gateway}`
-        : "ChapsSms wallet funded",
-    }
-  );
+  return trackTikTokEvent("Purchase", {
+    content_id: reference ? String(reference) : "wallet-funding",
+    content_type: "product",
+    content_name: "ChapsSms Wallet Funding",
+    quantity: 1,
+    price: amount,
+    value: amount,
+    currency,
+    description: gateway
+      ? `ChapsSms wallet funded via ${gateway}`
+      : "ChapsSms wallet funded",
+  });
 }
 
-/*
- * This is intentionally a custom event rather than another Purchase.
- * The money was already counted when the wallet was funded.
- */
 export function trackNumberPurchased({
   value,
   currency = "NGN",
@@ -105,24 +71,18 @@ export function trackNumberPurchased({
 } = {}) {
   const amount = Number(value);
 
-  return trackTikTokEvent(
-    "NumberPurchased",
-    {
-      ...(Number.isFinite(amount) && amount > 0
-        ? {
-            value: amount,
-            currency,
-          }
-        : {}),
-      content_type: "product",
-      ...(orderId
-        ? {
-            content_ids: [String(orderId)],
-          }
-        : {}),
-      description: String(
-        serviceName || "Virtual number"
-      ),
-    }
-  );
+  return trackTikTokEvent("NumberPurchased", {
+    content_id: orderId ? String(orderId) : "virtual-number",
+    content_type: "product",
+    content_name: String(serviceName || "Virtual number"),
+    quantity: 1,
+    ...(Number.isFinite(amount) && amount > 0
+      ? {
+          price: amount,
+          value: amount,
+          currency,
+        }
+      : {}),
+    description: String(serviceName || "Virtual number"),
+  });
 }
