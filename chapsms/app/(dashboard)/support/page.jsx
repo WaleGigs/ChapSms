@@ -33,7 +33,7 @@ const faqs = [
 
 export default function SupportPage() {
   const [openQuestion, setOpenQuestion] = useState(0);
-  const whatsappNumber = "2348144075281";
+  const whatsappNumber = "2348138304888";
   const whatsappMessage = encodeURIComponent(
     "Hello ChapsSmS support, I need help with my account.",
   );

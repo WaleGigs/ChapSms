@@ -1,35 +1,23 @@
 import { api } from "@/lib/api";
 
 export const paymentService = {
-  async initializePayment({ amount, paymentMethod }) {
+  async initializePayment({
+    amount,
+    paymentMethod = "bank",
+  }) {
     return api("/payment/initialize", {
       method: "POST",
       body: JSON.stringify({
-        amount,
+        amount: Number(amount),
         paymentMethod,
       }),
     });
   },
 
-  async createBankTransfer({ amount }) {
-    return api("/payment/bank-transfer", {
-      method: "POST",
-      body: JSON.stringify({
-        amount,
-      }),
-    });
-  },
-
-  async getBankTransferStatus({ txRef }) {
-    return api(
-      `/payment/bank-transfer/${encodeURIComponent(txRef)}/status`,
-      {
-        method: "GET",
-      },
-    );
-  },
-
-  async verifyPayment({ transactionId, txRef }) {
+  async verifyPayment({
+    transactionId,
+    txRef,
+  }) {
     return api("/payment/verify", {
       method: "POST",
       body: JSON.stringify({
@@ -39,3 +27,5 @@ export const paymentService = {
     });
   },
 };
+
+export default paymentService;

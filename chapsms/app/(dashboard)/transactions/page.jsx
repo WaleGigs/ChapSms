@@ -181,9 +181,20 @@ function getOrderCountryName(order) {
     return name;
   }
 
-  return humanizeCode(
-    order?.country
-  );
+  const rawCountry = String(
+    order?.country || ""
+  ).trim();
+
+  /*
+   * Some older provider orders stored an internal numeric country ID
+   * such as "12" or "1" instead of a customer-facing country name.
+   * Never display those internal IDs to ChapsSms customers.
+   */
+  if (!rawCountry || /^\d+$/.test(rawCountry)) {
+    return "";
+  }
+
+  return humanizeCode(rawCountry);
 }
 
 export default function TransactionsPage() {
@@ -682,11 +693,13 @@ export default function TransactionsPage() {
                               }
                             </p>
 
-                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                              {
-                                order.displayCountryName
-                              }
-                            </p>
+                            {order.displayCountryName ? (
+                              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                                {
+                                  order.displayCountryName
+                                }
+                              </p>
+                            ) : null}
                           </div>
 
                           <span
@@ -774,7 +787,8 @@ export default function TransactionsPage() {
 
                             <td className="py-4 text-sm text-[var(--muted-foreground)]">
                               {
-                                order.displayCountryName
+                                order.displayCountryName ||
+                                "—"
                               }
                             </td>
 
