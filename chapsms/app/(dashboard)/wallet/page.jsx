@@ -16,7 +16,6 @@ import {
   Landmark,
   LoaderCircle,
   RefreshCw,
-  SearchCheck,
   ShieldCheck,
   Wallet,
   XCircle,
@@ -105,8 +104,6 @@ export default function WalletPage() {
   const [accountLoading, setAccountLoading] = useState(false);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
-  const [neurapayReference, setNeurapayReference] = useState("");
-  const [manualVerifying, setManualVerifying] = useState(false);
   const [neurapayLoaded, setNeurapayLoaded] = useState(false);
   const [neurapayFundingActive, setNeurapayFundingActive] = useState(true);
 
@@ -289,43 +286,6 @@ export default function WalletPage() {
     }
   }
 
-  async function handleManualNeuraPayVerification(event) {
-    event.preventDefault();
-
-    const reference = String(neurapayReference || "").trim();
-
-    if (!reference) {
-      toast.error("Enter the NeuraPay transaction reference, for example TXN-...");
-      return;
-    }
-
-    if (manualVerifying) return;
-
-    try {
-      setManualVerifying(true);
-
-      const result = await neurapayService.verifyTransaction(reference);
-
-      if (result?.walletBalance !== undefined) {
-        updateWalletBalance(Number(result.walletBalance));
-      }
-
-      await refreshWallet();
-
-      toast.success(
-        result?.alreadyCredited
-          ? "This payment was already credited"
-          : `Payment verified. ${formatNaira(result?.creditedAmount || 0)} added to your wallet.`
-      );
-
-      setNeurapayReference("");
-    } catch (error) {
-      console.error("Manual NeuraPay verification failed:", error);
-      toast.error(error?.message || "Unable to verify this NeuraPay payment");
-    } finally {
-      setManualVerifying(false);
-    }
-  }
 
   function handleCancelNeuraPayFunding() {
     /*
@@ -607,42 +567,6 @@ export default function WalletPage() {
                           Cancel funding
                         </button>
                       </div>
-
-                      <form
-                        onSubmit={handleManualNeuraPayVerification}
-                        className="mt-5 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 sm:p-5"
-                      >
-                        <p className="font-black text-[var(--foreground)]">
-                          Payment successful but wallet still not credited?
-                        </p>
-                        <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)] sm:text-sm">
-                          Paste the NeuraPay transaction reference from the successful transaction (usually starts with TXN-). ChapsSms will verify it directly with NeuraPay before crediting your wallet.
-                        </p>
-
-                        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                          <input
-                            type="text"
-                            value={neurapayReference}
-                            onChange={(event) => setNeurapayReference(event.target.value)}
-                            placeholder="TXN-..."
-                            autoCapitalize="characters"
-                            className="h-12 min-w-0 flex-1 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-sm font-bold text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15"
-                          />
-
-                          <Button
-                            type="submit"
-                            className="h-12 sm:min-w-44"
-                            disabled={manualVerifying || !String(neurapayReference || "").trim()}
-                          >
-                            {manualVerifying ? (
-                              <LoaderCircle size={18} className="animate-spin" />
-                            ) : (
-                              <SearchCheck size={18} />
-                            )}
-                            {manualVerifying ? "Verifying..." : "Verify payment"}
-                          </Button>
-                        </div>
-                      </form>
                     </div>
                   ) : (
                     <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-5 text-center">
