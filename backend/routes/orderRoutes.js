@@ -5,15 +5,15 @@ const {
   getOrder,
   checkOrder,
   cancelOrder,
-  recoverStaleReservations,
 } = require("../controllers/orderController");
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+} = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
 router.post("/", protect, createOrder);
 router.get("/", protect, getOrders);
-router.post("/recover-pending", protect, recoverStaleReservations);
 router.get("/:id/check", protect, checkOrder);
 router.post("/:id/cancel", protect, cancelOrder);
 router.get("/:id", protect, getOrder);

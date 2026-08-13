@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const PricingRule = require("../models/PricingRule");
 const Order = require("../models/Order");
+const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const providerManager = require(
   "../services/providers/providerManager"
@@ -49,6 +50,46 @@ function createDateRange(query = {}) {
   }
 
   return Object.keys(range).length ? range : null;
+}
+
+function getDashboardTrackingStartAt() {
+  const value = String(
+    process.env.ADMIN_DASHBOARD_START_AT || ""
+  ).trim();
+
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    console.warn(
+      "ADMIN_DASHBOARD_START_AT is invalid. Dashboard will use all-time data."
+    );
+    return null;
+  }
+
+  return date;
+}
+
+function getEffectiveDashboardDateRange(query = {}) {
+  const requestedRange = createDateRange(query) || {};
+  const trackingStartAt = getDashboardTrackingStartAt();
+
+  if (
+    trackingStartAt &&
+    (
+      !requestedRange.$gte ||
+      requestedRange.$gte < trackingStartAt
+    )
+  ) {
+    requestedRange.$gte = trackingStartAt;
+  }
+
+  return Object.keys(requestedRange).length
+    ? requestedRange
+    : null;
 }
 
 function ruleResponse(rule) {
@@ -256,6 +297,72 @@ exports.disableRule = async (req, res) => {
   }
 };
 
+exports.getOperators = async (req, res) => {
+  try {
+    const server =
+      pricingService.normalizeServer(
+        req.query.server
+      );
+
+    const country =
+      pricingService.normalizeCountry(
+        req.query.country
+      );
+
+    const service =
+      pricingService.normalizeService(
+        req.query.service
+      );
+
+    if (!country || !service) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Country and service are required",
+        code:
+          "ADMIN_OPERATOR_SELECTION_REQUIRED",
+      });
+    }
+
+    const result =
+      await providerManager.getOperators({
+        server,
+        country,
+        service,
+      });
+
+    return res.json({
+      success: true,
+      server:
+        result?.server || server,
+      country:
+        result?.country || country,
+      service:
+        result?.service || service,
+      currency:
+        result?.currency || null,
+      operators:
+        Array.isArray(
+          result?.operators
+        )
+          ? result.operators
+          : [],
+    });
+  } catch (error) {
+    return res
+      .status(error.status || 500)
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Unable to load operators",
+        code:
+          error.code ||
+          "ADMIN_OPERATORS_LOAD_FAILED",
+      });
+  }
+};
+
 exports.previewPricing = async (req, res) => {
   try {
     const server = pricingService.normalizeServer(req.body.server);
@@ -316,114 +423,324 @@ exports.previewPricing = async (req, res) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     const match = {};
-    const dateRange = createDateRange(req.query);
+    const effectiveDateRange =
+      getEffectiveDashboardDateRange(
+        req.query
+      );
 
-    if (dateRange) {
-      match.createdAt = dateRange;
+    if (effectiveDateRange) {
+      match.createdAt =
+        effectiveDateRange;
     }
 
     if (req.query.server) {
-      match.server = pricingService.normalizeServer(req.query.server);
+      match.server =
+        pricingService.normalizeServer(
+          req.query.server
+        );
     }
 
-    const [result] = await Order.aggregate([
-      { $match: match },
-      {
-        $facet: {
-          totals: [
-            { $match: { refunded: { $ne: true } } },
-            {
-              $group: {
-                _id: null,
-                totalOrders: { $sum: 1 },
-                totalRevenue: {
-                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
-                },
-                totalProviderCost: {
-                  $sum: { $ifNull: ["$providerCostNgn", 0] },
-                },
-                totalProfit: { $sum: { $ifNull: ["$profit", 0] } },
-              },
-            },
-          ],
-          statuses: [
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-              },
-            },
-          ],
-          servers: [
-            { $match: { refunded: { $ne: true } } },
-            {
-              $group: {
-                _id: "$server",
-                orders: { $sum: 1 },
-                revenue: {
-                  $sum: { $ifNull: ["$sellingPrice", "$price"] },
-                },
-                providerCost: {
-                  $sum: { $ifNull: ["$providerCostNgn", 0] },
-                },
-                profit: { $sum: { $ifNull: ["$profit", 0] } },
-              },
-            },
-          ],
-        },
-      },
-    ]);
-
-    const totals = result?.totals?.[0] || {
-      totalOrders: 0,
-      totalRevenue: 0,
-      totalProviderCost: 0,
-      totalProfit: 0,
+    const userMatch = {
+      role: "user",
     };
 
-    const statuses = Object.fromEntries(
-      (result?.statuses || []).map((item) => [item._id, item.count])
-    );
+    if (effectiveDateRange) {
+      userMatch.createdAt =
+        effectiveDateRange;
+    }
 
-    const servers = Object.fromEntries(
-      (result?.servers || []).map((item) => [
-        item._id,
+    const [
+      orderResults,
+      totalUsers,
+      walletBalanceResults,
+    ] = await Promise.all([
+      Order.aggregate([
+        { $match: match },
         {
-          orders: item.orders,
-          revenue: item.revenue,
-          providerCost: item.providerCost,
-          profit: item.profit,
+          $facet: {
+            totals: [
+              {
+                $match: {
+                  refunded: {
+                    $ne: true,
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalOrders: {
+                    $sum: 1,
+                  },
+                  totalRevenue: {
+                    $sum: {
+                      $ifNull: [
+                        "$sellingPrice",
+                        "$price",
+                      ],
+                    },
+                  },
+                  totalProviderCost: {
+                    $sum: {
+                      $ifNull: [
+                        "$providerCostNgn",
+                        0,
+                      ],
+                    },
+                  },
+                  totalProfit: {
+                    $sum: {
+                      $ifNull: [
+                        "$profit",
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+            statuses: [
+              {
+                $group: {
+                  _id: "$status",
+                  count: {
+                    $sum: 1,
+                  },
+                },
+              },
+            ],
+            receivedOtps: [
+              {
+                $match: {
+                  refunded: {
+                    $ne: true,
+                  },
+                  $or: [
+                    {
+                      otpReceivedAt: {
+                        $exists: true,
+                        $ne: null,
+                      },
+                    },
+                    {
+                      status:
+                        "received",
+                    },
+                  ],
+                },
+              },
+              {
+                $count: "count",
+              },
+            ],
+            servers: [
+              {
+                $match: {
+                  refunded: {
+                    $ne: true,
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: "$server",
+                  orders: {
+                    $sum: 1,
+                  },
+                  revenue: {
+                    $sum: {
+                      $ifNull: [
+                        "$sellingPrice",
+                        "$price",
+                      ],
+                    },
+                  },
+                  providerCost: {
+                    $sum: {
+                      $ifNull: [
+                        "$providerCostNgn",
+                        0,
+                      ],
+                    },
+                  },
+                  profit: {
+                    $sum: {
+                      $ifNull: [
+                        "$profit",
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
         },
-      ])
-    );
+      ]),
+
+      User.countDocuments(
+        userMatch
+      ),
+
+      Wallet.aggregate([
+        {
+          $lookup: {
+            from: "users",
+            localField: "user",
+            foreignField: "_id",
+            as: "customer",
+          },
+        },
+        {
+          $unwind: {
+            path: "$customer",
+            preserveNullAndEmptyArrays:
+              false,
+          },
+        },
+        {
+          $match: {
+            "customer.role":
+              "user",
+            ...(effectiveDateRange
+              ? {
+                  "customer.createdAt":
+                    effectiveDateRange,
+                }
+              : {}),
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            usersBalance: {
+              $sum: {
+                $ifNull: [
+                  "$balance",
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const result =
+      orderResults?.[0] || {};
+
+    const totals =
+      result?.totals?.[0] || {
+        totalOrders: 0,
+        totalRevenue: 0,
+        totalProviderCost: 0,
+        totalProfit: 0,
+      };
+
+    const statuses =
+      Object.fromEntries(
+        (
+          result?.statuses || []
+        ).map((item) => [
+          item._id,
+          item.count,
+        ])
+      );
+
+    const servers =
+      Object.fromEntries(
+        (
+          result?.servers || []
+        ).map((item) => [
+          item._id,
+          {
+            orders:
+              item.orders,
+            revenue:
+              item.revenue,
+            providerCost:
+              item.providerCost,
+            profit:
+              item.profit,
+          },
+        ])
+      );
+
+    const receivedOtps =
+      Number(
+        result?.receivedOtps?.[0]
+          ?.count || 0
+      );
+
+    const usersBalance =
+      Number(
+        walletBalanceResults?.[0]
+          ?.usersBalance || 0
+      );
+
+    const trackingStartAt =
+      getDashboardTrackingStartAt();
 
     return res.json({
       success: true,
       summary: {
         ...totals,
-        waitingOrders: statuses.waiting || 0,
-        receivedOrders: statuses.received || 0,
-        cancelledOrders: statuses.cancelled || 0,
-        expiredOrders: statuses.expired || 0,
-        server1: servers.server1 || {
-          orders: 0,
-          revenue: 0,
-          providerCost: 0,
-          profit: 0,
-        },
-        server2: servers.server2 || {
-          orders: 0,
-          revenue: 0,
-          providerCost: 0,
-          profit: 0,
-        },
+
+        // Old dashboard naming restored.
+        totalCost:
+          Number(
+            totals.totalProviderCost ||
+              0
+          ),
+        receivedOtps,
+        totalUsers:
+          Number(
+            totalUsers || 0
+          ),
+        usersBalance,
+
+        // Existing fields kept so other admin pages do not break.
+        waitingOrders:
+          statuses.waiting || 0,
+        receivedOrders:
+          statuses.received || 0,
+        cancelledOrders:
+          statuses.cancelled || 0,
+        expiredOrders:
+          statuses.expired || 0,
+
+        server1:
+          servers.server1 || {
+            orders: 0,
+            revenue: 0,
+            providerCost: 0,
+            profit: 0,
+          },
+        server2:
+          servers.server2 || {
+            orders: 0,
+            revenue: 0,
+            providerCost: 0,
+            profit: 0,
+          },
+
+        trackingStartAt:
+          trackingStartAt
+            ? trackingStartAt.toISOString()
+            : null,
       },
     });
   } catch (error) {
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || "Unable to load dashboard summary",
-    });
+    return res
+      .status(
+        error.status || 500
+      )
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Unable to load dashboard summary",
+      });
   }
 };
 

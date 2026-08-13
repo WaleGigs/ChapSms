@@ -153,6 +153,258 @@ async function fetchFlutterwaveTransaction(
   return response.data?.data;
 }
 
+async function fetchFlutterwaveTransactionByReference(
+  txRef,
+) {
+  const secretKey =
+    requireEnvironment(
+      "FLW_SECRET_KEY",
+    );
+
+  const response =
+    await axios.get(
+      `${FLW_BASE_URL}/transactions/verify_by_reference`,
+      {
+        timeout: 20000,
+
+        params: {
+          tx_ref: txRef,
+        },
+
+        headers: {
+          Authorization:
+            `Bearer ${secretKey}`,
+          Accept:
+            "application/json",
+        },
+      },
+    );
+
+  return response.data?.data;
+}
+
+function parseFlutterwaveExpiration(
+  value,
+) {
+  const raw =
+    String(value || "").trim();
+
+  if (raw) {
+    const direct =
+      new Date(raw);
+
+    if (
+      !Number.isNaN(
+        direct.getTime(),
+      )
+    ) {
+      return direct;
+    }
+
+    const normalized =
+      new Date(
+        raw.replace(
+          " ",
+          "T",
+        ),
+      );
+
+    if (
+      !Number.isNaN(
+        normalized.getTime(),
+      )
+    ) {
+      return normalized;
+    }
+  }
+
+  /*
+   * Flutterwave was asked for a 60-minute PWBT account.
+   * This fallback is only used if Flutterwave returns an unparsable date.
+   */
+  return new Date(
+    Date.now() +
+      60 * 60 * 1000,
+  );
+}
+
+async function createFlutterwaveBankTransferCharge({
+  payment,
+  user,
+}) {
+  const secretKey =
+    requireEnvironment(
+      "FLW_SECRET_KEY",
+    );
+
+  const response =
+    await axios.post(
+      `${FLW_BASE_URL}/charges?type=bank_transfer`,
+      {
+        tx_ref:
+          payment.txRef,
+
+        amount:
+          payment.amount,
+
+        currency:
+          payment.currency,
+
+        email:
+          user.email,
+
+        fullname:
+          getCustomerName(
+            user,
+          ),
+
+        narration:
+          "ChapsSms Wallet Funding",
+
+        bank_transfer_options: {
+          expires: 3600,
+        },
+
+        meta: {
+          userId:
+            String(
+              payment.user,
+            ),
+
+          paymentId:
+            String(
+              payment._id,
+            ),
+
+          environment:
+            payment.environment,
+        },
+      },
+      {
+        timeout: 20000,
+
+        headers: {
+          Authorization:
+            `Bearer ${secretKey}`,
+          Accept:
+            "application/json",
+          "Content-Type":
+            "application/json",
+        },
+      },
+    );
+
+  const authorization =
+    response.data?.meta
+      ?.authorization;
+
+  const accountNumber =
+    String(
+      authorization
+        ?.transfer_account ||
+        "",
+    ).trim();
+
+  const bankName =
+    String(
+      authorization
+        ?.transfer_bank ||
+        "",
+    ).trim();
+
+  const transferAmount =
+    Number(
+      authorization
+        ?.transfer_amount,
+    );
+
+  if (
+    !accountNumber ||
+    !bankName ||
+    !Number.isFinite(
+      transferAmount,
+    ) ||
+    transferAmount <= 0
+  ) {
+    const error =
+      new Error(
+        "Flutterwave did not return valid bank-transfer instructions",
+      );
+
+    error.status = 502;
+    error.code =
+      "INVALID_BANK_TRANSFER_RESPONSE";
+    throw error;
+  }
+
+  return {
+    transferReference:
+      String(
+        authorization
+          ?.transfer_reference ||
+          payment.txRef,
+      ).trim(),
+
+    accountNumber,
+    bankName,
+
+    transferNote:
+      String(
+        authorization
+          ?.transfer_note ||
+          "",
+      ).trim(),
+
+    transferAmount,
+
+    expiresAt:
+      parseFlutterwaveExpiration(
+        authorization
+          ?.account_expiration,
+      ),
+  };
+}
+
+function serializeBankTransfer(
+  payment,
+) {
+  const details =
+    payment?.bankTransfer;
+
+  if (
+    !details ||
+    !details.accountNumber
+  ) {
+    return null;
+  }
+
+  return {
+    transferReference:
+      details.transferReference ||
+      payment.txRef,
+
+    accountNumber:
+      details.accountNumber,
+
+    bankName:
+      details.bankName,
+
+    transferNote:
+      details.transferNote || "",
+
+    transferAmount:
+      Number(
+        details.transferAmount ||
+          payment.amount,
+      ),
+
+    expiresAt:
+      details.expiresAt ||
+      null,
+  };
+}
+
+
 function isValidTransaction(
   transaction,
   payment,
@@ -457,6 +709,8 @@ async function verifyAndCredit({
 
 exports.initializePayment =
   async (req, res) => {
+    let payment = null;
+
     try {
       const amount =
         Number(
@@ -483,11 +737,6 @@ exports.initializePayment =
           });
       }
 
-      const publicKey =
-        requireEnvironment(
-          "FLW_PUBLIC_KEY",
-        );
-
       requireEnvironment(
         "FLW_SECRET_KEY",
       );
@@ -500,7 +749,7 @@ exports.initializePayment =
           req.user._id,
         );
 
-      const payment =
+      payment =
         await Payment.create({
           user:
             req.user._id,
@@ -514,28 +763,68 @@ exports.initializePayment =
           credited: false,
         });
 
+      const common = {
+        success: true,
+        txRef,
+        amount:
+          payment.amount,
+        currency:
+          payment.currency,
+        paymentMethod,
+        environment:
+          paymentEnvironment,
+      };
+
+      /*
+       * BANK TRANSFER:
+       * Generate the temporary Flutterwave account server-side and return
+       * the instructions to ChapsSms. The customer stays on chapssms.com.
+       */
+      if (
+        paymentMethod ===
+        "bank"
+      ) {
+        const bankTransfer =
+          await createFlutterwaveBankTransferCharge({
+            payment,
+            user: req.user,
+          });
+
+        payment.bankTransfer =
+          bankTransfer;
+
+        await payment.save();
+
+        return res
+          .status(200)
+          .json({
+            ...common,
+            bankTransfer:
+              serializeBankTransfer(
+                payment,
+              ),
+          });
+      }
+
+      /*
+       * CARD:
+       * Keep Flutterwave Inline so card details remain inside Flutterwave's
+       * secure overlay and never enter ChapsSms React inputs.
+       */
+      const publicKey =
+        requireEnvironment(
+          "FLW_PUBLIC_KEY",
+        );
+
       return res
         .status(200)
         .json({
-          success: true,
-          txRef,
-          amount:
-            payment.amount,
-          currency:
-            payment.currency,
-          paymentMethod,
+          ...common,
           paymentOptions:
             getPaymentOptions(
               paymentMethod,
             ),
           publicKey,
-
-          /*
-           * The frontend may display "Test funding"
-           * when this value is test.
-           */
-          environment:
-            paymentEnvironment,
 
           customer: {
             email:
@@ -560,9 +849,30 @@ exports.initializePayment =
           },
         });
     } catch (error) {
+      if (
+        payment &&
+        !payment.credited
+      ) {
+        payment.status =
+          "failed";
+        payment.failureReason =
+          String(
+            error.response
+              ?.data?.message ||
+              error.message ||
+              "Payment initialization failed",
+          ).slice(0, 500);
+
+        await payment
+          .save()
+          .catch(() => {});
+      }
+
       console.error(
         "Flutterwave initialization error:",
-        error.message,
+        error.response
+          ?.data ||
+          error.message,
       );
 
       return res
@@ -573,6 +883,8 @@ exports.initializePayment =
         .json({
           success: false,
           message:
+            error.response
+              ?.data?.message ||
             error.message ||
             "Unable to initialize payment",
           code:
@@ -692,6 +1004,239 @@ exports.verifyPayment =
         });
     }
   };
+
+
+exports.getPaymentStatus =
+  async (req, res) => {
+    try {
+      const txRef =
+        String(
+          req.params.txRef ||
+            "",
+        )
+          .trim()
+          .toUpperCase();
+
+      if (!txRef) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Payment reference is required",
+          });
+      }
+
+      let payment =
+        await Payment.findOne({
+          user:
+            req.user._id,
+          txRef,
+        });
+
+      if (!payment) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Payment record not found",
+            code:
+              "PAYMENT_NOT_FOUND",
+          });
+      }
+
+      let newlyCredited =
+        false;
+
+      /*
+       * Normal polling reads ChapsSms only. A forced refresh (the customer's
+       * "I have paid" button) also checks Flutterwave by tx_ref. This avoids
+       * hammering Flutterwave every few seconds while still recovering from
+       * a delayed/missed webhook.
+       */
+      const forceRefresh =
+        String(
+          req.query.refresh ||
+            "",
+        ) === "1";
+
+      if (
+        forceRefresh &&
+        !payment.credited &&
+        payment.status ===
+          "pending"
+      ) {
+        try {
+          const transaction =
+            await fetchFlutterwaveTransactionByReference(
+              txRef,
+            );
+
+          if (
+            transaction &&
+            String(
+              transaction.status ||
+                "",
+            ).toLowerCase() ===
+              "successful" &&
+            isValidTransaction(
+              transaction,
+              payment,
+            )
+          ) {
+            const creditResult =
+              await creditVerifiedPayment({
+                payment,
+                transaction,
+              });
+
+            newlyCredited =
+              !creditResult
+                .alreadyCredited;
+
+            payment =
+              await Payment.findOne({
+                user:
+                  req.user._id,
+                txRef,
+              });
+          }
+        } catch (error) {
+          const status =
+            Number(
+              error.response
+                ?.status ||
+                0,
+            );
+
+          /*
+           * A transfer that has not arrived yet may not be queryable.
+           * Keep it pending rather than turning a normal wait into an error.
+           */
+          if (
+            ![
+              400,
+              404,
+            ].includes(status)
+          ) {
+            console.warn(
+              "Flutterwave reference refresh failed:",
+              error.response
+                ?.data ||
+                error.message,
+            );
+          }
+        }
+      }
+
+      const paymentEnvironment =
+        String(
+          payment.environment ||
+            getPaymentMode(),
+        )
+          .trim()
+          .toLowerCase();
+
+      const balanceField =
+        getBalanceField(
+          paymentEnvironment,
+        );
+
+      const wallet =
+        await Wallet.findOne({
+          user:
+            req.user._id,
+        });
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          txRef:
+            payment.txRef,
+
+          status:
+            payment.status,
+
+          credited:
+            Boolean(
+              payment.credited,
+            ),
+
+          newlyCredited,
+
+          amount:
+            Number(
+              payment.amount,
+            ),
+
+          amountCredited:
+            payment.credited
+              ? Number(
+                  payment.amount,
+                )
+              : 0,
+
+          currency:
+            payment.currency,
+
+          paymentMethod:
+            payment.paymentMethod,
+
+          paymentEnvironment,
+
+          walletBalance:
+            getWalletBalance(
+              wallet,
+              balanceField,
+            ),
+
+          liveBalance:
+            Number(
+              wallet?.balance ||
+                0,
+            ),
+
+          testBalance:
+            Number(
+              wallet?.testBalance ||
+                0,
+            ),
+
+          bankTransfer:
+            serializeBankTransfer(
+              payment,
+            ),
+        });
+    } catch (error) {
+      console.error(
+        "Flutterwave payment status error:",
+        error.response
+          ?.data ||
+          error.message,
+      );
+
+      return res
+        .status(
+          error.status ||
+            500,
+        )
+        .json({
+          success: false,
+          message:
+            error.response
+              ?.data?.message ||
+            error.message ||
+            "Unable to check payment status",
+          code:
+            error.code ||
+            "PAYMENT_STATUS_FAILED",
+        });
+    }
+  };
+
 
 function isValidWebhookSignature(
   req,

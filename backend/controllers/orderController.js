@@ -276,17 +276,34 @@ async function refundReservedWallet({
     ) ||
     numericAmount <= 0
   ) {
-    return null;
+    return Wallet.findOne({
+      user: userId,
+    });
   }
 
   const refundReference =
     `${reservationReference}-REFUND`
       .toUpperCase();
 
+  /*
+   * Immediate compensation is atomic:
+   * - only a matching PENDING reservation can be reversed;
+   * - the refund reference can only be inserted once;
+   * - the same update restores the balance, fails the reservation and
+   *   records the completed refund.
+   */
   const wallet =
     await Wallet.findOneAndUpdate(
       {
         user: userId,
+
+        transactions: {
+          $elemMatch: {
+            reference:
+              reservationReference,
+            status: "pending",
+          },
+        },
 
         "transactions.reference": {
           $ne:
@@ -351,6 +368,8 @@ async function refundReservedWallet({
           {
             "purchase.reference":
               reservationReference,
+            "purchase.status":
+              "pending",
           },
         ],
       },
@@ -360,9 +379,67 @@ async function refundReservedWallet({
     return wallet;
   }
 
-  return Wallet.findOne({
-    user: userId,
-  });
+  const existingWallet =
+    await Wallet.findOne({
+      user: userId,
+    });
+
+  if (!existingWallet) {
+    const error =
+      new Error(
+        "Wallet not found while reversing failed purchase",
+      );
+
+    error.status = 500;
+    error.code =
+      "WALLET_ROLLBACK_FAILED";
+    throw error;
+  }
+
+  const refundExists =
+    existingWallet.transactions
+      .some(
+        (item) =>
+          String(
+            item.reference ||
+              "",
+          ).toUpperCase() ===
+            refundReference,
+      );
+
+  /*
+   * A duplicate/retried error path is safe: if this exact refund already
+   * exists, return the authoritative wallet without crediting twice.
+   */
+  if (refundExists) {
+    return existingWallet;
+  }
+
+  const reservationExists =
+    existingWallet.transactions
+      .some(
+        (item) =>
+          String(
+            item.reference ||
+              "",
+          ).toUpperCase() ===
+            String(
+              reservationReference ||
+                "",
+            ).toUpperCase(),
+      );
+
+  const error =
+    new Error(
+      reservationExists
+        ? "Failed purchase reservation could not be reversed automatically"
+        : "Failed purchase reservation was not found during automatic reversal",
+    );
+
+  error.status = 500;
+  error.code =
+    "WALLET_ROLLBACK_FAILED";
+  throw error;
 }
 
 async function reconcileReservation({
@@ -503,13 +580,7 @@ async function completePurchaseTransaction({
           amount,
 
         "transactions.$.description":
-          `Number purchase - ${service} - ${country} - ${server}`,
-
-        "transactions.$.serviceName":
-          service,
-
-        "transactions.$.countryName":
-          country,
+          `${service} (${country}) - ${server}`,
 
         "transactions.$.orderId":
           orderId,
@@ -706,6 +777,34 @@ exports.createOrder =
             normalizedOperator,
         });
 
+      const preliminaryStock =
+        Number(
+          preliminaryQuote?.stock,
+        );
+
+      /*
+       * If the live quote already reports zero stock, stop before reserving
+       * any customer money.
+       */
+      if (
+        Number.isFinite(
+          preliminaryStock,
+        ) &&
+        preliminaryStock <= 0
+      ) {
+        return res
+          .status(409)
+          .json({
+            success: false,
+            code:
+              "NO_NUMBERS",
+            message:
+              "ChapsSms does not currently have numbers available for this selection. Try another server or service.",
+            walletDebited:
+              false,
+          });
+      }
+
       const preliminaryPricing =
         await pricingService
           .resolveCustomerPricing({
@@ -798,13 +897,7 @@ exports.createOrder =
                     balanceField,
 
                     description:
-                      `Number purchase - ${normalizedServiceName || normalizedService} - ${normalizedCountryName || normalizedCountry} - ${normalizedServer}`,
-
-                    serviceName:
-                      normalizedServiceName || normalizedService,
-
-                    countryName:
-                      normalizedCountryName || normalizedCountry,
+                      `Reserved for ${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
 
                     status:
                       "pending",
@@ -1277,42 +1370,52 @@ exports.createOrder =
         }
       }
 
+      let rollbackWallet =
+        null;
+
+      let rollbackError =
+        null;
+
       if (
         walletWasDebited &&
         debitedAmount > 0 &&
         reservationReference
       ) {
         try {
-          await refundReservedWallet({
-            userId:
-              req.user._id,
+          rollbackWallet =
+            await refundReservedWallet({
+              userId:
+                req.user._id,
 
-            amount:
-              debitedAmount,
+              amount:
+                debitedAmount,
 
-            balanceField,
+              balanceField,
 
-            environment:
-              paymentEnvironment,
+              environment:
+                paymentEnvironment,
 
-            reservationReference,
+              reservationReference,
 
-            service:
-              normalizedService ||
-              "SMS",
+              service:
+                normalizedService ||
+                "SMS",
 
-            country:
-              normalizedCountry ||
-              "unknown",
+              country:
+                normalizedCountry ||
+                "unknown",
 
-            server:
-              normalizedServer ||
-              null,
+              server:
+                normalizedServer ||
+                null,
 
-            reason:
-              "Automatic refund for failed number purchase",
-          });
+              reason:
+                "Automatic refund for failed number purchase",
+            });
         } catch (refundError) {
+          rollbackError =
+            refundError;
+
           console.error(
             "Automatic wallet rollback failed:",
             refundError,
@@ -1324,6 +1427,24 @@ exports.createOrder =
         "Create order error:",
         error,
       );
+
+      /*
+       * If the provider purchase failed AND the automatic balance reversal
+       * also failed, expose that as a server problem instead of pretending
+       * the normal provider error is the whole story. The stale-reservation
+       * recovery endpoint remains a second safety net.
+       */
+      if (rollbackError) {
+        return res
+          .status(500)
+          .json({
+            success: false,
+            code:
+              "WALLET_ROLLBACK_FAILED",
+            message:
+              "The number purchase failed and ChapsSms could not immediately restore the reserved wallet balance. Please refresh Payment History while ChapsSms recovery retries the reversal.",
+          });
+      }
 
       return res
         .status(
@@ -1344,340 +1465,26 @@ exports.createOrder =
               error,
             ) ||
             "Unable to create order",
+
+          /*
+           * This lets clients reconcile immediately. Even clients that do
+           * not read this field should refresh /wallet after an error.
+           */
+          refunded:
+            Boolean(
+              rollbackWallet,
+            ),
+
+          walletBalance:
+            rollbackWallet
+              ? getWalletBalance(
+                  rollbackWallet,
+                  balanceField,
+                )
+              : undefined,
         });
     }
   };
-
-
-/*
- * Repairs interrupted wallet reservations.
- *
- * A purchase reservation is created BEFORE the provider request so the
- * customer cannot spend provider balance without first having funds.
- * If the Node process is interrupted after that atomic reservation but
- * before the order is saved/refunded, the transaction can otherwise remain
- * pending indefinitely.
- *
- * This recovery only touches pending purchase reservations older than
- * STALE_ORDER_RESERVATION_MS (default 10 minutes).
- */
-exports.recoverStaleReservations = async (req, res) => {
-  try {
-    const staleAfterMs = Math.max(
-      2 * 60 * 1000,
-      Number(
-        process.env.STALE_ORDER_RESERVATION_MS ||
-          10 * 60 * 1000
-      )
-    );
-
-    const cutoff = new Date(
-      Date.now() - staleAfterMs
-    );
-
-    let wallet = await Wallet.findOne({
-      user: req.user._id,
-    });
-
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        code: "WALLET_NOT_FOUND",
-        message: "Wallet not found",
-      });
-    }
-
-    const staleReservations = (
-      Array.isArray(wallet.transactions)
-        ? wallet.transactions
-        : []
-    ).filter((transaction) => {
-      const createdAt = transaction?.createdAt
-        ? new Date(transaction.createdAt)
-        : null;
-
-      return (
-        String(transaction?.type || "").toLowerCase() === "purchase" &&
-        String(transaction?.status || "").toLowerCase() === "pending" &&
-        transaction?.reference &&
-        createdAt &&
-        !Number.isNaN(createdAt.getTime()) &&
-        createdAt <= cutoff
-      );
-    });
-
-    let refundedCount = 0;
-    let completedCount = 0;
-    let refundedAmount = 0;
-
-    for (const reservation of staleReservations) {
-      const reservationReference = String(
-        reservation.reference || ""
-      ).trim().toUpperCase();
-
-      const amount = Number(
-        reservation.amount || 0
-      );
-
-      if (
-        !reservationReference ||
-        !Number.isFinite(amount) ||
-        amount <= 0
-      ) {
-        continue;
-      }
-
-      /*
-       * First try the exact reservation reference. This works for all orders
-       * created after the updated Order model is deployed.
-       */
-      let matchingOrder = await Order.findOne({
-        user: req.user._id,
-        walletReservationReference:
-          reservationReference,
-      });
-
-      /*
-       * Compatibility for an interrupted order created by an older schema
-       * that discarded walletReservationReference.
-       *
-       * A narrow time/amount/server match prevents an existing unrelated
-       * order from being mistaken for this reservation.
-       */
-      if (!matchingOrder) {
-        const reservationTime =
-          new Date(
-            reservation.createdAt
-          ).getTime();
-
-        matchingOrder =
-          await Order.findOne({
-            user: req.user._id,
-            server:
-              reservation.server ||
-              undefined,
-            sellingPrice: amount,
-            createdAt: {
-              $gte: new Date(
-                reservationTime -
-                  60 * 1000
-              ),
-              $lte: new Date(
-                reservationTime +
-                  5 * 60 * 1000
-              ),
-            },
-          }).sort({
-            createdAt: 1,
-          });
-      }
-
-      if (matchingOrder) {
-        const serviceName =
-          matchingOrder.serviceName ||
-          matchingOrder.service ||
-          reservation.serviceName ||
-          "Number";
-
-        const countryName =
-          matchingOrder.countryName ||
-          matchingOrder.country ||
-          reservation.countryName ||
-          "";
-
-        const result =
-          await Wallet.updateOne(
-            {
-              user: req.user._id,
-              transactions: {
-                $elemMatch: {
-                  reference:
-                    reservationReference,
-                  status: "pending",
-                },
-              },
-            },
-            {
-              $set: {
-                "transactions.$[purchase].status":
-                  "completed",
-                "transactions.$[purchase].orderId":
-                  matchingOrder._id,
-                "transactions.$[purchase].serviceName":
-                  serviceName,
-                "transactions.$[purchase].countryName":
-                  countryName,
-                "transactions.$[purchase].description":
-                  `Number purchase - ${serviceName}${countryName ? ` - ${countryName}` : ""} - ${matchingOrder.server || reservation.server || "server"}`,
-              },
-            },
-            {
-              arrayFilters: [
-                {
-                  "purchase.reference":
-                    reservationReference,
-                  "purchase.status":
-                    "pending",
-                },
-              ],
-              runValidators: true,
-            }
-          );
-
-        if (result.modifiedCount > 0) {
-          completedCount += 1;
-        }
-
-        continue;
-      }
-
-      const balanceField = [
-        "balance",
-        "testBalance",
-      ].includes(
-        reservation.balanceField
-      )
-        ? reservation.balanceField
-        : reservation.environment ===
-            "test"
-          ? "testBalance"
-          : "balance";
-
-      const refundReference =
-        `${reservationReference}-RECOVERY-REFUND`
-          .toUpperCase();
-
-      const recovered =
-        await Wallet.findOneAndUpdate(
-          {
-            user: req.user._id,
-
-            transactions: {
-              $elemMatch: {
-                reference:
-                  reservationReference,
-                status: "pending",
-              },
-            },
-
-            "transactions.reference": {
-              $ne:
-                refundReference,
-            },
-          },
-          {
-            $inc: {
-              [balanceField]:
-                amount,
-            },
-
-            $set: {
-              "transactions.$[purchase].status":
-                "failed",
-
-              "transactions.$[purchase].description":
-                "Interrupted number purchase automatically refunded",
-            },
-
-            $push: {
-              transactions: {
-                $each: [
-                  {
-                    type: "refund",
-                    amount,
-                    environment:
-                      reservation.environment ||
-                      "live",
-                    balanceField,
-                    description:
-                      "Automatic refund for interrupted number purchase",
-                    status:
-                      "completed",
-                    reference:
-                      refundReference,
-                    server:
-                      reservation.server ||
-                      null,
-                    currency:
-                      "NGN",
-                    serviceName:
-                      reservation.serviceName ||
-                      "",
-                    countryName:
-                      reservation.countryName ||
-                      "",
-                  },
-                ],
-                $position: 0,
-              },
-            },
-          },
-          {
-            new: true,
-            runValidators: true,
-            arrayFilters: [
-              {
-                "purchase.reference":
-                  reservationReference,
-                "purchase.status":
-                  "pending",
-              },
-            ],
-          }
-        );
-
-      if (recovered) {
-        refundedCount += 1;
-        refundedAmount += amount;
-        wallet = recovered;
-      }
-    }
-
-    const latestWallet =
-      await Wallet.findOne({
-        user: req.user._id,
-      });
-
-    return res.json({
-      success: true,
-      repaired:
-        refundedCount +
-        completedCount,
-      refundedCount,
-      completedCount,
-      refundedAmount,
-      walletBalance:
-        Number(
-          latestWallet?.balance || 0
-        ),
-      message:
-        refundedCount > 0
-          ? `Recovered ${refundedCount} interrupted purchase reservation(s) and returned ₦${refundedAmount.toLocaleString("en-NG")} to the wallet.`
-          : completedCount > 0
-            ? `Reconciled ${completedCount} completed purchase reservation(s).`
-            : "No stale purchase reservations needed recovery.",
-    });
-  } catch (error) {
-    console.error(
-      "Recover stale reservations error:",
-      error
-    );
-
-    return res
-      .status(
-        error.status || 500
-      )
-      .json({
-        success: false,
-        code:
-          error.code ||
-          "RESERVATION_RECOVERY_FAILED",
-        message:
-          error.message ||
-          "Unable to recover stale purchase reservations",
-      });
-  }
-};
 
 exports.checkOrder = async (req, res) => {
   try {

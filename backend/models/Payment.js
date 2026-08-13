@@ -73,6 +73,42 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
 
+    /*
+     * Flutterwave Pay-With-Bank-Transfer details.
+     * These are public temporary payment instructions returned by Flutterwave,
+     * not secret API credentials.
+     */
+    bankTransfer: {
+      transferReference: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      accountNumber: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      bankName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      transferNote: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      transferAmount: {
+        type: Number,
+        default: null,
+      },
+      expiresAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     verifiedAt: {
       type: Date,
       default: null,

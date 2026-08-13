@@ -4,6 +4,7 @@ const {
   upsertRule,
   updateRule,
   disableRule,
+  getOperators,
   previewPricing,
   getDashboardSummary,
   getSales,
@@ -23,6 +24,7 @@ router.post("/rules", upsertRule);
 router.patch("/rules/:id", updateRule);
 router.delete("/rules/:id", disableRule);
 
+router.get("/operators", getOperators);
 router.post("/preview", previewPricing);
 router.get("/summary", getDashboardSummary);
 router.get("/sales", getSales);

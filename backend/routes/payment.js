@@ -5,75 +5,41 @@ const router = express.Router();
 const {
   initializePayment,
   verifyPayment,
-  handleWebhook: handleFlutterwaveWebhook,
+  getPaymentStatus,
+  handleWebhook,
 } = require("../controllers/paymentController");
-
-const {
-  getVirtualAccount,
-  createVirtualAccount,
-  verifyTransaction: verifyNeuraPayTransaction,
-  handleWebhook: handleNeuraPayWebhook,
-} = require("../controllers/neurapayController");
 
 const {
   protect,
 } = require("../middleware/authMiddleware");
 
 /*
- * ============================================================
- * FLUTTERWAVE
- * ============================================================
- * Keep the existing endpoint so your current Flutterwave dashboard
- * configuration continues to work:
+ * Flutterwave calls this endpoint directly, so do not add protect here.
  *
- *   POST /api/payment/webhook
+ * The controller exports handleWebhook. A flutterwaveWebhook compatibility
+ * alias is also included in the updated controller.
  */
 router.post(
   "/webhook",
-  handleFlutterwaveWebhook,
+  handleWebhook
 );
 
 router.post(
   "/initialize",
   protect,
-  initializePayment,
+  initializePayment
 );
 
 router.post(
   "/verify",
   protect,
-  verifyPayment,
-);
-
-/*
- * ============================================================
- * NEURAPAY
- * ============================================================
- * Configure NeuraPay Webhook URL as:
- *
- *   https://YOUR-BACKEND/api/payment/neurapay/webhook
- */
-router.post(
-  "/neurapay/webhook",
-  handleNeuraPayWebhook,
+  verifyPayment
 );
 
 router.get(
-  "/neurapay/account",
+  "/status/:txRef",
   protect,
-  getVirtualAccount,
-);
-
-router.post(
-  "/neurapay/account",
-  protect,
-  createVirtualAccount,
-);
-
-router.post(
-  "/neurapay/verify",
-  protect,
-  verifyNeuraPayTransaction,
+  getPaymentStatus
 );
 
 module.exports = router;
