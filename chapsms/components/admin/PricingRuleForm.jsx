@@ -9,9 +9,11 @@ import {
 import {
   Calculator,
   Check,
+  ChevronDown,
   LoaderCircle,
   RefreshCw,
   Save,
+  Search,
   X,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -155,6 +157,161 @@ function formatProviderPrice(
       maximumFractionDigits: 2,
     }
   )} ${currency || ""}`.trim();
+}
+
+
+
+function SearchablePicker({
+  value,
+  options,
+  onChange,
+  getOptionId,
+  getOptionLabel,
+  placeholder,
+  searchPlaceholder,
+  disabled = false,
+  emptyText = "No matches found",
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef(null);
+
+  const selectedOption = useMemo(
+    () =>
+      options.find(
+        (option) =>
+          String(getOptionId(option)) === String(value)
+      ) || null,
+    [options, value, getOptionId]
+  );
+
+  const filteredOptions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return options;
+    }
+
+    return options.filter((option) => {
+      const id = String(getOptionId(option) || "").toLowerCase();
+      const label = String(getOptionLabel(option) || "").toLowerCase();
+
+      return (
+        label.includes(normalizedQuery) ||
+        id.includes(normalizedQuery)
+      );
+    });
+  }, [options, query, getOptionId, getOptionLabel]);
+
+  useEffect(() => {
+    function handleOutside(event) {
+      if (
+        rootRef.current &&
+        !rootRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handleOutside);
+    return () =>
+      document.removeEventListener("pointerdown", handleOutside);
+  }, []);
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+      setQuery("");
+    }
+  }, [disabled]);
+
+  return (
+    <div ref={rootRef} className="relative mt-2">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          setOpen((current) => !current);
+          setQuery("");
+        }}
+        className="flex h-12 w-full items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-left text-sm font-semibold text-[var(--foreground)] outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-blue-950/40"
+      >
+        <span
+          className={`truncate ${
+            selectedOption
+              ? "text-[var(--foreground)]"
+              : "text-[var(--muted-foreground)]"
+          }`}
+        >
+          {selectedOption
+            ? getOptionLabel(selectedOption)
+            : placeholder}
+        </span>
+
+        <ChevronDown
+          size={17}
+          className={`shrink-0 text-[var(--muted-foreground)] transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {open && !disabled && (
+        <div className="absolute left-0 right-0 z-[80] mt-2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+          <div className="border-b border-[var(--border)] p-3">
+            <div className="relative">
+              <Search
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
+              />
+              <input
+                autoFocus
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] pl-9 pr-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="max-h-72 overflow-y-auto p-2">
+            {filteredOptions.length ? (
+              filteredOptions.map((option) => {
+                const optionId = String(getOptionId(option) || "");
+                const selected = optionId === String(value || "");
+
+                return (
+                  <button
+                    key={optionId}
+                    type="button"
+                    onClick={() => {
+                      onChange(optionId);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
+                      selected
+                        ? "bg-blue-600 text-white"
+                        : "text-[var(--foreground)] hover:bg-[var(--muted)]"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate font-semibold">
+                      {getOptionLabel(option)}
+                    </span>
+                    {selected && <Check size={16} className="shrink-0" />}
+                  </button>
+                );
+              })
+            ) : (
+              <p className="px-3 py-8 text-center text-sm font-semibold text-[var(--muted-foreground)]">
+                {emptyText}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function PricingRuleForm({
@@ -679,49 +836,21 @@ export default function PricingRuleForm({
               Country
             </label>
 
-            <select
+            <SearchablePicker
               value={form.country}
-              onChange={(event) =>
-                handleCountryChange(
-                  event.target.value
-                )
-              }
-              disabled={
+              options={countries}
+              onChange={handleCountryChange}
+              getOptionId={getCountryId}
+              getOptionLabel={getCountryName}
+              placeholder={
                 catalogLoading
-              }
-              className={`${fieldClass} mt-2`}
-              required
-            >
-              <option value="">
-                {catalogLoading
                   ? "Loading countries..."
-                  : "Choose a country"}
-              </option>
-
-              {countries.map(
-                (country) => {
-                  const countryId =
-                    getCountryId(
-                      country
-                    );
-
-                  return (
-                    <option
-                      key={
-                        countryId
-                      }
-                      value={
-                        countryId
-                      }
-                    >
-                      {getCountryName(
-                        country
-                      )}
-                    </option>
-                  );
-                }
-              )}
-            </select>
+                  : "Choose a country"
+              }
+              searchPlaceholder="Search country..."
+              disabled={catalogLoading}
+              emptyText="No country matches your search"
+            />
           </div>
 
           <div>
@@ -729,52 +858,26 @@ export default function PricingRuleForm({
               Service
             </label>
 
-            <select
+            <SearchablePicker
               value={form.service}
-              onChange={(event) =>
-                handleServiceChange(
-                  event.target.value
-                )
+              options={services}
+              onChange={handleServiceChange}
+              getOptionId={getServiceId}
+              getOptionLabel={getServiceName}
+              placeholder={
+                !form.country
+                  ? "Select a country first"
+                  : catalogLoading
+                    ? "Loading services..."
+                    : "Choose a service"
               }
+              searchPlaceholder="Search service..."
               disabled={
                 catalogLoading ||
                 !form.country
               }
-              className={`${fieldClass} mt-2`}
-              required
-            >
-              <option value="">
-                {!form.country
-                  ? "Select a country first"
-                  : catalogLoading
-                    ? "Loading services..."
-                    : "Choose a service"}
-              </option>
-
-              {services.map(
-                (service) => {
-                  const serviceId =
-                    getServiceId(
-                      service
-                    );
-
-                  return (
-                    <option
-                      key={
-                        serviceId
-                      }
-                      value={
-                        serviceId
-                      }
-                    >
-                      {getServiceName(
-                        service
-                      )}
-                    </option>
-                  );
-                }
-              )}
-            </select>
+              emptyText="No service matches your search"
+            />
           </div>
         </div>
 

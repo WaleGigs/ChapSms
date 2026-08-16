@@ -27,11 +27,47 @@ import {
 import SearchableCountrySelect from "@/components/dashboard/SearchableCountrySelect";
 import SearchableServiceSelect from "@/components/dashboard/SearchableServiceSelect";
 import Button from "@/components/ui/Button";
-import CountdownTimer from "@/components/ui/CountdownTimer";
 
 const ACTIVE_ORDER_KEY = "chapsms-active-order";
 const POLLING_INTERVAL_MS = 5000;
 const MAX_POLLING_ATTEMPTS = 240;
+const FALLBACK_ORDER_LIFETIME_MS = 20 * 60 * 1000;
+
+function getOrderExpiryMs(order) {
+  const explicitExpiry = new Date(
+    order?.expiresAt || ""
+  ).getTime();
+
+  if (Number.isFinite(explicitExpiry)) {
+    return explicitExpiry;
+  }
+
+  const createdAt = new Date(
+    order?.createdAt || ""
+  ).getTime();
+
+  return Number.isFinite(createdAt)
+    ? createdAt + FALLBACK_ORDER_LIFETIME_MS
+    : null;
+}
+
+function formatRemainingTime(totalSeconds) {
+  const safeSeconds = Math.max(
+    0,
+    Number(totalSeconds || 0)
+  );
+
+  const minutes = Math.floor(
+    safeSeconds / 60
+  );
+  const seconds = Math.floor(
+    safeSeconds % 60
+  );
+
+  return `${String(minutes).padStart(2, "0")}:${String(
+    seconds
+  ).padStart(2, "0")}`;
+}
 
 function formatNaira(value) {
   return `₦${Number(value || 0).toLocaleString("en-NG", {
@@ -62,6 +98,35 @@ function formatName(value) {
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
+
+const ACTIVE_SERVICE_NAME_ALIASES = {
+  wa: "WhatsApp",
+  ig: "Instagram",
+  tg: "Telegram",
+  fb: "Facebook",
+  go: "Google",
+  am: "Amazon",
+  ds: "Discord",
+  tt: "TikTok",
+  tw: "X / Twitter",
+  nf: "Netflix",
+};
+
+function getActiveOrderServiceName(order, selectedService) {
+  const explicitName = String(
+    order?.serviceName || selectedService?.name || ""
+  ).trim();
+
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const code = String(order?.service || "").trim();
+  const alias = ACTIVE_SERVICE_NAME_ALIASES[code.toLowerCase()];
+
+  return alias || formatName(code);
+}
+
 
 function getOrderId(order) {
   return order?._id || order?.id || "";
@@ -162,6 +227,8 @@ export default function BuyNumberPage() {
 
   const pollingInProgress = useRef(false);
   const pollingAttempts = useRef(0);
+  const expiryCheckOrderRef = useRef("");
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   const selectedCountry = useMemo(() => {
     return (
@@ -220,6 +287,54 @@ export default function BuyNumberPage() {
   ].includes(orderStatus);
 
   const currentOrderId = getOrderId(currentOrder);
+
+  useEffect(() => {
+    if (
+      !currentOrderId ||
+      orderIsClosed ||
+      otpCode
+    ) {
+      setRemainingSeconds(0);
+      return undefined;
+    }
+
+    const expiryMs = getOrderExpiryMs(
+      currentOrder
+    );
+
+    if (!Number.isFinite(expiryMs)) {
+      setRemainingSeconds(0);
+      return undefined;
+    }
+
+    function updateRemaining() {
+      setRemainingSeconds(
+        Math.max(
+          0,
+          Math.ceil(
+            (expiryMs - Date.now()) /
+              1000
+          )
+        )
+      );
+    }
+
+    updateRemaining();
+
+    const interval = window.setInterval(
+      updateRemaining,
+      1000
+    );
+
+    return () =>
+      window.clearInterval(interval);
+  }, [
+    currentOrderId,
+    currentOrder?.expiresAt,
+    currentOrder?.createdAt,
+    orderIsClosed,
+    otpCode,
+  ]);
 
   const saveActiveOrder = useCallback((order) => {
     const orderId = getOrderId(order);
@@ -380,6 +495,17 @@ export default function BuyNumberPage() {
           await orderService.getOrder(savedOrderId);
 
         applyOrder(restoredOrder);
+
+        if (
+          restoredOrder?.refunded ||
+          ["cancelled", "expired"].includes(
+            String(
+              restoredOrder?.status || ""
+            ).toLowerCase()
+          )
+        ) {
+          await refreshWallet();
+        }
       } catch (error) {
         console.error(
           "Active order restoration failed:",
@@ -393,7 +519,11 @@ export default function BuyNumberPage() {
     }
 
     restoreActiveOrder();
-  }, [applyOrder, clearActiveOrder]);
+  }, [
+    applyOrder,
+    clearActiveOrder,
+    refreshWallet,
+  ]);
 
   const checkCurrentOrder = useCallback(
     async ({ showToast = false } = {}) => {
@@ -412,6 +542,19 @@ export default function BuyNumberPage() {
           await orderService.checkOrder(currentOrderId);
 
         applyOrder(updatedOrder);
+
+        const updatedStatus = String(
+          updatedOrder?.status || ""
+        ).toLowerCase();
+
+        if (
+          updatedOrder?.refunded ||
+          ["cancelled", "expired"].includes(
+            updatedStatus
+          )
+        ) {
+          await refreshWallet();
+        }
 
         if (updatedOrder.otpCode) {
           toast.success("OTP received successfully");
@@ -441,8 +584,40 @@ export default function BuyNumberPage() {
       currentOrderId,
       orderIsClosed,
       applyOrder,
+      refreshWallet,
     ]
   );
+
+  useEffect(() => {
+    if (
+      !currentOrderId ||
+      orderIsClosed ||
+      otpCode ||
+      remainingSeconds > 0
+    ) {
+      return;
+    }
+
+    if (
+      expiryCheckOrderRef.current ===
+      currentOrderId
+    ) {
+      return;
+    }
+
+    expiryCheckOrderRef.current =
+      currentOrderId;
+
+    checkCurrentOrder({
+      showToast: false,
+    });
+  }, [
+    currentOrderId,
+    orderIsClosed,
+    otpCode,
+    remainingSeconds,
+    checkCurrentOrder,
+  ]);
 
   useEffect(() => {
     if (
@@ -789,6 +964,8 @@ async function handleCancel() {
     clearActiveOrder();
     setCurrentOrder(null);
     pollingAttempts.current = 0;
+    expiryCheckOrderRef.current = "";
+    setRemainingSeconds(0);
   }
 
   function formatPhoneNumber(value) {
@@ -1153,9 +1330,9 @@ async function handleCancel() {
 
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                 Use this number on{" "}
-                {formatName(
-                  currentOrder.service ||
-                    selectedService?.name
+                {getActiveOrderServiceName(
+                  currentOrder,
+                  selectedService
                 )}{" "}
                 and request the verification code.
               </p>
@@ -1201,16 +1378,11 @@ async function handleCancel() {
                 {getStatusLabel()}
               </span>
 
-              <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-                {selectedCountry?.flag ||
-                  currentOrder.country}{" "}
-                {selectedCountry?.eng ||
-                  formatName(currentOrder.country)}
-
-                <span className="mx-2">•</span>
-
-                {selectedService?.name ||
-                  formatName(currentOrder.service)}
+              <p className="mt-3 text-sm font-bold text-[var(--foreground)]">
+                {getActiveOrderServiceName(
+                  currentOrder,
+                  selectedService
+                )}
               </p>
             </div>
 
@@ -1372,18 +1544,9 @@ async function handleCancel() {
                 </div>
 
                 <p className="shrink-0 text-left text-xl font-black text-[var(--foreground)] min-[420px]:text-right">
-                  <CountdownTimer
-                    initialSeconds={1200}
-                    onExpire={() => {
-                      toast.error(
-                        "The local countdown ended. Refreshing the ChapsSms status."
-                      );
-
-                      checkCurrentOrder({
-                        showToast: false,
-                      });
-                    }}
-                  />
+                  {formatRemainingTime(
+                    remainingSeconds
+                  )}
                 </p>
               </div>
             </div>
