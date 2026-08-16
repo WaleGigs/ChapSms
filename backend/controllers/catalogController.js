@@ -4,6 +4,9 @@ const providerManager = require(
 const pricingService = require(
   "../services/pricingService"
 );
+const automaticPricingService = require(
+  "../services/automaticPricingService"
+);
 
 const VALID_SERVERS = new Set(["server1", "server2"]);
 const CACHE_TTL_MS = Number(
@@ -434,7 +437,7 @@ exports.getPrice = async (req, res) => {
       });
     }
 
-    const operator =
+    let operator =
       await pricingService
         .resolveEffectiveOperator({
           server,
@@ -445,13 +448,39 @@ exports.getPrice = async (req, res) => {
           requestedOperator,
         });
 
-    const quote =
-      await providerManager.getPrice({
-        server,
-        country,
-        service,
-        operator,
-      });
+    let quote;
+    let automaticSelection =
+      null;
+
+    /*
+     * A manually selected operator or an operator-specific pricing rule
+     * stays in full control.
+     *
+     * Only an unresolved "any" selection enters Cheapest 5 + Buffer.
+     */
+    if (operator === "any") {
+      automaticSelection =
+        await automaticPricingService
+          .resolveAutomaticQuote({
+            server,
+            country,
+            service,
+          });
+
+      operator =
+        automaticSelection.operator;
+
+      quote =
+        automaticSelection.quote;
+    } else {
+      quote =
+        await providerManager.getPrice({
+          server,
+          country,
+          service,
+          operator,
+        });
+    }
 
     const pricing =
       await pricingService
@@ -482,6 +511,12 @@ exports.getPrice = async (req, res) => {
         pricingSource: pricing.pricingSource,
         pricingRuleMatched:
           pricing.pricingRuleMatched,
+        automaticStrategy:
+          automaticSelection?.strategy ||
+          null,
+        automaticCandidateCount:
+          automaticSelection?.candidateCount ||
+          0,
       });
     }
 

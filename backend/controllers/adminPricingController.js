@@ -777,6 +777,8 @@ exports.getSales = async (req, res) => {
         { customerEmail: { $regex: search, $options: "i" } },
         { phoneNumber: { $regex: search, $options: "i" } },
         { otpCode: { $regex: search, $options: "i" } },
+        { countryName: { $regex: search, $options: "i" } },
+        { serviceName: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -800,7 +802,21 @@ exports.getSales = async (req, res) => {
         email: order.customerEmail || order.user?.email || "",
       },
       country: order.country,
+      countryName:
+        String(
+          order.countryName ||
+            order.pricingSnapshot?.countryName ||
+            order.pricingSnapshot?.country?.name ||
+            ""
+        ).trim(),
       service: order.service,
+      serviceName:
+        String(
+          order.serviceName ||
+            order.pricingSnapshot?.serviceName ||
+            order.pricingSnapshot?.service?.name ||
+            ""
+        ).trim(),
       operator: order.operator,
       phoneNumber: order.phoneNumber,
       otpCode: order.otpCode,

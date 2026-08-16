@@ -394,22 +394,30 @@ async function resolveEffectiveOperator({
       )
     : "any";
 }
-function createDefaultRule({
-  server,
-  country,
-  service,
-  operator,
-}) {
-  const markupPercent = finiteNonNegative(
-    process.env.PRICE_MARKUP_PERCENT,
-    0
+
+function createDefaultRule({ server, country, service, operator }) {
+  /*
+   * No manual database rule:
+   * use ChapsSms global Cheapest + Buffer pricing.
+   *
+   * Example:
+   * provider cost = ₦850
+   * buffer        = ₦200
+   * floor         = ₦1,000
+   * selling price = max(850 + 200, 1000) = ₦1,050
+   *
+   * provider cost = ₦45
+   * selling price = max(45 + 200, 1000) = ₦1,000
+   */
+  const fixedMarkup = finiteNonNegative(
+    process.env.AUTO_PRICING_BUFFER_NGN,
+    200
   );
 
-  const defaultMinimumSellingPrice =
-    finiteNonNegative(
-      process.env.DEFAULT_MINIMUM_SELLING_PRICE,
-      1000
-    );
+  const minimumSellingPrice = finiteNonNegative(
+    process.env.AUTO_PRICING_MINIMUM_NGN,
+    1000
+  );
 
   return {
     _id: null,
@@ -417,14 +425,13 @@ function createDefaultRule({
     country,
     service,
     operator,
-    pricingMode: "percentage",
+    pricingMode: "cost_plus",
     fixedSellingPrice: 0,
-    markupPercent,
-    fixedMarkup: 0,
-    minimumSellingPrice:
-      defaultMinimumSellingPrice,
+    markupPercent: 0,
+    fixedMarkup,
+    minimumSellingPrice,
     isActive: true,
-    source: "environment_default",
+    source: "automatic_cheapest_buffer",
   };
 }
 
