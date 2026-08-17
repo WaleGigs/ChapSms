@@ -151,6 +151,14 @@ function sanitizeOrder(order) {
       ).trim();
   }
 
+  const effectiveExpiresAt =
+    getEffectiveOrderExpiresAt(order);
+
+  if (effectiveExpiresAt) {
+    data.expiresAt =
+      effectiveExpiresAt.toISOString();
+  }
+
   delete data.provider;
   delete data.providerResponse;
   delete data.providerPrice;
@@ -245,7 +253,7 @@ function getWalletBalance(
 }
 
 
-const DEFAULT_ORDER_ACTIVATION_TTL_MS =
+const ORDER_ACTIVATION_TTL_MS =
   20 * 60 * 1000;
 
 function getPositiveInteger(
@@ -271,11 +279,12 @@ function getPositiveInteger(
 }
 
 function getOrderActivationTtlMs() {
-  return getPositiveInteger(
-    process.env.ORDER_ACTIVATION_TTL_MS,
-    DEFAULT_ORDER_ACTIVATION_TTL_MS,
-    60 * 60 * 1000,
-  );
+  /*
+   * ChapsSms activations are a fixed 20-minute window.
+   * A stale/mistyped environment value must never turn this
+   * into 200 minutes.
+   */
+  return ORDER_ACTIVATION_TTL_MS;
 }
 
 function parseProviderDate(value) {
@@ -340,6 +349,7 @@ function getProviderStartedAtFromPurchase(
   providerOrder,
 ) {
   const raw = providerOrder?.raw;
+  const now = Date.now();
 
   const candidates = [
     providerOrder?.activationTime,
@@ -357,12 +367,62 @@ function getProviderStartedAtFromPurchase(
   for (const candidate of candidates) {
     const parsed = parseProviderDate(candidate);
 
-    if (parsed) {
+    if (!parsed) {
+      continue;
+    }
+
+    const driftMs = Math.abs(
+      parsed.getTime() - now,
+    );
+
+    /*
+     * The activation should have started around the current purchase.
+     * Reject provider timestamps with a large timezone/format drift.
+     */
+    if (driftMs <= 5 * 60 * 1000) {
       return parsed;
     }
   }
 
-  return new Date();
+  return new Date(now);
+}
+
+function getEffectiveOrderStartedAt(order) {
+  const createdAt = parseProviderDate(
+    order?.createdAt,
+  );
+
+  const providerStartedAt = parseProviderDate(
+    order?.providerStartedAt,
+  );
+
+  if (
+    providerStartedAt &&
+    createdAt &&
+    Math.abs(
+      providerStartedAt.getTime() -
+        createdAt.getTime(),
+    ) <=
+      5 * 60 * 1000
+  ) {
+    return providerStartedAt;
+  }
+
+  return createdAt || providerStartedAt;
+}
+
+function getEffectiveOrderExpiresAt(order) {
+  const startedAt =
+    getEffectiveOrderStartedAt(order);
+
+  if (!startedAt) {
+    return null;
+  }
+
+  return new Date(
+    startedAt.getTime() +
+      getOrderActivationTtlMs(),
+  );
 }
 
 function getOrderBalanceContext(order) {
@@ -388,13 +448,13 @@ function getOrderBalanceContext(order) {
 }
 
 function orderExpiryHasPassed(order) {
-  const expiresAt = new Date(
-    order?.expiresAt || "",
-  ).getTime();
+  const expiresAt =
+    getEffectiveOrderExpiresAt(order);
 
-  return (
-    Number.isFinite(expiresAt) &&
-    expiresAt <= Date.now()
+  return Boolean(
+    expiresAt &&
+      expiresAt.getTime() <=
+        Date.now(),
   );
 }
 
@@ -898,72 +958,41 @@ exports.createOrder =
           });
       }
 
-      let normalizedOperator =
-        await pricingService
-          .resolveEffectiveOperator({
-            server:
-              normalizedServer,
+      const pricingStrategy =
+        await pricingService.resolvePricingStrategy({
+          server: normalizedServer,
+          country: normalizedCountry,
+          service: normalizedService,
+          countryName: normalizedCountryName,
+          serviceName: normalizedServiceName,
+          requestedOperator,
+        });
 
-            country:
-              normalizedCountry,
+      let normalizedOperator = pricingStrategy.operator;
+      let preliminaryQuote;
+      let automaticSelection = null;
+      let pricingBasisNgn = null;
 
-            service:
-              normalizedService,
-
-            countryName:
-              normalizedCountryName,
-
-            serviceName:
-              normalizedServiceName,
-
-            requestedOperator,
+      if (pricingStrategy.pricingStyle === "cheapest_buffer") {
+        automaticSelection =
+          await automaticPricingService.resolveAutomaticQuote({
+            server: normalizedServer,
+            country: normalizedCountry,
+            service: normalizedService,
+            maxPriceBufferPercent:
+              pricingStrategy.maxPriceBufferPercent,
           });
 
-      let preliminaryQuote;
-      let automaticSelection =
-        null;
-
-      /*
-       * Manual operator/fixed-rule choices still override automation.
-       * Cheapest 5 selection is used only when no specific operator
-       * has been selected by the customer/admin pricing rule.
-       */
-      if (
-        normalizedOperator ===
-        "any"
-      ) {
-        automaticSelection =
-          await automaticPricingService
-            .resolveAutomaticQuote({
-              server:
-                normalizedServer,
-              country:
-                normalizedCountry,
-              service:
-                normalizedService,
-            });
-
-        normalizedOperator =
-          automaticSelection.operator;
-
-        preliminaryQuote =
-          automaticSelection.quote;
+        normalizedOperator = automaticSelection.operator;
+        preliminaryQuote = automaticSelection.quote;
+        pricingBasisNgn = automaticSelection.pricingBasisNgn;
       } else {
-        preliminaryQuote =
-          await providerManager
-            .getPrice({
-              server:
-                normalizedServer,
-
-              country:
-                normalizedCountry,
-
-              service:
-                normalizedService,
-
-              operator:
-                normalizedOperator,
-            });
+        preliminaryQuote = await providerManager.getPrice({
+          server: normalizedServer,
+          country: normalizedCountry,
+          service: normalizedService,
+          operator: normalizedOperator,
+        });
       }
 
       if (
@@ -981,10 +1010,11 @@ exports.createOrder =
               normalizedService,
             operator:
               normalizedOperator,
+            pricingStyle:
+              pricingStrategy.pricingStyle,
             strategy:
-              automaticSelection
-                ?.strategy ||
-              "manual_or_rule",
+              automaticSelection?.strategy ||
+              "fixed_operator",
             candidateCount:
               automaticSelection
                 ?.candidateCount ||
@@ -1047,6 +1077,8 @@ exports.createOrder =
 
             providerCurrency:
               preliminaryQuote.currency,
+
+            pricingBasisNgn,
           });
 
       const reservedAmount =
@@ -1266,6 +1298,8 @@ exports.createOrder =
             providerPrice,
 
             providerCurrency,
+
+            pricingBasisNgn,
           });
 
       const finalAmount =
@@ -1391,6 +1425,11 @@ exports.createOrder =
       debitedAmount =
         finalAmount;
 
+      const providerStartedAt =
+        getProviderStartedAtFromPurchase(
+          purchasedProviderOrder,
+        );
+
       let order;
 
       try {
@@ -1478,16 +1517,11 @@ exports.createOrder =
             walletReservationReference:
               reservationReference,
 
-            providerStartedAt:
-              getProviderStartedAtFromPurchase(
-                purchasedProviderOrder,
-              ),
+            providerStartedAt,
 
             expiresAt:
               new Date(
-                getProviderStartedAtFromPurchase(
-                  purchasedProviderOrder,
-                ).getTime() +
+                providerStartedAt.getTime() +
                   getOrderActivationTtlMs(),
               ),
 
@@ -2292,10 +2326,19 @@ async function runLifecycleSweep() {
       autoRefundEligible: true,
       refunded: { $ne: true },
       status: "waiting",
-      expiresAt: {
-        $ne: null,
-        $lte: new Date(),
+
+      /*
+       * createdAt is ChapsSms-controlled and cannot carry an upstream
+       * timezone error. After 20 minutes, verify the real provider
+       * status before refunding.
+       */
+      createdAt: {
+        $lte: new Date(
+          Date.now() -
+            getOrderActivationTtlMs(),
+        ),
       },
+
       $or: [
         { providerLastCheckedAt: null },
         {

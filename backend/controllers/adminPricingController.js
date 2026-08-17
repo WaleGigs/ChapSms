@@ -10,6 +10,9 @@ const providerManager = require(
 const pricingService = require(
   "../services/pricingService"
 );
+const automaticPricingService = require(
+  "../services/automaticPricingService"
+);
 
 function parseBoolean(value, fallback = undefined) {
   if (value === undefined) {
@@ -101,6 +104,13 @@ function ruleResponse(rule) {
     service: rule.service,
     serviceName: rule.serviceName,
     operator: rule.operator,
+    pricingStyle:
+      pricingService.normalizePricingStyle(
+        rule.pricingStyle,
+        rule.operator
+      ),
+    maxPriceBufferPercent:
+      Number(rule.maxPriceBufferPercent ?? 50),
     pricingMode: rule.pricingMode,
     fixedSellingPrice: rule.fixedSellingPrice,
     markupPercent: rule.markupPercent,
@@ -192,6 +202,22 @@ exports.upsertRule = async (req, res) => {
       }
     );
 
+    await PricingRule.updateMany(
+      {
+        _id: { $ne: rule._id },
+        server: input.server,
+        country: input.country,
+        service: input.service,
+        isActive: true,
+      },
+      {
+        $set: {
+          isActive: false,
+          updatedBy: req.user._id,
+        },
+      }
+    );
+
     return res.status(201).json({
       success: true,
       rule: ruleResponse(rule),
@@ -224,7 +250,6 @@ exports.updateRule = async (req, res) => {
     }
 
     const existing = await PricingRule.findById(req.params.id);
-
     if (!existing) {
       return res.status(404).json({
         success: false,
@@ -237,15 +262,44 @@ exports.updateRule = async (req, res) => {
       ...req.body,
     });
 
-    Object.assign(existing, input, {
-      updatedBy: req.user._id,
+    let rule = existing;
+    const conflict = await PricingRule.findOne({
+      _id: { $ne: existing._id },
+      server: input.server,
+      country: input.country,
+      service: input.service,
+      operator: input.operator,
     });
 
-    await existing.save();
+    if (conflict) {
+      Object.assign(conflict, input, { updatedBy: req.user._id });
+      await conflict.save();
+      await PricingRule.findByIdAndDelete(existing._id);
+      rule = conflict;
+    } else {
+      Object.assign(existing, input, { updatedBy: req.user._id });
+      await existing.save();
+    }
+
+    await PricingRule.updateMany(
+      {
+        _id: { $ne: rule._id },
+        server: input.server,
+        country: input.country,
+        service: input.service,
+        isActive: true,
+      },
+      {
+        $set: {
+          isActive: false,
+          updatedBy: req.user._id,
+        },
+      }
+    );
 
     return res.json({
       success: true,
-      rule: ruleResponse(existing),
+      rule: ruleResponse(rule),
       message: "Pricing rule updated successfully",
     });
   } catch (error) {
@@ -365,28 +419,52 @@ exports.getOperators = async (req, res) => {
 
 exports.previewPricing = async (req, res) => {
   try {
-    const server = pricingService.normalizeServer(req.body.server);
-    const country = pricingService.normalizeCountry(req.body.country);
-    const service = pricingService.normalizeService(req.body.service);
-    const operator = pricingService.normalizeOperator(req.body.operator);
-
-    const quote = await providerManager.getPrice({
+    const draftRule = pricingService.normalizeRuleInput(req.body);
+    const {
       server,
       country,
       service,
-      operator,
-    });
+      operator: configuredOperator,
+      pricingStyle,
+      maxPriceBufferPercent,
+    } = draftRule;
 
-    const hasDraftRule = Boolean(req.body.pricingMode);
+    let operator = configuredOperator;
+    let quote;
+    let automaticSelection = null;
+    let pricingBasisNgn = null;
+
+    if (pricingStyle === "cheapest_buffer") {
+      automaticSelection =
+        await automaticPricingService.resolveAutomaticQuote({
+          server,
+          country,
+          service,
+          maxPriceBufferPercent,
+        });
+      operator = automaticSelection.operator;
+      quote = automaticSelection.quote;
+      pricingBasisNgn = automaticSelection.pricingBasisNgn;
+    } else {
+      quote = await providerManager.getPrice({
+        server,
+        country,
+        service,
+        operator,
+      });
+    }
 
     const pricing = await pricingService.resolveCustomerPricing({
       server,
       country,
       service,
+      countryName: draftRule.countryName,
+      serviceName: draftRule.serviceName,
       operator,
       providerPrice: quote.price,
       providerCurrency: quote.currency,
-      draftRule: hasDraftRule ? req.body : null,
+      pricingBasisNgn,
+      draftRule,
     });
 
     return res.json({
@@ -395,15 +473,21 @@ exports.previewPricing = async (req, res) => {
         server,
         country,
         service,
+        pricingStyle,
+        maxPriceBufferPercent,
         operator,
         providerCost: pricing.providerPrice,
         providerCurrency: pricing.providerCurrency,
         providerCostNgn: pricing.providerCostNgn,
+        floorCostNgn:
+          automaticSelection?.floorCostNgn ?? pricing.providerCostNgn,
+        pricingBasisNgn: pricing.pricingBasisNgn,
         sellingPrice: pricing.sellingPrice,
         profit: pricing.profit,
-        stock: Number.isFinite(Number(quote.stock))
-          ? Number(quote.stock)
-          : 0,
+        stock: Number.isFinite(Number(quote.stock)) ? Number(quote.stock) : 0,
+        candidateCount: automaticSelection?.candidateCount || 0,
+        eligibleCount: automaticSelection?.eligibleCount || 0,
+        cheapPool: automaticSelection?.cheapPool || [],
         pricingMode: pricing.pricingMode,
         pricingSource: pricing.pricingSource,
         pricingRuleId: pricing.pricingRuleId

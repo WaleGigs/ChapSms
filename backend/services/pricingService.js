@@ -6,14 +6,12 @@ const VALID_PRICING_MODES = new Set([
   "percentage",
   "cost_plus",
 ]);
+const VALID_PRICING_STYLES = new Set([
+  "cheapest_buffer",
+  "fixed_operator",
+]);
 
-function createPricingError(
-  message,
-  {
-    code = "PRICING_ERROR",
-    status = 400,
-  } = {}
-) {
+function createPricingError(message, { code = "PRICING_ERROR", status = 400 } = {}) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
@@ -22,14 +20,11 @@ function createPricingError(
 
 function normalizeServer(value) {
   const server = String(value || "").trim().toLowerCase();
-
   if (!VALID_SERVERS.has(server)) {
     throw createPricingError("Please select a valid server", {
       code: "INVALID_SERVER",
-      status: 400,
     });
   }
-
   return server;
 }
 
@@ -38,13 +33,9 @@ function normalizeCountry(value) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
-
   if (!country) {
-    throw createPricingError("Country is required", {
-      code: "COUNTRY_REQUIRED",
-    });
+    throw createPricingError("Country is required", { code: "COUNTRY_REQUIRED" });
   }
-
   return country;
 }
 
@@ -53,43 +44,41 @@ function normalizeService(value) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "");
-
   if (!service) {
-    throw createPricingError("Service is required", {
-      code: "SERVICE_REQUIRED",
-    });
+    throw createPricingError("Service is required", { code: "SERVICE_REQUIRED" });
   }
-
   return service;
 }
 
 function normalizeDisplayName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
-
 function normalizeServiceDisplayName(value) {
   return normalizeDisplayName(value).replace(/\s+/g, "");
 }
-
 function normalizeOperator(value) {
   return String(value || "any").trim().toLowerCase() || "any";
 }
-
 function normalizeCurrency(value) {
   return String(value || "NGN").trim().toUpperCase();
 }
-
 function finiteNonNegative(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
+function normalizePricingStyle(value, operator = "any") {
+  const style = String(value || "").trim().toLowerCase();
+  if (VALID_PRICING_STYLES.has(style)) return style;
+
+  /* Backward compatibility with rules saved before Pricing Style existed. */
+  return normalizeOperator(operator) === "any"
+    ? "cheapest_buffer"
+    : "fixed_operator";
+}
+
 function convertProviderCostToNaira(providerPrice, providerCurrency) {
   const price = Number(providerPrice);
-
   if (!Number.isFinite(price) || price <= 0) {
     throw createPricingError("The server returned an invalid provider price", {
       code: "INVALID_PROVIDER_PRICE",
@@ -98,23 +87,15 @@ function convertProviderCostToNaira(providerPrice, providerCurrency) {
   }
 
   const currency = normalizeCurrency(providerCurrency);
-
-  if (currency === "NGN") {
-    return Math.ceil(price);
-  }
-
+  if (currency === "NGN") return Math.ceil(price);
   if (currency !== "USD") {
-    throw createPricingError(
-      `Unsupported provider currency: ${currency}`,
-      {
-        code: "UNSUPPORTED_PROVIDER_CURRENCY",
-        status: 500,
-      }
-    );
+    throw createPricingError(`Unsupported provider currency: ${currency}`, {
+      code: "UNSUPPORTED_PROVIDER_CURRENCY",
+      status: 500,
+    });
   }
 
   const exchangeRate = Number(process.env.NGN_PER_USD);
-
   if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) {
     throw createPricingError("NGN_PER_USD is not configured", {
       code: "EXCHANGE_RATE_NOT_CONFIGURED",
@@ -126,13 +107,22 @@ function convertProviderCostToNaira(providerPrice, providerCurrency) {
 }
 
 function normalizeRuleInput(input = {}) {
-  const pricingMode = String(input.pricingMode || "fixed")
+  const pricingMode = String(input.pricingMode || "percentage")
     .trim()
     .toLowerCase();
-
   if (!VALID_PRICING_MODES.has(pricingMode)) {
     throw createPricingError("Select a valid pricing mode", {
       code: "INVALID_PRICING_MODE",
+    });
+  }
+
+  const requestedOperator = normalizeOperator(input.operator);
+  const pricingStyle = normalizePricingStyle(input.pricingStyle, requestedOperator);
+  const operator = pricingStyle === "cheapest_buffer" ? "any" : requestedOperator;
+
+  if (pricingStyle === "fixed_operator" && operator === "any") {
+    throw createPricingError("Choose an operator for Fixed operator pricing", {
+      code: "FIXED_OPERATOR_REQUIRED",
     });
   }
 
@@ -142,7 +132,9 @@ function normalizeRuleInput(input = {}) {
     countryName: String(input.countryName || "").trim(),
     service: normalizeService(input.service),
     serviceName: String(input.serviceName || "").trim(),
-    operator: normalizeOperator(input.operator),
+    operator,
+    pricingStyle,
+    maxPriceBufferPercent: finiteNonNegative(input.maxPriceBufferPercent, 50),
     pricingMode,
     fixedSellingPrice: finiteNonNegative(input.fixedSellingPrice),
     markupPercent: finiteNonNegative(input.markupPercent),
@@ -152,80 +144,84 @@ function normalizeRuleInput(input = {}) {
     notes: String(input.notes || "").trim(),
   };
 
-  if (
-    pricingMode === "fixed" &&
-    normalized.fixedSellingPrice <= 0
-  ) {
-    throw createPricingError(
-      "Fixed selling price must be greater than zero",
-      {
-        code: "INVALID_FIXED_PRICE",
-      }
-    );
+  if (normalized.maxPriceBufferPercent > 500) {
+    throw createPricingError("Max price buffer cannot be greater than 500%", {
+      code: "INVALID_PRICE_BUFFER",
+    });
+  }
+
+  if (pricingMode === "fixed" && normalized.fixedSellingPrice <= 0) {
+    throw createPricingError("Fixed selling price must be greater than zero", {
+      code: "INVALID_FIXED_PRICE",
+    });
   }
 
   return normalized;
 }
 
-function ruleMatchesSelection(
-  rule,
-  {
-    country,
-    service,
-    countryName = "",
-    serviceName = "",
-  }
-) {
+function ruleMatchesSelection(rule, { country, service, countryName = "", serviceName = "" }) {
   const normalizedCountry = normalizeCountry(country);
   const normalizedService = normalizeService(service);
-  const normalizedCountryName =
-    normalizeDisplayName(countryName);
-  const normalizedServiceName =
-    normalizeServiceDisplayName(serviceName);
-
-  const ruleCountry = normalizeCountry(rule.country);
-  const ruleService = normalizeService(rule.service);
-  const ruleCountryName =
-    normalizeDisplayName(rule.countryName);
-  const ruleServiceName =
-    normalizeServiceDisplayName(rule.serviceName);
+  const normalizedCountryName = normalizeDisplayName(countryName);
+  const normalizedServiceName = normalizeServiceDisplayName(serviceName);
 
   const countryMatches =
-    ruleCountry === normalizedCountry ||
-    (
-      normalizedCountryName &&
-      ruleCountryName &&
-      ruleCountryName === normalizedCountryName
-    );
+    normalizeCountry(rule.country) === normalizedCountry ||
+    (normalizedCountryName &&
+      normalizeDisplayName(rule.countryName) &&
+      normalizeDisplayName(rule.countryName) === normalizedCountryName);
 
   const serviceMatches =
-    ruleService === normalizedService ||
-    (
-      normalizedServiceName &&
-      ruleServiceName &&
-      ruleServiceName === normalizedServiceName
-    );
+    normalizeService(rule.service) === normalizedService ||
+    (normalizedServiceName &&
+      normalizeServiceDisplayName(rule.serviceName) &&
+      normalizeServiceDisplayName(rule.serviceName) === normalizedServiceName);
 
   return countryMatches && serviceMatches;
 }
 
-function selectOperatorRule(
-  rules,
-  normalizedOperator
-) {
-  return (
-    rules.find(
-      (rule) =>
-        normalizeOperator(rule.operator) ===
-        normalizedOperator
-    ) ||
-    rules.find(
-      (rule) =>
-        normalizeOperator(rule.operator) ===
-        "any"
-    ) ||
-    null
+async function findRulesForSelection({
+  server,
+  country,
+  service,
+  countryName = "",
+  serviceName = "",
+}) {
+  const normalizedServer = normalizeServer(server);
+  const normalizedCountry = normalizeCountry(country);
+  const normalizedService = normalizeService(service);
+
+  const exact = await PricingRule.find({
+    server: normalizedServer,
+    country: normalizedCountry,
+    service: normalizedService,
+    isActive: true,
+  })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  if (exact.length) return exact;
+
+  const candidates = await PricingRule.find({
+    server: normalizedServer,
+    isActive: true,
+  })
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  return candidates.filter((rule) =>
+    ruleMatchesSelection(rule, {
+      country: normalizedCountry,
+      service: normalizedService,
+      countryName,
+      serviceName,
+    })
   );
+}
+
+async function findPreferredOperatorRule(options) {
+  const rules = await findRulesForSelection(options);
+  return rules[0] || null;
 }
 
 async function findApplicableRule({
@@ -236,130 +232,29 @@ async function findApplicableRule({
   serviceName = "",
   operator = "any",
 }) {
-  const normalizedServer = normalizeServer(server);
-  const normalizedCountry = normalizeCountry(country);
-  const normalizedService = normalizeService(service);
+  const rules = await findRulesForSelection({
+    server,
+    country,
+    service,
+    countryName,
+    serviceName,
+  });
+
+  if (!rules.length) return null;
+
   const normalizedOperator = normalizeOperator(operator);
-
-  const operators =
-    normalizedOperator === "any"
-      ? ["any"]
-      : [normalizedOperator, "any"];
-
-  /*
-   * Fast path: exact provider IDs.
-   */
-  const exactRules = await PricingRule.find({
-    server: normalizedServer,
-    country: normalizedCountry,
-    service: normalizedService,
-    operator: { $in: operators },
-    isActive: true,
-  })
-    .sort({ updatedAt: -1 })
-    .lean();
-
-  const exactRule = selectOperatorRule(
-    exactRules,
-    normalizedOperator
+  const exact = rules.find(
+    (rule) => normalizeOperator(rule.operator) === normalizedOperator
+  );
+  const automatic = rules.find(
+    (rule) => normalizeOperator(rule.operator) === "any"
   );
 
-  if (exactRule) {
-    return exactRule;
-  }
-
-  /*
-   * Compatibility path for rules saved with a display
-   * label instead of the current provider ID.
-   */
-  const candidateRules = await PricingRule.find({
-    server: normalizedServer,
-    operator: { $in: operators },
-    isActive: true,
-  })
-    .sort({ updatedAt: -1 })
-    .lean();
-
-  const matchingRules = candidateRules.filter(
-    (rule) =>
-      ruleMatchesSelection(rule, {
-        country: normalizedCountry,
-        service: normalizedService,
-        countryName,
-        serviceName,
-      })
-  );
-
-  return selectOperatorRule(
-    matchingRules,
-    normalizedOperator
-  );
+  /* Newest strategy wins; exact is mainly for legacy explicit-operator rules. */
+  return rules[0] || exact || automatic || null;
 }
 
-async function findPreferredOperatorRule({
-  server,
-  country,
-  service,
-  countryName = "",
-  serviceName = "",
-}) {
-  const normalizedServer =
-    normalizeServer(server);
-
-  const normalizedCountry =
-    normalizeCountry(country);
-
-  const normalizedService =
-    normalizeService(service);
-
-  const exactRules = await PricingRule.find({
-    server: normalizedServer,
-    country: normalizedCountry,
-    service: normalizedService,
-    isActive: true,
-  })
-    .sort({ updatedAt: -1 })
-    .lean();
-
-  let rules = exactRules;
-
-  if (!rules.length) {
-    const candidates = await PricingRule.find({
-      server: normalizedServer,
-      isActive: true,
-    })
-      .sort({ updatedAt: -1 })
-      .lean();
-
-    rules = candidates.filter(
-      (rule) =>
-        ruleMatchesSelection(rule, {
-          country: normalizedCountry,
-          service: normalizedService,
-          countryName,
-          serviceName,
-        })
-    );
-  }
-
-  return (
-    rules.find(
-      (rule) =>
-        normalizeOperator(
-          rule.operator
-        ) !== "any"
-    ) ||
-    rules.find(
-      (rule) =>
-        normalizeOperator(
-          rule.operator
-        ) === "any"
-    ) ||
-    null
-  );
-}
-
-async function resolveEffectiveOperator({
+async function resolvePricingStrategy({
   server,
   country,
   service,
@@ -367,98 +262,104 @@ async function resolveEffectiveOperator({
   serviceName = "",
   requestedOperator = "any",
 }) {
-  const normalizedRequestedOperator =
-    normalizeOperator(
-      requestedOperator
-    );
+  const requested = normalizeOperator(requestedOperator);
 
-  if (
-    normalizedRequestedOperator !==
-    "any"
-  ) {
-    return normalizedRequestedOperator;
+  if (requested !== "any") {
+    return {
+      operator: requested,
+      pricingStyle: "fixed_operator",
+      maxPriceBufferPercent: 0,
+      rule: null,
+      source: "customer_operator",
+    };
   }
 
-  const preferredRule =
-    await findPreferredOperatorRule({
-      server,
-      country,
-      service,
-      countryName,
-      serviceName,
-    });
+  const rule = await findPreferredOperatorRule({
+    server,
+    country,
+    service,
+    countryName,
+    serviceName,
+  });
 
-  return preferredRule
-    ? normalizeOperator(
-        preferredRule.operator
-      )
-    : "any";
+  if (rule) {
+    const pricingStyle = normalizePricingStyle(rule.pricingStyle, rule.operator);
+    return {
+      operator:
+        pricingStyle === "fixed_operator"
+          ? normalizeOperator(rule.operator)
+          : "any",
+      pricingStyle,
+      maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
+      rule,
+      source: "database",
+    };
+  }
+
+  return {
+    operator: "any",
+    pricingStyle: "cheapest_buffer",
+    maxPriceBufferPercent: finiteNonNegative(
+      process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
+      50
+    ),
+    rule: null,
+    source: "automatic_default",
+  };
+}
+
+async function resolveEffectiveOperator(options) {
+  return (await resolvePricingStrategy(options)).operator;
 }
 
 function createDefaultRule({ server, country, service, operator }) {
-  /*
-   * No manual database rule:
-   * use ChapsSms global Cheapest + Buffer pricing.
-   *
-   * Example:
-   * provider cost = ₦850
-   * buffer        = ₦200
-   * floor         = ₦1,000
-   * selling price = max(850 + 200, 1000) = ₦1,050
-   *
-   * provider cost = ₦45
-   * selling price = max(45 + 200, 1000) = ₦1,000
-   */
-  const fixedMarkup = finiteNonNegative(
-    process.env.AUTO_PRICING_BUFFER_NGN,
-    200
-  );
-
-  const minimumSellingPrice = finiteNonNegative(
-    process.env.AUTO_PRICING_MINIMUM_NGN,
-    1000
-  );
-
   return {
     _id: null,
     server,
     country,
     service,
     operator,
+    pricingStyle: "cheapest_buffer",
+    maxPriceBufferPercent: finiteNonNegative(
+      process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
+      50
+    ),
     pricingMode: "cost_plus",
     fixedSellingPrice: 0,
     markupPercent: 0,
-    fixedMarkup,
-    minimumSellingPrice,
+    fixedMarkup: finiteNonNegative(process.env.AUTO_PRICING_BUFFER_NGN, 200),
+    minimumSellingPrice: finiteNonNegative(
+      process.env.AUTO_PRICING_MINIMUM_NGN,
+      1000
+    ),
     isActive: true,
     source: "automatic_cheapest_buffer",
   };
 }
 
-function calculateSellingPrice(providerCostNgn, rule) {
+function roundUpToHundred(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.ceil(number / 100) * 100 : number;
+}
+
+function calculateSellingPrice(pricingBasisNgn, rule) {
   let sellingPrice;
 
-  switch (rule.pricingMode) {
-    case "fixed":
-      sellingPrice = Number(rule.fixedSellingPrice);
-      break;
-
-    case "cost_plus":
-      sellingPrice =
-        providerCostNgn + finiteNonNegative(rule.fixedMarkup, 0);
-      break;
-
-    case "percentage":
-    default:
-      sellingPrice =
-        providerCostNgn *
-        (1 + finiteNonNegative(rule.markupPercent, 0) / 100);
-      break;
+  if (rule.pricingMode === "fixed") {
+    sellingPrice = Number(rule.fixedSellingPrice);
+  } else if (rule.pricingMode === "cost_plus") {
+    sellingPrice = Math.ceil(
+      pricingBasisNgn + finiteNonNegative(rule.fixedMarkup, 0)
+    );
+  } else {
+    sellingPrice = roundUpToHundred(
+      pricingBasisNgn *
+        (1 + finiteNonNegative(rule.markupPercent, 0) / 100)
+    );
   }
 
-  sellingPrice = Math.ceil(sellingPrice);
   sellingPrice = Math.max(
-    sellingPrice,
+    Math.ceil(sellingPrice),
     Math.ceil(finiteNonNegative(rule.minimumSellingPrice, 0))
   );
 
@@ -467,16 +368,6 @@ function calculateSellingPrice(providerCostNgn, rule) {
       code: "INVALID_SELLING_PRICE",
       status: 500,
     });
-  }
-
-  if (sellingPrice < providerCostNgn) {
-    throw createPricingError(
-      "The configured selling price is lower than the current provider cost. The admin must update this pricing rule.",
-      {
-        code: "SELLING_PRICE_BELOW_COST",
-        status: 409,
-      }
-    );
   }
 
   return sellingPrice;
@@ -491,20 +382,19 @@ async function resolveCustomerPricing({
   operator = "any",
   providerPrice,
   providerCurrency,
+  pricingBasisNgn = null,
   draftRule = null,
 }) {
   const normalizedServer = normalizeServer(server);
   const normalizedCountry = normalizeCountry(country);
   const normalizedService = normalizeService(service);
   const normalizedOperator = normalizeOperator(operator);
-
   const providerCostNgn = convertProviderCostToNaira(
     providerPrice,
     providerCurrency
   );
 
   let rule;
-
   if (draftRule) {
     rule = {
       ...normalizeRuleInput({
@@ -512,7 +402,10 @@ async function resolveCustomerPricing({
         server: normalizedServer,
         country: normalizedCountry,
         service: normalizedService,
-        operator: normalizedOperator,
+        operator:
+          String(draftRule.pricingStyle) === "cheapest_buffer"
+            ? "any"
+            : normalizedOperator,
       }),
       _id: draftRule._id || null,
       source: "draft",
@@ -537,7 +430,21 @@ async function resolveCustomerPricing({
     });
   }
 
-  const sellingPrice = calculateSellingPrice(providerCostNgn, rule);
+  const basisCandidate = Number(pricingBasisNgn);
+  const effectiveBasisNgn =
+    Number.isFinite(basisCandidate) && basisCandidate > 0
+      ? Math.max(providerCostNgn, Math.ceil(basisCandidate))
+      : providerCostNgn;
+
+  const sellingPrice = calculateSellingPrice(effectiveBasisNgn, rule);
+  if (sellingPrice < providerCostNgn) {
+    throw createPricingError(
+      "The configured selling price is lower than the current provider cost. Update this pricing rule.",
+      { code: "SELLING_PRICE_BELOW_COST", status: 409 }
+    );
+  }
+
+  const pricingStyle = normalizePricingStyle(rule.pricingStyle, rule.operator);
   const profit = sellingPrice - providerCostNgn;
 
   return {
@@ -548,15 +455,21 @@ async function resolveCustomerPricing({
     providerPrice: Number(providerPrice),
     providerCurrency: normalizeCurrency(providerCurrency),
     providerCostNgn,
+    pricingBasisNgn: effectiveBasisNgn,
     sellingPrice,
     profit,
     pricingRuleId: rule._id || null,
     pricingMode: rule.pricingMode,
+    pricingStyle,
+    maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
     pricingSource: rule.source || "database",
     pricingRuleMatched: Boolean(rule._id),
     pricingSnapshot: {
       ruleId: rule._id ? String(rule._id) : null,
       pricingMode: rule.pricingMode,
+      pricingStyle,
+      maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
+      pricingBasisNgn: effectiveBasisNgn,
       fixedSellingPrice: finiteNonNegative(rule.fixedSellingPrice),
       markupPercent: finiteNonNegative(rule.markupPercent),
       fixedMarkup: finiteNonNegative(rule.fixedMarkup),
@@ -570,6 +483,7 @@ async function resolveCustomerPricing({
 module.exports = {
   VALID_SERVERS,
   VALID_PRICING_MODES,
+  VALID_PRICING_STYLES,
   createPricingError,
   normalizeServer,
   normalizeCountry,
@@ -577,11 +491,13 @@ module.exports = {
   normalizeDisplayName,
   normalizeServiceDisplayName,
   normalizeOperator,
+  normalizePricingStyle,
   normalizeRuleInput,
   convertProviderCostToNaira,
   ruleMatchesSelection,
   findApplicableRule,
   findPreferredOperatorRule,
+  resolvePricingStrategy,
   resolveEffectiveOperator,
   resolveCustomerPricing,
 };

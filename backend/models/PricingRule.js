@@ -47,6 +47,21 @@ const pricingRuleSchema = new mongoose.Schema(
       index: true,
     },
 
+    pricingStyle: {
+      type: String,
+      enum: ["cheapest_buffer", "fixed_operator"],
+      default: "fixed_operator",
+      required: true,
+      index: true,
+    },
+
+    maxPriceBufferPercent: {
+      type: Number,
+      default: 50,
+      min: 0,
+      max: 500,
+    },
+
     pricingMode: {
       type: String,
       enum: ["fixed", "percentage", "cost_plus"],

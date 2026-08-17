@@ -437,65 +437,55 @@ exports.getPrice = async (req, res) => {
       });
     }
 
-    let operator =
-      await pricingService
-        .resolveEffectiveOperator({
-          server,
-          country,
-          service,
-          countryName,
-          serviceName,
-          requestedOperator,
-        });
+    const pricingStrategy =
+      await pricingService.resolvePricingStrategy({
+        server,
+        country,
+        service,
+        countryName,
+        serviceName,
+        requestedOperator,
+      });
 
+    let operator = pricingStrategy.operator;
     let quote;
-    let automaticSelection =
-      null;
+    let automaticSelection = null;
+    let pricingBasisNgn = null;
 
-    /*
-     * A manually selected operator or an operator-specific pricing rule
-     * stays in full control.
-     *
-     * Only an unresolved "any" selection enters Cheapest 5 + Buffer.
-     */
-    if (operator === "any") {
+    if (pricingStrategy.pricingStyle === "cheapest_buffer") {
       automaticSelection =
-        await automaticPricingService
-          .resolveAutomaticQuote({
-            server,
-            country,
-            service,
-          });
-
-      operator =
-        automaticSelection.operator;
-
-      quote =
-        automaticSelection.quote;
-    } else {
-      quote =
-        await providerManager.getPrice({
+        await automaticPricingService.resolveAutomaticQuote({
           server,
           country,
           service,
-          operator,
+          maxPriceBufferPercent:
+            pricingStrategy.maxPriceBufferPercent,
         });
+
+      operator = automaticSelection.operator;
+      quote = automaticSelection.quote;
+      pricingBasisNgn = automaticSelection.pricingBasisNgn;
+    } else {
+      quote = await providerManager.getPrice({
+        server,
+        country,
+        service,
+        operator,
+      });
     }
 
     const pricing =
-      await pricingService
-        .resolveCustomerPricing({
-          server,
-          country,
-          service,
-          countryName,
-          serviceName,
-          operator,
-          providerPrice:
-            quote.price,
-          providerCurrency:
-            quote.currency,
-        });
+      await pricingService.resolveCustomerPricing({
+        server,
+        country,
+        service,
+        countryName,
+        serviceName,
+        operator,
+        providerPrice: quote.price,
+        providerCurrency: quote.currency,
+        pricingBasisNgn,
+      });
 
     if (process.env.NODE_ENV !== "production") {
       console.log("[Pricing] customer live price:", {
