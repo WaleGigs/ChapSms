@@ -34,20 +34,44 @@ const MAX_POLLING_ATTEMPTS = 240;
 const FALLBACK_ORDER_LIFETIME_MS = 20 * 60 * 1000;
 
 function getOrderExpiryMs(order) {
+  const createdAt = new Date(
+    order?.createdAt || ""
+  ).getTime();
+
+  const fallbackExpiry =
+    Number.isFinite(createdAt)
+      ? createdAt +
+        FALLBACK_ORDER_LIFETIME_MS
+      : null;
+
   const explicitExpiry = new Date(
     order?.expiresAt || ""
   ).getTime();
+
+  if (
+    Number.isFinite(explicitExpiry) &&
+    Number.isFinite(fallbackExpiry)
+  ) {
+    const drift = Math.abs(
+      explicitExpiry - fallbackExpiry
+    );
+
+    /*
+     * ChapsSms is a 20-minute activation window.
+     * Ignore a provider/server timestamp that would turn it
+     * into values such as 199:54.
+     */
+    return drift <= 5 * 60 * 1000
+      ? explicitExpiry
+      : fallbackExpiry;
+  }
 
   if (Number.isFinite(explicitExpiry)) {
     return explicitExpiry;
   }
 
-  const createdAt = new Date(
-    order?.createdAt || ""
-  ).getTime();
-
-  return Number.isFinite(createdAt)
-    ? createdAt + FALLBACK_ORDER_LIFETIME_MS
+  return Number.isFinite(fallbackExpiry)
+    ? fallbackExpiry
     : null;
 }
 
@@ -125,6 +149,26 @@ function getActiveOrderServiceName(order, selectedService) {
   const alias = ACTIVE_SERVICE_NAME_ALIASES[code.toLowerCase()];
 
   return alias || formatName(code);
+}
+
+function getActiveOrderCountryName(order, selectedCountry) {
+  const explicitName = String(
+    order?.countryName ||
+      selectedCountry?.eng ||
+      selectedCountry?.name ||
+      selectedCountry?.label ||
+      ""
+  ).trim();
+
+  if (explicitName) {
+    return explicitName;
+  }
+
+  return formatName(order?.country || "");
+}
+
+function getActiveOrderCountryFlag(selectedCountry) {
+  return String(selectedCountry?.flag || "").trim();
 }
 
 
@@ -1378,11 +1422,34 @@ async function handleCancel() {
                 {getStatusLabel()}
               </span>
 
-              <p className="mt-3 text-sm font-bold text-[var(--foreground)]">
-                {getActiveOrderServiceName(
-                  currentOrder,
-                  selectedService
-                )}
+              <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold text-[var(--foreground)]">
+                {getActiveOrderCountryFlag(
+                  selectedCountry
+                ) ? (
+                  <span aria-hidden="true">
+                    {getActiveOrderCountryFlag(
+                      selectedCountry
+                    )}
+                  </span>
+                ) : null}
+
+                <span>
+                  {getActiveOrderCountryName(
+                    currentOrder,
+                    selectedCountry
+                  )}
+                </span>
+
+                <span className="text-[var(--muted-foreground)]">
+                  •
+                </span>
+
+                <span>
+                  {getActiveOrderServiceName(
+                    currentOrder,
+                    selectedService
+                  )}
+                </span>
               </p>
             </div>
 

@@ -261,5 +261,4 @@ export const adminPricingService = {
       })}`
     );
   },
-
 };

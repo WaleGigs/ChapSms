@@ -1,13 +1,13 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
-  Calculator,
   Check,
   ChevronDown,
   LoaderCircle,
@@ -26,23 +26,21 @@ const INITIAL_FORM = {
   server: "server1",
   country: "",
   service: "",
-  operator: "",
-  pricingMode: "fixed",
+  operator: "any",
+  pricingMode: "percentage",
+  pricingStyle: "cheapest_buffer",
+  maxPriceBufferPercent: "50",
   fixedSellingPrice: "",
-  markupPercent: "",
-  fixedMarkup: "",
-  minimumSellingPrice: "",
+  markupPercent: "50",
+  fixedMarkup: "200",
+  minimumSellingPrice: "1000",
+  targetSellingPrice: "",
   notes: "",
   isActive: true,
 };
 
 function toPrimitive(value) {
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return "";
-  }
+  if (value === null || value === undefined) return "";
 
   if (
     typeof value === "string" ||
@@ -54,11 +52,11 @@ function toPrimitive(value) {
   if (typeof value === "object") {
     return String(
       value.id ??
-      value.code ??
-      value.value ??
-      value.operator ??
-      value.provider_id ??
-      ""
+        value.code ??
+        value.value ??
+        value.operator ??
+        value.provider_id ??
+        ""
     );
   }
 
@@ -68,48 +66,49 @@ function toPrimitive(value) {
 function getCountryId(country) {
   return toPrimitive(
     country?.id ??
-    country?.code ??
-    country?.country
+      country?.code ??
+      country?.country
   );
 }
 
 function getCountryName(country) {
   return String(
     country?.eng ??
-    country?.name ??
-    country?.title ??
-    country?.label ??
-    country?.code ??
-    country?.id ??
-    "Unknown country"
+      country?.name ??
+      country?.title ??
+      country?.label ??
+      country?.code ??
+      country?.id ??
+      "Unknown country"
   );
 }
 
 function getServiceId(service) {
   return toPrimitive(
     service?.id ??
-    service?.code ??
-    service?.service
+      service?.code ??
+      service?.service
   );
 }
 
 function getServiceName(service) {
   return String(
     service?.name ??
-    service?.serviceName ??
-    service?.title ??
-    service?.label ??
-    service?.code ??
-    service?.id ??
-    "Unknown service"
+      service?.serviceName ??
+      service?.title ??
+      service?.label ??
+      service?.code ??
+      service?.id ??
+      "Unknown service"
   );
 }
 
 function getOperatorId(operator) {
   return toPrimitive(
     operator?.id ??
-    operator?.operator ??
-    operator?.providerId
+      operator?.operator ??
+      operator?.providerId ??
+      operator?.poolId
   );
 }
 
@@ -117,21 +116,15 @@ function formatNaira(value) {
   const number = Number(value);
 
   if (!Number.isFinite(number)) {
-    return "₦0";
+    return "—";
   }
 
-  return `₦${number.toLocaleString(
-    "en-NG",
-    {
-      maximumFractionDigits: 2,
-    }
-  )}`;
+  return `₦${number.toLocaleString("en-NG", {
+    maximumFractionDigits: 0,
+  })}`;
 }
 
-function formatProviderPrice(
-  price,
-  currency
-) {
+function formatProviderPrice(price, currency) {
   const number = Number(price);
 
   if (!Number.isFinite(number)) {
@@ -142,24 +135,16 @@ function formatProviderPrice(
     String(currency).toUpperCase() ===
     "USD"
   ) {
-    return `$${number.toLocaleString(
-      "en-US",
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }
-    )}`;
+    return `$${number.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    })}`;
   }
 
-  return `${number.toLocaleString(
-    "en-NG",
-    {
-      maximumFractionDigits: 2,
-    }
-  )} ${currency || ""}`.trim();
+  return `${number.toLocaleString("en-NG", {
+    maximumFractionDigits: 2,
+  })} ${currency || ""}`.trim();
 }
-
-
 
 function SearchablePicker({
   value,
@@ -172,50 +157,88 @@ function SearchablePicker({
   disabled = false,
   emptyText = "No matches found",
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [open, setOpen] =
+    useState(false);
+  const [query, setQuery] =
+    useState("");
   const rootRef = useRef(null);
 
-  const selectedOption = useMemo(
-    () =>
-      options.find(
-        (option) =>
-          String(getOptionId(option)) === String(value)
-      ) || null,
-    [options, value, getOptionId]
-  );
+  const selectedOption =
+    useMemo(
+      () =>
+        options.find(
+          (option) =>
+            String(
+              getOptionId(option)
+            ) === String(value)
+        ) || null,
+      [
+        options,
+        value,
+        getOptionId,
+      ]
+    );
 
-  const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions =
+    useMemo(() => {
+      const normalizedQuery =
+        query
+          .trim()
+          .toLowerCase();
 
-    if (!normalizedQuery) {
-      return options;
-    }
+      if (!normalizedQuery) {
+        return options;
+      }
 
-    return options.filter((option) => {
-      const id = String(getOptionId(option) || "").toLowerCase();
-      const label = String(getOptionLabel(option) || "").toLowerCase();
+      return options.filter(
+        (option) => {
+          const id = String(
+            getOptionId(option) || ""
+          ).toLowerCase();
 
-      return (
-        label.includes(normalizedQuery) ||
-        id.includes(normalizedQuery)
+          const label = String(
+            getOptionLabel(option) || ""
+          ).toLowerCase();
+
+          return (
+            label.includes(
+              normalizedQuery
+            ) ||
+            id.includes(
+              normalizedQuery
+            )
+          );
+        }
       );
-    });
-  }, [options, query, getOptionId, getOptionLabel]);
+    }, [
+      options,
+      query,
+      getOptionId,
+      getOptionLabel,
+    ]);
 
   useEffect(() => {
     function handleOutside(event) {
       if (
         rootRef.current &&
-        !rootRef.current.contains(event.target)
+        !rootRef.current.contains(
+          event.target
+        )
       ) {
         setOpen(false);
       }
     }
 
-    document.addEventListener("pointerdown", handleOutside);
+    document.addEventListener(
+      "pointerdown",
+      handleOutside
+    );
+
     return () =>
-      document.removeEventListener("pointerdown", handleOutside);
+      document.removeEventListener(
+        "pointerdown",
+        handleOutside
+      );
   }, []);
 
   useEffect(() => {
@@ -226,12 +249,17 @@ function SearchablePicker({
   }, [disabled]);
 
   return (
-    <div ref={rootRef} className="relative mt-2">
+    <div
+      ref={rootRef}
+      className="relative mt-2"
+    >
       <button
         type="button"
         disabled={disabled}
         onClick={() => {
-          setOpen((current) => !current);
+          setOpen((current) =>
+            !current
+          );
           setQuery("");
         }}
         className="flex h-12 w-full items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-left text-sm font-semibold text-[var(--foreground)] outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-blue-950/40"
@@ -244,7 +272,9 @@ function SearchablePicker({
           }`}
         >
           {selectedOption
-            ? getOptionLabel(selectedOption)
+            ? getOptionLabel(
+                selectedOption
+              )
             : placeholder}
         </span>
 
@@ -257,18 +287,25 @@ function SearchablePicker({
       </button>
 
       {open && !disabled && (
-        <div className="absolute left-0 right-0 z-[80] mt-2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
+        <div className="absolute left-0 right-0 z-[90] mt-2 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl">
           <div className="border-b border-[var(--border)] p-3">
             <div className="relative">
               <Search
                 size={16}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]"
               />
+
               <input
                 autoFocus
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={searchPlaceholder}
+                onChange={(event) =>
+                  setQuery(
+                    event.target.value
+                  )
+                }
+                placeholder={
+                  searchPlaceholder
+                }
                 className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] pl-9 pr-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
               />
             </div>
@@ -276,32 +313,54 @@ function SearchablePicker({
 
           <div className="max-h-72 overflow-y-auto p-2">
             {filteredOptions.length ? (
-              filteredOptions.map((option) => {
-                const optionId = String(getOptionId(option) || "");
-                const selected = optionId === String(value || "");
+              filteredOptions.map(
+                (option) => {
+                  const optionId =
+                    String(
+                      getOptionId(
+                        option
+                      ) || ""
+                    );
 
-                return (
-                  <button
-                    key={optionId}
-                    type="button"
-                    onClick={() => {
-                      onChange(optionId);
-                      setOpen(false);
-                      setQuery("");
-                    }}
-                    className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
-                      selected
-                        ? "bg-blue-600 text-white"
-                        : "text-[var(--foreground)] hover:bg-[var(--muted)]"
-                    }`}
-                  >
-                    <span className="min-w-0 truncate font-semibold">
-                      {getOptionLabel(option)}
-                    </span>
-                    {selected && <Check size={16} className="shrink-0" />}
-                  </button>
-                );
-              })
+                  const selected =
+                    optionId ===
+                    String(
+                      value || ""
+                    );
+
+                  return (
+                    <button
+                      key={optionId}
+                      type="button"
+                      onClick={() => {
+                        onChange(
+                          optionId
+                        );
+                        setOpen(false);
+                        setQuery("");
+                      }}
+                      className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
+                        selected
+                          ? "bg-blue-600 text-white"
+                          : "text-[var(--foreground)] hover:bg-[var(--muted)]"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate font-semibold">
+                        {getOptionLabel(
+                          option
+                        )}
+                      </span>
+
+                      {selected && (
+                        <Check
+                          size={16}
+                          className="shrink-0"
+                        />
+                      )}
+                    </button>
+                  );
+                }
+              )
             ) : (
               <p className="px-3 py-8 text-center text-sm font-semibold text-[var(--muted-foreground)]">
                 {emptyText}
@@ -324,32 +383,23 @@ export default function PricingRuleForm({
 
   const [operators, setOperators] =
     useState([]);
-
-  const [
-    operatorsLoading,
-    setOperatorsLoading,
-  ] = useState(false);
-
-  const [
-    operatorsError,
-    setOperatorsError,
-  ] = useState("");
-
-  const [
-    operatorReloadKey,
-    setOperatorReloadKey,
-  ] = useState(0);
+  const [operatorsLoading, setOperatorsLoading] =
+    useState(false);
+  const [operatorsError, setOperatorsError] =
+    useState("");
+  const [operatorReloadKey, setOperatorReloadKey] =
+    useState(0);
 
   const [preview, setPreview] =
     useState(null);
-
   const [previewing, setPreviewing] =
     useState(false);
-
   const [saving, setSaving] =
     useState(false);
 
   const operatorRequestRef =
+    useRef(0);
+  const previewRequestRef =
     useRef(0);
 
   const {
@@ -365,7 +415,19 @@ export default function PricingRuleForm({
       return;
     }
 
+    const pricingStyle =
+      editingRule.pricingStyle ||
+      (
+        String(
+          editingRule.operator ||
+            "any"
+        ).toLowerCase() === "any"
+          ? "cheapest_buffer"
+          : "fixed_operator"
+      );
+
     setForm({
+      ...INITIAL_FORM,
       server:
         editingRule.server ||
         "server1",
@@ -376,131 +438,51 @@ export default function PricingRuleForm({
         editingRule.service ||
         "",
       operator:
-        editingRule.operator ||
-        "",
+        pricingStyle ===
+        "cheapest_buffer"
+          ? "any"
+          : editingRule.operator ||
+            "",
       pricingMode:
         editingRule.pricingMode ||
-        "fixed",
+        "percentage",
+      pricingStyle,
+      maxPriceBufferPercent:
+        String(
+          editingRule
+            .maxPriceBufferPercent ??
+            50
+        ),
       fixedSellingPrice:
         editingRule.fixedSellingPrice ||
         "",
       markupPercent:
-        editingRule.markupPercent ||
-        "",
+        String(
+          editingRule.markupPercent ??
+            50
+        ),
       fixedMarkup:
-        editingRule.fixedMarkup ||
-        "",
+        String(
+          editingRule.fixedMarkup ??
+            200
+        ),
       minimumSellingPrice:
-        editingRule.minimumSellingPrice ||
-        "",
+        String(
+          editingRule
+            .minimumSellingPrice ??
+            1000
+        ),
+      targetSellingPrice: "",
       notes:
         editingRule.notes ||
         "",
       isActive:
-        editingRule.isActive !== false,
+        editingRule.isActive !==
+        false,
     });
 
     setPreview(null);
   }, [editingRule]);
-
-  useEffect(() => {
-    const requestId =
-      ++operatorRequestRef.current;
-
-    setOperators([]);
-    setOperatorsError("");
-    setPreview(null);
-
-    if (
-      !form.country ||
-      !form.service
-    ) {
-      setOperatorsLoading(false);
-      return undefined;
-    }
-
-    setOperatorsLoading(true);
-
-    adminPricingService
-      .getOperators({
-        server: form.server,
-        country: form.country,
-        service: form.service,
-      })
-      .then((response) => {
-        if (
-          requestId !==
-          operatorRequestRef.current
-        ) {
-          return;
-        }
-
-        const list =
-          Array.isArray(
-            response?.operators
-          )
-            ? response.operators
-            : [];
-
-        setOperators(list);
-
-        setForm((current) => {
-          const operatorExists =
-            list.some(
-              (item) =>
-                getOperatorId(item) ===
-                String(
-                  current.operator
-                )
-            );
-
-          if (operatorExists) {
-            return current;
-          }
-
-          return {
-            ...current,
-            operator: "",
-          };
-        });
-      })
-      .catch((error) => {
-        if (
-          requestId !==
-          operatorRequestRef.current
-        ) {
-          return;
-        }
-
-        setOperators([]);
-        setForm((current) => ({
-          ...current,
-          operator: "",
-        }));
-
-        setOperatorsError(
-          error?.message ||
-          "Unable to load operators"
-        );
-      })
-      .finally(() => {
-        if (
-          requestId ===
-          operatorRequestRef.current
-        ) {
-          setOperatorsLoading(false);
-        }
-      });
-
-    return () => {
-      operatorRequestRef.current += 1;
-    };
-  }, [
-    form.server,
-    form.country,
-    form.service,
-    operatorReloadKey,
-  ]);
 
   const selectedCountry =
     useMemo(
@@ -550,6 +532,40 @@ export default function PricingRuleForm({
       ]
     );
 
+  const buildPayload =
+    useCallback(
+      () => ({
+        ...form,
+        operator:
+          form.pricingStyle ===
+          "cheapest_buffer"
+            ? "any"
+            : form.operator,
+        countryName:
+          selectedCountry
+            ? getCountryName(
+                selectedCountry
+              )
+            : editingRule
+                ?.countryName ||
+              "",
+        serviceName:
+          selectedService
+            ? getServiceName(
+                selectedService
+              )
+            : editingRule
+                ?.serviceName ||
+              "",
+      }),
+      [
+        form,
+        selectedCountry,
+        selectedService,
+        editingRule,
+      ]
+    );
+
   function updateField(
     name,
     value
@@ -558,8 +574,6 @@ export default function PricingRuleForm({
       ...current,
       [name]: value,
     }));
-
-    setPreview(null);
   }
 
   function handleServerChange(
@@ -569,7 +583,6 @@ export default function PricingRuleForm({
       ...INITIAL_FORM,
       server,
     });
-
     setOperators([]);
     setOperatorsError("");
     setPreview(null);
@@ -582,9 +595,12 @@ export default function PricingRuleForm({
       ...current,
       country,
       service: "",
-      operator: "",
+      operator:
+        current.pricingStyle ===
+        "cheapest_buffer"
+          ? "any"
+          : "",
     }));
-
     setOperators([]);
     setOperatorsError("");
     setPreview(null);
@@ -596,60 +612,276 @@ export default function PricingRuleForm({
     setForm((current) => ({
       ...current,
       service,
-      operator: "",
+      operator:
+        current.pricingStyle ===
+        "cheapest_buffer"
+          ? "any"
+          : "",
     }));
-
     setOperators([]);
     setOperatorsError("");
     setPreview(null);
   }
 
-  function buildPayload() {
-    if (!form.operator) {
-      throw new Error(
-        "Choose an operator"
-      );
-    }
-
-    return {
-      ...form,
-      countryName:
-        getCountryName(
-          selectedCountry
-        ) ||
-        editingRule?.countryName ||
-        "",
-      serviceName:
-        getServiceName(
-          selectedService
-        ) ||
-        editingRule?.serviceName ||
-        "",
-    };
+  function handlePricingStyle(
+    pricingStyle
+  ) {
+    setForm((current) => ({
+      ...current,
+      pricingStyle,
+      operator:
+        pricingStyle ===
+        "cheapest_buffer"
+          ? "any"
+          : "",
+      targetSellingPrice: "",
+    }));
+    setPreview(null);
   }
 
-  async function handlePreview() {
-    try {
-      setPreviewing(true);
+  /*
+   * Match the video: the huge operator list is NOT part of
+   * Cheapest + buffer. It appears only when Fixed operator is chosen.
+   */
+  useEffect(() => {
+    const requestId =
+      ++operatorRequestRef.current;
 
-      const response =
-        await adminPricingService
-          .previewPricing(
-            buildPayload()
-          );
+    setOperatorsError("");
 
-      setPreview(
-        response?.preview ||
-        null
-      );
-    } catch (error) {
-      toast.error(
-        error?.message ||
-        "Unable to preview this pricing rule"
-      );
-    } finally {
-      setPreviewing(false);
+    if (
+      form.pricingStyle !==
+        "fixed_operator" ||
+      !form.country ||
+      !form.service
+    ) {
+      setOperatorsLoading(false);
+      return undefined;
     }
+
+    setOperatorsLoading(true);
+
+    adminPricingService
+      .getOperators({
+        server: form.server,
+        country: form.country,
+        service: form.service,
+      })
+      .then((response) => {
+        if (
+          requestId !==
+          operatorRequestRef.current
+        ) {
+          return;
+        }
+
+        const list =
+          Array.isArray(
+            response?.operators
+          )
+            ? response.operators
+            : [];
+
+        setOperators(list);
+
+        setForm((current) => {
+          const exists =
+            list.some(
+              (item) =>
+                getOperatorId(
+                  item
+                ) ===
+                String(
+                  current.operator
+                )
+            );
+
+          return exists
+            ? current
+            : {
+                ...current,
+                operator: "",
+              };
+        });
+      })
+      .catch((error) => {
+        if (
+          requestId !==
+          operatorRequestRef.current
+        ) {
+          return;
+        }
+
+        setOperators([]);
+        setOperatorsError(
+          error?.message ||
+            "Unable to load operators"
+        );
+      })
+      .finally(() => {
+        if (
+          requestId ===
+          operatorRequestRef.current
+        ) {
+          setOperatorsLoading(
+            false
+          );
+        }
+      });
+
+    return () => {
+      operatorRequestRef.current +=
+        1;
+    };
+  }, [
+    form.server,
+    form.country,
+    form.service,
+    form.pricingStyle,
+    operatorReloadKey,
+  ]);
+
+  const previewReady =
+    Boolean(
+      form.country &&
+        form.service &&
+        (
+          form.pricingStyle ===
+            "cheapest_buffer" ||
+          form.operator
+        ) &&
+        (
+          form.pricingMode !==
+            "fixed" ||
+          Number(
+            form.fixedSellingPrice
+          ) > 0
+        )
+    );
+
+  /*
+   * Live preview like the video. Debounced so typing a markup
+   * does not hammer SMSBower/BenOTP on every keystroke.
+   */
+  useEffect(() => {
+    if (!previewReady) {
+      setPreview(null);
+      return undefined;
+    }
+
+    const requestId =
+      ++previewRequestRef.current;
+
+    const timer =
+      window.setTimeout(
+        async () => {
+          try {
+            setPreviewing(true);
+
+            const response =
+              await adminPricingService
+                .previewPricing(
+                  buildPayload()
+                );
+
+            if (
+              requestId ===
+              previewRequestRef.current
+            ) {
+              setPreview(
+                response?.preview ||
+                  null
+              );
+            }
+          } catch {
+            if (
+              requestId ===
+              previewRequestRef.current
+            ) {
+              setPreview(null);
+            }
+          } finally {
+            if (
+              requestId ===
+              previewRequestRef.current
+            ) {
+              setPreviewing(false);
+            }
+          }
+        },
+        450
+      );
+
+    return () =>
+      window.clearTimeout(
+        timer
+      );
+  }, [
+    previewReady,
+    form.server,
+    form.country,
+    form.service,
+    form.operator,
+    form.pricingStyle,
+    form.maxPriceBufferPercent,
+    form.pricingMode,
+    form.fixedSellingPrice,
+    form.markupPercent,
+    form.fixedMarkup,
+    form.minimumSellingPrice,
+    buildPayload,
+  ]);
+
+  function handleMarkupChange(
+    value
+  ) {
+    setForm((current) => ({
+      ...current,
+      markupPercent: value,
+      targetSellingPrice: "",
+    }));
+  }
+
+  function handleTargetPriceChange(
+    value
+  ) {
+    const target = Number(value);
+    const basis = Number(
+      preview?.pricingBasisNgn
+    );
+
+    setForm((current) => {
+      if (
+        !Number.isFinite(target) ||
+        target <= 0 ||
+        !Number.isFinite(basis) ||
+        basis <= 0
+      ) {
+        return {
+          ...current,
+          targetSellingPrice:
+            value,
+        };
+      }
+
+      const markup =
+        Math.max(
+          0,
+          (
+            target /
+              basis -
+            1
+          ) * 100
+        );
+
+      return {
+        ...current,
+        targetSellingPrice:
+          value,
+        markupPercent:
+          markup.toFixed(2),
+      };
+    });
   }
 
   async function handleSubmit(
@@ -663,6 +895,16 @@ export default function PricingRuleForm({
       const payload =
         buildPayload();
 
+      if (
+        payload.pricingStyle ===
+          "fixed_operator" &&
+        !payload.operator
+      ) {
+        throw new Error(
+          "Choose an operator"
+        );
+      }
+
       const response =
         editingRule?.id
           ? await adminPricingService
@@ -671,32 +913,26 @@ export default function PricingRuleForm({
                 payload
               )
           : await adminPricingService
-              .saveRule(
-                payload
-              );
+              .saveRule(payload);
 
       toast.success(
         response?.message ||
-        "Pricing rule saved successfully"
+          "Pricing rule saved successfully"
       );
 
       setForm((current) => ({
         ...INITIAL_FORM,
         server: current.server,
       }));
-
       setOperators([]);
-      setOperatorsError("");
       setPreview(null);
-
       onSaved?.(
-        response?.rule ||
-        null
+        response?.rule || null
       );
     } catch (error) {
       toast.error(
         error?.message ||
-        "Unable to save pricing rule"
+          "Unable to save pricing rule"
       );
     } finally {
       setSaving(false);
@@ -706,12 +942,10 @@ export default function PricingRuleForm({
   const fieldClass =
     "h-12 w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-sm font-semibold text-[var(--foreground)] outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 dark:focus:ring-blue-950/40 disabled:cursor-not-allowed disabled:opacity-60";
 
-  const formReady =
-    Boolean(
-      form.country &&
-      form.service &&
-      form.operator
-    );
+  const saveReady =
+    previewReady &&
+    !catalogLoading &&
+    !operatorsLoading;
 
   return (
     <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6">
@@ -719,8 +953,8 @@ export default function PricingRuleForm({
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-600">
             {editingRule
-              ? "Edit rule"
-              : "New rule"}
+              ? "Edit pricing"
+              : "New pricing"}
           </p>
 
           <h2 className="mt-2 text-xl font-black text-[var(--foreground)]">
@@ -728,7 +962,7 @@ export default function PricingRuleForm({
           </h2>
 
           <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
-            Choose the exact operator ChapsSmS must purchase from. Its live cost and stock are loaded directly from the selected server.
+            Use Cheapest + buffer for automatic operator selection, or lock a popular service to one fixed operator.
           </p>
         </div>
 
@@ -758,28 +992,22 @@ export default function PricingRuleForm({
         className="mt-6 space-y-6"
       >
         <div>
-          <label className="text-sm font-bold text-[var(--foreground)]">
-            Server
+          <label className="text-sm font-bold">
+            Server (provider)
           </label>
 
           <div className="mt-2 grid grid-cols-2 gap-3">
             {[
               [
                 "server1",
-                "Server 1",
-                "SMSBower",
+                "Server 1 · SMSBower",
               ],
               [
                 "server2",
-                "Server 2",
-                "BenOTP",
+                "Server 2 · BenOTP",
               ],
             ].map(
-              ([
-                value,
-                label,
-                provider,
-              ]) => (
+              ([value, label]) => (
                 <button
                   key={value}
                   type="button"
@@ -788,20 +1016,14 @@ export default function PricingRuleForm({
                       value
                     )
                   }
-                  className={`rounded-2xl border p-4 text-left transition ${
+                  className={`min-h-12 rounded-xl border px-4 text-sm font-black transition ${
                     form.server ===
                     value
-                      ? "border-blue-600 bg-blue-50 ring-2 ring-blue-100 dark:bg-blue-950/30 dark:ring-blue-950/60"
+                      ? "border-blue-600 bg-blue-600 text-white"
                       : "border-[var(--border)] hover:bg-[var(--muted)]"
                   }`}
                 >
-                  <p className="text-sm font-black text-[var(--foreground)]">
-                    {label}
-                  </p>
-
-                  <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                    {provider}
-                  </p>
+                  {label}
                 </button>
               )
             )}
@@ -810,20 +1032,11 @@ export default function PricingRuleForm({
 
         {catalogError && (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-            <p className="font-bold">
-              Catalog could not be loaded.
-            </p>
-
-            <p className="mt-1">
-              {catalogError}
-            </p>
-
+            {catalogError}
             <button
               type="button"
-              onClick={
-                reloadCatalog
-              }
-              className="mt-3 font-bold underline"
+              onClick={reloadCatalog}
+              className="ml-2 font-black underline"
             >
               Try again
             </button>
@@ -832,38 +1045,52 @@ export default function PricingRuleForm({
 
         <div className="grid gap-5 lg:grid-cols-2">
           <div>
-            <label className="text-sm font-bold text-[var(--foreground)]">
+            <label className="text-sm font-bold">
               Country
             </label>
 
             <SearchablePicker
               value={form.country}
               options={countries}
-              onChange={handleCountryChange}
-              getOptionId={getCountryId}
-              getOptionLabel={getCountryName}
+              onChange={
+                handleCountryChange
+              }
+              getOptionId={
+                getCountryId
+              }
+              getOptionLabel={
+                getCountryName
+              }
               placeholder={
                 catalogLoading
                   ? "Loading countries..."
                   : "Choose a country"
               }
               searchPlaceholder="Search country..."
-              disabled={catalogLoading}
+              disabled={
+                catalogLoading
+              }
               emptyText="No country matches your search"
             />
           </div>
 
           <div>
-            <label className="text-sm font-bold text-[var(--foreground)]">
+            <label className="text-sm font-bold">
               Service
             </label>
 
             <SearchablePicker
               value={form.service}
               options={services}
-              onChange={handleServiceChange}
-              getOptionId={getServiceId}
-              getOptionLabel={getServiceName}
+              onChange={
+                handleServiceChange
+              }
+              getOptionId={
+                getServiceId
+              }
+              getOptionLabel={
+                getServiceName
+              }
               placeholder={
                 !form.country
                   ? "Select a country first"
@@ -882,198 +1109,12 @@ export default function PricingRuleForm({
         </div>
 
         <div>
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-            <div>
-              <label className="text-sm font-bold text-[var(--foreground)]">
-                Choose an operator
-              </label>
-
-              <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
-                The selected operator is saved with this rule and will be used for customer purchases. It will not be chosen randomly.
-              </p>
-            </div>
-
-            {form.country &&
-              form.service && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForm(
-                      (
-                        previous
-                      ) => ({
-                        ...previous,
-                        operator:
-                          "",
-                      })
-                    );
-
-                    setOperatorReloadKey(
-                      (current) =>
-                        current + 1
-                    );
-                  }}
-                  disabled={
-                    operatorsLoading
-                  }
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-3 text-xs font-bold text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
-                >
-                  <RefreshCw
-                    size={15}
-                    className={
-                      operatorsLoading
-                        ? "animate-spin"
-                        : ""
-                    }
-                  />
-                  Refresh operators
-                </button>
-              )}
-          </div>
-
-          {!form.country ||
-          !form.service ? (
-            <div className="mt-3 rounded-2xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--muted-foreground)]">
-              Select a country and service to load available operators.
-            </div>
-          ) : operatorsLoading ? (
-            <div className="mt-3 flex min-h-28 items-center justify-center gap-3 rounded-2xl border border-[var(--border)] text-sm font-semibold text-[var(--muted-foreground)]">
-              <LoaderCircle
-                size={20}
-                className="animate-spin"
-              />
-              Loading live operators, stock and prices...
-            </div>
-          ) : operatorsError ? (
-            <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-              <p className="font-bold">
-                Operators could not be loaded.
-              </p>
-
-              <p className="mt-1">
-                {operatorsError}
-              </p>
-            </div>
-          ) : operators.length ===
-            0 ? (
-            <div className="mt-3 rounded-2xl border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--muted-foreground)]">
-              No operator currently has stock for this selection.
-            </div>
-          ) : (
-            <div className="mt-3 grid gap-3 lg:grid-cols-2">
-              {operators.map(
-                (operator) => {
-                  const operatorId =
-                    getOperatorId(
-                      operator
-                    );
-
-                  const active =
-                    String(
-                      form.operator
-                    ) ===
-                    operatorId;
-
-                  return (
-                    <button
-                      key={
-                        operatorId
-                      }
-                      type="button"
-                      onClick={() =>
-                        updateField(
-                          "operator",
-                          operatorId
-                        )
-                      }
-                      className={`relative grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-2xl border p-4 text-left transition ${
-                        active
-                          ? "border-blue-600 bg-blue-50 ring-2 ring-blue-100 dark:bg-blue-950/30 dark:ring-blue-950/60"
-                          : "border-[var(--border)] hover:border-blue-300 hover:bg-[var(--muted)]"
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                              active
-                                ? "border-blue-600 bg-blue-600 text-white"
-                                : "border-[var(--border)]"
-                            }`}
-                          >
-                            {active && (
-                              <Check
-                                size={13}
-                              />
-                            )}
-                          </span>
-
-                          <p className="truncate font-black text-[var(--foreground)]">
-                            {operator.name ||
-                              `Operator ${operatorId}`}
-                          </p>
-                        </div>
-
-                        <p className="mt-2 pl-7 text-xs font-semibold text-[var(--muted-foreground)]">
-                          {Number(
-                            operator.stock ||
-                            0
-                          ).toLocaleString()}{" "}
-                          in stock
-                        </p>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-base font-black text-[var(--foreground)]">
-                          {formatProviderPrice(
-                            operator.price,
-                            operator.currency
-                          )}
-                        </p>
-
-                        <p className="mt-1 text-xs font-bold text-blue-600">
-                          {formatNaira(
-                            operator.priceNgn
-                          )}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                }
-              )}
-            </div>
-          )}
-
-          {selectedOperator && (
-            <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
-              <span className="font-black">
-                Selected:
-              </span>{" "}
-              {selectedOperator.name ||
-                `Operator ${form.operator}`}{" "}
-              ·{" "}
-              {Number(
-                selectedOperator.stock ||
-                0
-              ).toLocaleString()}{" "}
-              in stock ·{" "}
-              {formatNaira(
-                selectedOperator.priceNgn
-              )}{" "}
-              provider cost
-            </div>
-          )}
-        </div>
-
-        <div>
-          <label className="text-sm font-bold text-[var(--foreground)]">
-            Pricing mode
+          <label className="text-sm font-bold">
+            Mode
           </label>
 
           <select
-            value={
-              form.pricingMode
-            }
+            value={form.pricingMode}
             onChange={(event) =>
               updateField(
                 "pricingMode",
@@ -1082,53 +1123,231 @@ export default function PricingRuleForm({
             }
             className={`${fieldClass} mt-2`}
           >
+            <option value="percentage">
+              Percentage markup (floats with cost)
+            </option>
             <option value="fixed">
               Fixed selling price
             </option>
-
-            <option value="percentage">
-              Percentage markup
-            </option>
-
             <option value="cost_plus">
               Provider cost + fixed markup
             </option>
           </select>
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-          {form.pricingMode ===
-            "fixed" && (
-            <div>
-              <label className="text-sm font-bold text-[var(--foreground)]">
-                Selling price (₦)
-              </label>
+        <div>
+          <label className="text-sm font-bold">
+            Pricing style
+          </label>
 
-              <input
-                type="number"
-                min="1"
-                step="0.01"
-                value={
-                  form.fixedSellingPrice
-                }
-                onChange={(event) =>
-                  updateField(
-                    "fixedSellingPrice",
-                    event.target.value
-                  )
-                }
-                placeholder="1000"
-                className={`${fieldClass} mt-2`}
-                required
-              />
+          <div className="mt-2 grid grid-cols-2 gap-3 rounded-2xl bg-[var(--muted)]/40 p-1">
+            <button
+              type="button"
+              onClick={() =>
+                handlePricingStyle(
+                  "cheapest_buffer"
+                )
+              }
+              className={`min-h-12 rounded-xl px-3 text-sm font-black transition ${
+                form.pricingStyle ===
+                "cheapest_buffer"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/20"
+                  : "text-[var(--muted-foreground)] hover:bg-[var(--card)]"
+              }`}
+            >
+              Cheapest + buffer
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                handlePricingStyle(
+                  "fixed_operator"
+                )
+              }
+              className={`min-h-12 rounded-xl px-3 text-sm font-black transition ${
+                form.pricingStyle ===
+                "fixed_operator"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/20"
+                  : "text-[var(--muted-foreground)] hover:bg-[var(--card)]"
+              }`}
+            >
+              Fixed operator
+            </button>
+          </div>
+        </div>
+
+        {form.pricingStyle ===
+          "cheapest_buffer" && (
+          <div>
+            <label className="text-sm font-bold">
+              Max price buffer (%)
+            </label>
+
+            <input
+              type="number"
+              min="0"
+              max="500"
+              step="0.01"
+              value={
+                form.maxPriceBufferPercent
+              }
+              onChange={(event) =>
+                updateField(
+                  "maxPriceBufferPercent",
+                  event.target.value
+                )
+              }
+              className={`${fieldClass} mt-2`}
+              placeholder="50"
+            />
+
+            <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
+              Finds the cheapest live cost, allows operators up to this percentage above it, then chooses the strongest available option inside the cheap band.
+            </p>
+          </div>
+        )}
+
+        {form.pricingStyle ===
+          "fixed_operator" && (
+          <div>
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <label className="text-sm font-bold">
+                  Choose operator
+                </label>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Customer purchases stay locked to this operator.
+                </p>
+              </div>
+
+              {form.country &&
+                form.service && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOperatorReloadKey(
+                        (value) =>
+                          value + 1
+                      )
+                    }
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] px-3 text-xs font-black"
+                  >
+                    <RefreshCw
+                      size={15}
+                      className={
+                        operatorsLoading
+                          ? "animate-spin"
+                          : ""
+                      }
+                    />
+                    Refresh
+                  </button>
+                )}
             </div>
-          )}
 
-          {form.pricingMode ===
-            "percentage" && (
+            {operatorsLoading ? (
+              <div className="mt-3 flex min-h-24 items-center justify-center gap-2 rounded-2xl border border-[var(--border)] text-sm text-[var(--muted-foreground)]">
+                <LoaderCircle
+                  size={18}
+                  className="animate-spin"
+                />
+                Loading operators...
+              </div>
+            ) : operatorsError ? (
+              <div className="mt-3 rounded-2xl border border-red-300 p-4 text-sm text-red-500">
+                {operatorsError}
+              </div>
+            ) : (
+              <div className="mt-3 grid max-h-96 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                {operators.map(
+                  (operator) => {
+                    const operatorId =
+                      getOperatorId(
+                        operator
+                      );
+                    const active =
+                      String(
+                        form.operator
+                      ) ===
+                      operatorId;
+
+                    return (
+                      <button
+                        key={operatorId}
+                        type="button"
+                        onClick={() =>
+                          updateField(
+                            "operator",
+                            operatorId
+                          )
+                        }
+                        className={`grid min-h-20 grid-cols-[1fr_auto] items-center gap-3 rounded-xl border p-3 text-left transition ${
+                          active
+                            ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500"
+                            : "border-[var(--border)] hover:bg-[var(--muted)]"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-black">
+                            {operator.name ||
+                              `Operator ${operatorId}`}
+                          </p>
+                          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                            {Number(
+                              operator.stock ||
+                                0
+                            ).toLocaleString()} in stock
+                          </p>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="font-black">
+                            {formatProviderPrice(
+                              operator.price,
+                              operator.currency
+                            )}
+                          </p>
+
+                          {Number(
+                            operator.priceNgn
+                          ) > 0 && (
+                            <p className="mt-1 text-xs font-black text-blue-500">
+                              {formatNaira(
+                                operator.priceNgn
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+            )}
+
+            {selectedOperator && (
+              <p className="mt-3 text-xs font-bold text-blue-500">
+                Selected{" "}
+                {selectedOperator.name ||
+                  `Operator ${form.operator}`}
+                {" · "}
+                {Number(
+                  selectedOperator.stock ||
+                    0
+                ).toLocaleString()}{" "}
+                stock
+              </p>
+            )}
+          </div>
+        )}
+
+        {form.pricingMode ===
+          "percentage" && (
+          <div className="space-y-5">
             <div>
-              <label className="text-sm font-bold text-[var(--foreground)]">
-                Markup percentage (%)
+              <label className="text-sm font-bold">
+                Markup (%)
               </label>
 
               <input
@@ -1139,92 +1358,223 @@ export default function PricingRuleForm({
                   form.markupPercent
                 }
                 onChange={(event) =>
-                  updateField(
-                    "markupPercent",
+                  handleMarkupChange(
                     event.target.value
                   )
                 }
-                placeholder="25"
                 className={`${fieldClass} mt-2`}
+                placeholder="58.43"
               />
             </div>
-          )}
 
-          {form.pricingMode ===
-            "cost_plus" && (
             <div>
-              <label className="text-sm font-bold text-[var(--foreground)]">
-                Fixed markup (₦)
+              <label className="text-sm font-bold">
+                Or type a target sell price (₦) → auto-fills markup
               </label>
 
               <input
                 type="number"
-                min="0"
-                step="0.01"
+                min="1"
+                step="1"
                 value={
-                  form.fixedMarkup
+                  form.targetSellingPrice
                 }
                 onChange={(event) =>
-                  updateField(
-                    "fixedMarkup",
+                  handleTargetPriceChange(
                     event.target.value
                   )
                 }
-                placeholder="250"
+                disabled={
+                  !preview
+                    ?.pricingBasisNgn
+                }
                 className={`${fieldClass} mt-2`}
+                placeholder={
+                  preview
+                    ?.pricingBasisNgn
+                    ? "4100"
+                    : "Load live basis first"
+                }
               />
             </div>
-          )}
+          </div>
+        )}
 
+        {form.pricingMode ===
+          "fixed" && (
           <div>
-            <label className="text-sm font-bold text-[var(--foreground)]">
-              Minimum selling price (₦)
+            <label className="text-sm font-bold">
+              Selling price (₦)
+            </label>
+
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={
+                form.fixedSellingPrice
+              }
+              onChange={(event) =>
+                updateField(
+                  "fixedSellingPrice",
+                  event.target.value
+                )
+              }
+              className={`${fieldClass} mt-2`}
+              placeholder="1000"
+            />
+          </div>
+        )}
+
+        {form.pricingMode ===
+          "cost_plus" && (
+          <div>
+            <label className="text-sm font-bold">
+              Fixed markup (₦)
             </label>
 
             <input
               type="number"
               min="0"
-              step="0.01"
+              step="1"
               value={
-                form.minimumSellingPrice
+                form.fixedMarkup
               }
               onChange={(event) =>
                 updateField(
-                  "minimumSellingPrice",
+                  "fixedMarkup",
                   event.target.value
                 )
               }
-              placeholder="0"
               className={`${fieldClass} mt-2`}
+              placeholder="200"
             />
           </div>
-
-          <div className="flex items-end">
-            <label className="flex h-12 w-full cursor-pointer items-center gap-3 rounded-xl border border-[var(--border)] px-4 text-sm font-bold text-[var(--foreground)]">
-              <input
-                type="checkbox"
-                checked={
-                  form.isActive
-                }
-                onChange={(event) =>
-                  updateField(
-                    "isActive",
-                    event.target.checked
-                  )
-                }
-                className="h-4 w-4 accent-blue-600"
-              />
-              Rule is active
-            </label>
-          </div>
-        </div>
+        )}
 
         <div>
-          <label className="text-sm font-bold text-[var(--foreground)]">
+          <label className="text-sm font-bold">
+            Minimum selling price (₦)
+          </label>
+
+          <input
+            type="number"
+            min="0"
+            step="1"
+            value={
+              form.minimumSellingPrice
+            }
+            onChange={(event) =>
+              updateField(
+                "minimumSellingPrice",
+                event.target.value
+              )
+            }
+            className={`${fieldClass} mt-2`}
+            placeholder="1000"
+          />
+        </div>
+
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--background)]/50 p-4 text-sm">
+          {previewing ? (
+            <p className="flex items-center gap-2 text-[var(--muted-foreground)]">
+              <LoaderCircle
+                size={17}
+                className="animate-spin"
+              />
+              Checking live provider costs...
+            </p>
+          ) : preview ? (
+            <div className="space-y-1.5">
+              {form.pricingStyle ===
+              "cheapest_buffer" ? (
+                <>
+                  <p>
+                    <span className="text-[var(--muted-foreground)]">
+                      Floor cost (live):{" "}
+                    </span>
+                    <strong>
+                      {formatNaira(
+                        preview.floorCostNgn
+                      )}
+                    </strong>
+                  </p>
+
+                  <p>
+                    <span className="text-[var(--muted-foreground)]">
+                      Basis (× 1+{Number(
+                        form.maxPriceBufferPercent ||
+                          0
+                      )}%):{" "}
+                    </span>
+                    <strong>
+                      {formatNaira(
+                        preview.pricingBasisNgn
+                      )}
+                    </strong>
+                  </p>
+                </>
+              ) : (
+                <p>
+                  <span className="text-[var(--muted-foreground)]">
+                    Operator cost (live):{" "}
+                  </span>
+                  <strong>
+                    {formatNaira(
+                      preview.providerCostNgn
+                    )}
+                  </strong>
+                </p>
+              )}
+
+              <p>
+                <span className="text-[var(--muted-foreground)]">
+                  User pays:{" "}
+                </span>
+                <strong className="text-emerald-500">
+                  {formatNaira(
+                    preview.sellingPrice
+                  )}
+                </strong>
+              </p>
+
+              <p className="pt-1 text-xs text-[var(--muted-foreground)]">
+                {form.pricingStyle ===
+                "cheapest_buffer"
+                  ? `Auto-selected operator ${preview.operator} from ${preview.eligibleCount || 1} cheap candidate(s).`
+                  : `Fixed to operator ${preview.operator}.`}
+              </p>
+            </div>
+          ) : (
+            <p className="text-[var(--muted-foreground)]">
+              Select country/service and pricing settings to load the live floor, basis and customer price.
+            </p>
+          )}
+        </div>
+
+        <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border border-[var(--border)] px-4 text-sm font-bold">
+          <input
+            type="checkbox"
+            checked={form.isActive}
+            onChange={(event) =>
+              updateField(
+                "isActive",
+                event.target.checked
+              )
+            }
+            className="h-4 w-4 accent-blue-600"
+          />
+          Rule is active
+        </label>
+
+        <div>
+          <label className="text-sm font-bold">
             Admin notes
           </label>
 
           <textarea
+            rows={3}
+            maxLength={500}
             value={form.notes}
             onChange={(event) =>
               updateField(
@@ -1232,147 +1582,34 @@ export default function PricingRuleForm({
                 event.target.value
               )
             }
-            rows={3}
-            maxLength={500}
-            placeholder="Optional internal note about this price..."
-            className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 dark:focus:ring-blue-950/40"
+            placeholder="Optional internal note..."
+            className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] outline-none focus:border-blue-500"
           />
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={
-              handlePreview
-            }
-            disabled={
-              previewing ||
-              saving ||
-              catalogLoading ||
-              operatorsLoading ||
-              !formReady
-            }
-            className="gap-2"
-          >
-            {previewing ? (
-              <LoaderCircle
-                size={18}
-                className="animate-spin"
-              />
-            ) : (
-              <Calculator
-                size={18}
-              />
-            )}
+        <Button
+          type="submit"
+          disabled={
+            !saveReady || saving
+          }
+          className="w-full gap-2"
+        >
+          {saving ? (
+            <LoaderCircle
+              size={18}
+              className="animate-spin"
+            />
+          ) : (
+            <Save size={18} />
+          )}
 
-            {previewing
-              ? "Checking live cost..."
-              : "Preview price"}
-          </Button>
-
-          <Button
-            type="submit"
-            disabled={
-              saving ||
-              previewing ||
-              catalogLoading ||
-              operatorsLoading ||
-              !formReady
-            }
-            className="gap-2"
-          >
-            {saving ? (
-              <LoaderCircle
-                size={18}
-                className="animate-spin"
-              />
-            ) : (
-              <Save size={18} />
-            )}
-
-            {saving
-              ? "Saving..."
-              : editingRule
-                ? "Update pricing rule"
-                : "Save pricing rule"}
-          </Button>
-        </div>
+          {saving
+            ? "Saving..."
+            : editingRule
+              ? "Update pricing"
+              : "Save pricing"}
+        </Button>
       </form>
-
-      {preview && (
-        <div className="mt-6 rounded-3xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900 dark:bg-blue-950/30 sm:p-6">
-          <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">
-                Live price preview
-              </p>
-
-              <p className="mt-1 text-sm text-blue-700/80 dark:text-blue-300/80">
-                Operator{" "}
-                {preview.operator ||
-                  form.operator}{" "}
-                ·{" "}
-                {preview.stock > 0
-                  ? `${Number(
-                      preview.stock
-                    ).toLocaleString()} numbers available`
-                  : "Availability checked again during purchase"}
-              </p>
-            </div>
-
-            <span className="rounded-full bg-white px-3 py-1.5 text-xs font-black text-blue-700 shadow-sm dark:bg-blue-950 dark:text-blue-300">
-              {preview.server ===
-              "server1"
-                ? "Server 1"
-                : "Server 2"}
-            </span>
-          </div>
-
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl bg-white p-4 shadow-sm dark:bg-[var(--card)]">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                Provider cost
-              </p>
-
-              <p className="mt-2 text-xl font-black text-[var(--foreground)]">
-                {formatNaira(
-                  preview.providerCostNgn
-                )}
-              </p>
-
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                {preview.providerCost}{" "}
-                {preview.providerCurrency}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-4 shadow-sm dark:bg-[var(--card)]">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                ChapsSmS price
-              </p>
-
-              <p className="mt-2 text-xl font-black text-blue-600">
-                {formatNaira(
-                  preview.sellingPrice
-                )}
-              </p>
-            </div>
-
-            <div className="rounded-2xl bg-white p-4 shadow-sm dark:bg-[var(--card)]">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                Expected profit
-              </p>
-
-              <p className="mt-2 text-xl font-black text-green-600">
-                {formatNaira(
-                  preview.profit
-                )}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 }

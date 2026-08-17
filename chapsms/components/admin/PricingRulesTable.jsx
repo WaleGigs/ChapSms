@@ -113,6 +113,26 @@ function getModeLabel(rule) {
   return `${Number(rule.markupPercent || 0)}% markup`;
 }
 
+function getStyleLabel(rule) {
+  const style =
+    rule.pricingStyle ||
+    (
+      String(
+        rule.operator || "any"
+      ).toLowerCase() === "any"
+        ? "cheapest_buffer"
+        : "fixed_operator"
+    );
+
+  if (style === "cheapest_buffer") {
+    return `Cheapest + ${Number(
+      rule.maxPriceBufferPercent ?? 50
+    )}% buffer`;
+  }
+
+  return `Fixed operator ${rule.operator}`;
+}
+
 export default function PricingRulesTable({
   rules = [],
   loading = false,
@@ -209,7 +229,7 @@ export default function PricingRulesTable({
                       {rule.serviceName || rule.service}
                     </p>
                     <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-                      {rule.countryName || rule.country} · {rule.operator}
+                      {rule.countryName || rule.country} · {getStyleLabel(rule)}
                     </p>
                   </div>
 
@@ -273,7 +293,7 @@ export default function PricingRulesTable({
                   <th className="px-6 py-4">Server</th>
                   <th className="px-4 py-4">Country</th>
                   <th className="px-4 py-4">Service</th>
-                  <th className="px-4 py-4">Operator</th>
+                  <th className="px-4 py-4">Pricing style</th>
                   <th className="px-4 py-4">Pricing</th>
                   <th className="px-4 py-4">Status</th>
                   <th className="px-4 py-4">Updated</th>
@@ -297,7 +317,7 @@ export default function PricingRulesTable({
                       {rule.serviceName || rule.service}
                     </td>
                     <td className="px-4 py-4 text-[var(--muted-foreground)]">
-                      {rule.operator}
+                      {getStyleLabel(rule)}
                     </td>
                     <td className="px-4 py-4 font-black text-blue-600">
                       {getModeLabel(rule)}
