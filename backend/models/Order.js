@@ -151,6 +151,26 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    /* Private purchase/refund context. Removed by sanitizeOrder before API output. */
+    paymentEnvironment: {
+      type: String,
+      enum: ["test", "live"],
+      default: "live",
+      index: true,
+    },
+
+    walletBalanceField: {
+      type: String,
+      enum: ["balance", "testBalance"],
+      default: "balance",
+    },
+
+    walletReservationReference: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     server: {
       type: String,
       enum: ["server1", "server2"],
@@ -170,6 +190,29 @@ const orderSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      index: true,
+    },
+
+    providerStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    expiresAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    /*
+     * Rollout safety: only orders explicitly created by the new lifecycle
+     * code are eligible for automatic provider-timeout refunds. This avoids
+     * double-crediting historical orders that may already have been manually
+     * compensated before this fix was deployed.
+     */
+    autoRefundEligible: {
+      type: Boolean,
+      default: false,
       index: true,
     },
 
@@ -224,6 +267,7 @@ orderSchema.index({ createdAt: -1 });
 orderSchema.index({ server: 1, createdAt: -1 });
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ refunded: 1, createdAt: -1 });
+orderSchema.index({ autoRefundEligible: 1, status: 1, expiresAt: 1 });
 
 function hidePrivateProviderFields(_doc, ret) {
   delete ret.provider;

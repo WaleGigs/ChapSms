@@ -8,6 +8,9 @@ const providerManager = require(
 const pricingService = require(
   "../services/pricingService"
 );
+const automaticPricingService = require(
+  "../services/automaticPricingService"
+);
 
 const VALID_SERVERS = ["server1", "server2"];
 
@@ -125,6 +128,37 @@ function sanitizeOrder(order) {
       ? order.toObject()
       : { ...order };
 
+  /*
+   * Legacy orders may have been created before serviceName/countryName
+   * fields existed. If an older pricing snapshot contains friendly labels,
+   * expose them before removing the private pricing snapshot.
+   */
+  if (!String(data.serviceName || "").trim()) {
+    data.serviceName =
+      String(
+        data.pricingSnapshot?.serviceName ||
+          data.pricingSnapshot?.service?.name ||
+          ""
+      ).trim();
+  }
+
+  if (!String(data.countryName || "").trim()) {
+    data.countryName =
+      String(
+        data.pricingSnapshot?.countryName ||
+          data.pricingSnapshot?.country?.name ||
+          ""
+      ).trim();
+  }
+
+  const effectiveExpiresAt =
+    getEffectiveOrderExpiresAt(order);
+
+  if (effectiveExpiresAt) {
+    data.expiresAt =
+      effectiveExpiresAt.toISOString();
+  }
+
   delete data.provider;
   delete data.providerResponse;
   delete data.providerPrice;
@@ -218,6 +252,212 @@ function getWalletBalance(
   );
 }
 
+
+const ORDER_ACTIVATION_TTL_MS =
+  20 * 60 * 1000;
+
+function getPositiveInteger(
+  value,
+  fallback,
+  maximum,
+) {
+  const parsed = Number.parseInt(
+    value,
+    10,
+  );
+
+  if (
+    !Number.isFinite(parsed) ||
+    parsed <= 0
+  ) {
+    return fallback;
+  }
+
+  return maximum
+    ? Math.min(parsed, maximum)
+    : parsed;
+}
+
+function getOrderActivationTtlMs() {
+  /*
+   * ChapsSms activations are a fixed 20-minute window.
+   * A stale/mistyped environment value must never turn this
+   * into 200 minutes.
+   */
+  return ORDER_ACTIVATION_TTL_MS;
+}
+
+function parseProviderDate(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value;
+  }
+
+  const numeric = Number(value);
+
+  if (
+    Number.isFinite(numeric) &&
+    numeric > 0
+  ) {
+    const date = new Date(
+      numeric > 1e12
+        ? numeric
+        : numeric > 1e9
+          ? numeric * 1000
+          : Number.NaN,
+    );
+
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+
+  const text = String(value).trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const direct = new Date(text);
+
+  if (!Number.isNaN(direct.getTime())) {
+    return direct;
+  }
+
+  const isoLike = text.replace(
+    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})$/,
+    "$1T$2",
+  );
+
+  const normalized = new Date(isoLike);
+
+  return Number.isNaN(normalized.getTime())
+    ? null
+    : normalized;
+}
+
+function getProviderStartedAtFromPurchase(
+  providerOrder,
+) {
+  const raw = providerOrder?.raw;
+  const now = Date.now();
+
+  const candidates = [
+    providerOrder?.activationTime,
+    providerOrder?.activation_time,
+    providerOrder?.startedAt,
+    providerOrder?.started_at,
+    raw?.activationTime,
+    raw?.activation_time,
+    raw?.startedAt,
+    raw?.started_at,
+    raw?.createdAt,
+    raw?.created_at,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = parseProviderDate(candidate);
+
+    if (!parsed) {
+      continue;
+    }
+
+    const driftMs = Math.abs(
+      parsed.getTime() - now,
+    );
+
+    /*
+     * The activation should have started around the current purchase.
+     * Reject provider timestamps with a large timezone/format drift.
+     */
+    if (driftMs <= 5 * 60 * 1000) {
+      return parsed;
+    }
+  }
+
+  return new Date(now);
+}
+
+function getEffectiveOrderStartedAt(order) {
+  const createdAt = parseProviderDate(
+    order?.createdAt,
+  );
+
+  const providerStartedAt = parseProviderDate(
+    order?.providerStartedAt,
+  );
+
+  if (
+    providerStartedAt &&
+    createdAt &&
+    Math.abs(
+      providerStartedAt.getTime() -
+        createdAt.getTime(),
+    ) <=
+      5 * 60 * 1000
+  ) {
+    return providerStartedAt;
+  }
+
+  return createdAt || providerStartedAt;
+}
+
+function getEffectiveOrderExpiresAt(order) {
+  const startedAt =
+    getEffectiveOrderStartedAt(order);
+
+  if (!startedAt) {
+    return null;
+  }
+
+  return new Date(
+    startedAt.getTime() +
+      getOrderActivationTtlMs(),
+  );
+}
+
+function getOrderBalanceContext(order) {
+  const paymentEnvironment = String(
+    order?.paymentEnvironment || "live",
+  )
+    .trim()
+    .toLowerCase();
+
+  const balanceField = [
+    "balance",
+    "testBalance",
+  ].includes(order?.walletBalanceField)
+    ? order.walletBalanceField
+    : getWalletBalanceField(
+        paymentEnvironment,
+      );
+
+  return {
+    paymentEnvironment,
+    balanceField,
+  };
+}
+
+function orderExpiryHasPassed(order) {
+  const expiresAt =
+    getEffectiveOrderExpiresAt(order);
+
+  return Boolean(
+    expiresAt &&
+      expiresAt.getTime() <=
+        Date.now(),
+  );
+}
+
 function createReservationReference(
   userId,
 ) {
@@ -253,17 +493,34 @@ async function refundReservedWallet({
     ) ||
     numericAmount <= 0
   ) {
-    return null;
+    return Wallet.findOne({
+      user: userId,
+    });
   }
 
   const refundReference =
     `${reservationReference}-REFUND`
       .toUpperCase();
 
+  /*
+   * Immediate compensation is atomic:
+   * - only a matching PENDING reservation can be reversed;
+   * - the refund reference can only be inserted once;
+   * - the same update restores the balance, fails the reservation and
+   *   records the completed refund.
+   */
   const wallet =
     await Wallet.findOneAndUpdate(
       {
         user: userId,
+
+        transactions: {
+          $elemMatch: {
+            reference:
+              reservationReference,
+            status: "pending",
+          },
+        },
 
         "transactions.reference": {
           $ne:
@@ -328,6 +585,8 @@ async function refundReservedWallet({
           {
             "purchase.reference":
               reservationReference,
+            "purchase.status":
+              "pending",
           },
         ],
       },
@@ -337,9 +596,67 @@ async function refundReservedWallet({
     return wallet;
   }
 
-  return Wallet.findOne({
-    user: userId,
-  });
+  const existingWallet =
+    await Wallet.findOne({
+      user: userId,
+    });
+
+  if (!existingWallet) {
+    const error =
+      new Error(
+        "Wallet not found while reversing failed purchase",
+      );
+
+    error.status = 500;
+    error.code =
+      "WALLET_ROLLBACK_FAILED";
+    throw error;
+  }
+
+  const refundExists =
+    existingWallet.transactions
+      .some(
+        (item) =>
+          String(
+            item.reference ||
+              "",
+          ).toUpperCase() ===
+            refundReference,
+      );
+
+  /*
+   * A duplicate/retried error path is safe: if this exact refund already
+   * exists, return the authoritative wallet without crediting twice.
+   */
+  if (refundExists) {
+    return existingWallet;
+  }
+
+  const reservationExists =
+    existingWallet.transactions
+      .some(
+        (item) =>
+          String(
+            item.reference ||
+              "",
+          ).toUpperCase() ===
+            String(
+              reservationReference ||
+                "",
+            ).toUpperCase(),
+      );
+
+  const error =
+    new Error(
+      reservationExists
+        ? "Failed purchase reservation could not be reversed automatically"
+        : "Failed purchase reservation was not found during automatic reversal",
+    );
+
+  error.status = 500;
+  error.code =
+    "WALLET_ROLLBACK_FAILED";
+  throw error;
 }
 
 async function reconcileReservation({
@@ -551,7 +868,7 @@ exports.createOrder =
 
       /*
        * Most important safety gate:
-       * test Flutterwave money cannot reach a live SMS provider.
+       * test payment money cannot reach a live SMS provider.
        */
       if (
         paymentEnvironment !==
@@ -641,7 +958,7 @@ exports.createOrder =
           });
       }
 
-      const normalizedOperator =
+      let normalizedOperator =
         await pricingService
           .resolveEffectiveOperator({
             server:
@@ -662,20 +979,107 @@ exports.createOrder =
             requestedOperator,
           });
 
-      const preliminaryQuote =
-        await providerManager.getPrice({
-          server:
-            normalizedServer,
+      let preliminaryQuote;
+      let automaticSelection =
+        null;
 
-          country:
-            normalizedCountry,
+      /*
+       * Manual operator/fixed-rule choices still override automation.
+       * Cheapest 5 selection is used only when no specific operator
+       * has been selected by the customer/admin pricing rule.
+       */
+      if (
+        normalizedOperator ===
+        "any"
+      ) {
+        automaticSelection =
+          await automaticPricingService
+            .resolveAutomaticQuote({
+              server:
+                normalizedServer,
+              country:
+                normalizedCountry,
+              service:
+                normalizedService,
+            });
 
-          service:
-            normalizedService,
+        normalizedOperator =
+          automaticSelection.operator;
 
-          operator:
-            normalizedOperator,
-        });
+        preliminaryQuote =
+          automaticSelection.quote;
+      } else {
+        preliminaryQuote =
+          await providerManager
+            .getPrice({
+              server:
+                normalizedServer,
+
+              country:
+                normalizedCountry,
+
+              service:
+                normalizedService,
+
+              operator:
+                normalizedOperator,
+            });
+      }
+
+      if (
+        process.env.NODE_ENV !==
+        "production"
+      ) {
+        console.log(
+          "[Automatic pricing] purchase selection:",
+          {
+            server:
+              normalizedServer,
+            country:
+              normalizedCountry,
+            service:
+              normalizedService,
+            operator:
+              normalizedOperator,
+            strategy:
+              automaticSelection
+                ?.strategy ||
+              "manual_or_rule",
+            candidateCount:
+              automaticSelection
+                ?.candidateCount ||
+              0,
+          }
+        );
+      }
+
+      const preliminaryStock =
+        Number(
+          preliminaryQuote?.stock,
+        );
+
+      /*
+       * If the live quote already reports zero stock, stop before reserving
+       * any customer money.
+       */
+      if (
+        Number.isFinite(
+          preliminaryStock,
+        ) &&
+        preliminaryStock <= 0
+      ) {
+        return res
+          .status(409)
+          .json({
+            success: false,
+            code:
+              "NO_NUMBERS",
+            message:
+              "ChapsSms does not currently have numbers available for this selection. Try another server or service.",
+            walletDebited:
+              false,
+          });
+      }
 
       const preliminaryPricing =
         await pricingService
@@ -1047,6 +1451,11 @@ exports.createOrder =
       debitedAmount =
         finalAmount;
 
+      const providerStartedAt =
+        getProviderStartedAtFromPurchase(
+          purchasedProviderOrder,
+        );
+
       let order;
 
       try {
@@ -1077,13 +1486,15 @@ exports.createOrder =
               normalizedCountry,
 
             countryName:
-              normalizedCountryName,
+              normalizedCountryName ||
+              normalizedCountry,
 
             service:
               normalizedService,
 
             serviceName:
-              normalizedServiceName,
+              normalizedServiceName ||
+              normalizedService,
 
             operator:
               actualOperator,
@@ -1131,6 +1542,17 @@ exports.createOrder =
 
             walletReservationReference:
               reservationReference,
+
+            providerStartedAt,
+
+            expiresAt:
+              new Date(
+                providerStartedAt.getTime() +
+                  getOrderActivationTtlMs(),
+              ),
+
+            autoRefundEligible:
+              true,
 
             server:
               purchasedProviderOrder
@@ -1181,9 +1603,11 @@ exports.createOrder =
           finalAmount,
 
         service:
+          normalizedServiceName ||
           normalizedService,
 
         country:
+          normalizedCountryName ||
           normalizedCountry,
 
         server:
@@ -1238,42 +1662,52 @@ exports.createOrder =
         }
       }
 
+      let rollbackWallet =
+        null;
+
+      let rollbackError =
+        null;
+
       if (
         walletWasDebited &&
         debitedAmount > 0 &&
         reservationReference
       ) {
         try {
-          await refundReservedWallet({
-            userId:
-              req.user._id,
+          rollbackWallet =
+            await refundReservedWallet({
+              userId:
+                req.user._id,
 
-            amount:
-              debitedAmount,
+              amount:
+                debitedAmount,
 
-            balanceField,
+              balanceField,
 
-            environment:
-              paymentEnvironment,
+              environment:
+                paymentEnvironment,
 
-            reservationReference,
+              reservationReference,
 
-            service:
-              normalizedService ||
-              "SMS",
+              service:
+                normalizedService ||
+                "SMS",
 
-            country:
-              normalizedCountry ||
-              "unknown",
+              country:
+                normalizedCountry ||
+                "unknown",
 
-            server:
-              normalizedServer ||
-              null,
+              server:
+                normalizedServer ||
+                null,
 
-            reason:
-              "Automatic refund for failed number purchase",
-          });
+              reason:
+                "Automatic refund for failed number purchase",
+            });
         } catch (refundError) {
+          rollbackError =
+            refundError;
+
           console.error(
             "Automatic wallet rollback failed:",
             refundError,
@@ -1285,6 +1719,24 @@ exports.createOrder =
         "Create order error:",
         error,
       );
+
+      /*
+       * If the provider purchase failed AND the automatic balance reversal
+       * also failed, expose that as a server problem instead of pretending
+       * the normal provider error is the whole story. The stale-reservation
+       * recovery endpoint remains a second safety net.
+       */
+      if (rollbackError) {
+        return res
+          .status(500)
+          .json({
+            success: false,
+            code:
+              "WALLET_ROLLBACK_FAILED",
+            message:
+              "The number purchase failed and ChapsSms could not immediately restore the reserved wallet balance. Please refresh Payment History while ChapsSms recovery retries the reversal.",
+          });
+      }
 
       return res
         .status(
@@ -1305,9 +1757,745 @@ exports.createOrder =
               error,
             ) ||
             "Unable to create order",
+
+          /*
+           * This lets clients reconcile immediately. Even clients that do
+           * not read this field should refresh /wallet after an error.
+           */
+          refunded:
+            Boolean(
+              rollbackWallet,
+            ),
+
+          walletBalance:
+            rollbackWallet
+              ? getWalletBalance(
+                  rollbackWallet,
+                  balanceField,
+                )
+              : undefined,
         });
     }
   };
+
+
+async function refundTerminalProviderOrder({
+  order,
+  providerOrder = null,
+  terminalStatus,
+}) {
+  const latestOrder = await Order.findById(
+    order._id,
+  );
+
+  if (!latestOrder) {
+    const error = new Error(
+      "Order not found while reconciling refund",
+    );
+    error.status = 404;
+    error.code = "ORDER_NOT_FOUND";
+    throw error;
+  }
+
+  if (
+    latestOrder.status === "received" ||
+    latestOrder.otpCode
+  ) {
+    return {
+      order: latestOrder,
+      wallet: null,
+      refunded: Boolean(
+        latestOrder.refunded,
+      ),
+    };
+  }
+
+  /*
+   * Historical orders are deliberately excluded from automatic refunds.
+   * Some of them were manually compensated before this fix existed.
+   */
+  if (!latestOrder.autoRefundEligible) {
+    latestOrder.status = terminalStatus;
+    latestOrder.providerStatus = String(
+      providerOrder?.providerStatus ||
+        latestOrder.providerStatus ||
+        (terminalStatus === "expired"
+          ? "NO_ACTIVATION"
+          : "STATUS_CANCEL"),
+    ).toUpperCase();
+    latestOrder.providerLastCheckedAt =
+      new Date();
+
+    if (providerOrder?.raw !== undefined) {
+      latestOrder.providerResponse =
+        providerOrder.raw;
+    }
+
+    if (terminalStatus === "cancelled") {
+      latestOrder.providerCancelledAt =
+        latestOrder.providerCancelledAt ||
+        new Date();
+    }
+
+    await latestOrder.save();
+
+    return {
+      order: latestOrder,
+      wallet: null,
+      refunded: false,
+    };
+  }
+
+  const {
+    paymentEnvironment,
+    balanceField,
+  } = getOrderBalanceContext(latestOrder);
+
+  if (latestOrder.refunded) {
+    const wallet = await Wallet.findOne({
+      user: latestOrder.user,
+    });
+
+    return {
+      order: latestOrder,
+      wallet,
+      refunded: true,
+    };
+  }
+
+  const refundAmount = Number(
+    latestOrder.sellingPrice ||
+      latestOrder.price,
+  );
+
+  if (
+    !Number.isFinite(refundAmount) ||
+    refundAmount <= 0
+  ) {
+    const error = new Error(
+      "Invalid automatic refund amount",
+    );
+    error.status = 500;
+    error.code = "INVALID_REFUND_AMOUNT";
+    throw error;
+  }
+
+  const providerStatus = String(
+    providerOrder?.providerStatus ||
+      latestOrder.providerStatus ||
+      (terminalStatus === "expired"
+        ? "NO_ACTIVATION"
+        : "STATUS_CANCEL"),
+  )
+    .trim()
+    .toUpperCase();
+
+  /*
+   * IMPORTANT: same idempotency reference used by manual Cancel Order.
+   * Automatic timeout reconciliation and a user cancellation therefore
+   * cannot credit the same activation twice.
+   */
+  const refundReference =
+    `ORDER-${latestOrder._id}-CANCEL-REFUND`
+      .toUpperCase();
+
+  const claimedOrder =
+    await Order.findOneAndUpdate(
+      {
+        _id: latestOrder._id,
+        autoRefundEligible: true,
+        refunded: { $ne: true },
+        status: {
+          $in: [
+            "waiting",
+            "cancelled",
+            "expired",
+          ],
+        },
+      },
+      {
+        $set: {
+          status: "cancelling",
+          providerStatus,
+          providerLastCheckedAt:
+            new Date(),
+          ...(providerOrder?.raw !==
+          undefined
+            ? {
+                providerResponse:
+                  providerOrder.raw,
+              }
+            : {}),
+        },
+      },
+      {
+        returnDocument: "after",
+      },
+    );
+
+  if (!claimedOrder) {
+    const currentOrder =
+      await Order.findById(
+        latestOrder._id,
+      );
+    const wallet =
+      await Wallet.findOne({
+        user: latestOrder.user,
+      });
+
+    return {
+      order: currentOrder || latestOrder,
+      wallet,
+      refunded: Boolean(
+        currentOrder?.refunded,
+      ),
+    };
+  }
+
+  let wallet =
+    await Wallet.findOneAndUpdate(
+      {
+        user: claimedOrder.user,
+        "transactions.reference": {
+          $ne: refundReference,
+        },
+      },
+      {
+        $inc: {
+          [balanceField]: refundAmount,
+        },
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type: "refund",
+                amount: refundAmount,
+                environment:
+                  paymentEnvironment,
+                balanceField,
+                description:
+                  `Automatic refund for ${terminalStatus} ${claimedOrder.serviceName || claimedOrder.service} activation`,
+                status: "completed",
+                reference:
+                  refundReference,
+                orderId: claimedOrder._id,
+                server: claimedOrder.server,
+                currency: "NGN",
+              },
+            ],
+            $position: 0,
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+  if (!wallet) {
+    wallet = await Wallet.findOne({
+      user: claimedOrder.user,
+    });
+
+    const refundExists =
+      wallet?.transactions?.some(
+        (transaction) =>
+          String(
+            transaction.reference || "",
+          ) === refundReference,
+      );
+
+    if (!refundExists) {
+      await Order.findByIdAndUpdate(
+        claimedOrder._id,
+        {
+          $set: {
+            status: terminalStatus,
+            refunded: false,
+            financialStatus: "charged",
+            providerStatus,
+            providerLastCheckedAt:
+              new Date(),
+          },
+        },
+      );
+
+      const error = new Error(
+        "The provider activation ended, but the ChapsSms wallet refund could not be completed",
+      );
+      error.status = 500;
+      error.code = "WALLET_REFUND_FAILED";
+      throw error;
+    }
+  }
+
+  const updatedOrder =
+    await Order.findByIdAndUpdate(
+      claimedOrder._id,
+      {
+        $set: {
+          status: terminalStatus,
+          refunded: true,
+          refundedAt: new Date(),
+          financialStatus: "refunded",
+          providerStatus,
+          providerLastCheckedAt:
+            new Date(),
+          ...(terminalStatus === "cancelled"
+            ? {
+                providerCancelledAt:
+                  claimedOrder.providerCancelledAt ||
+                  new Date(),
+              }
+            : {}),
+          ...(providerOrder?.raw !==
+          undefined
+            ? {
+                providerResponse:
+                  providerOrder.raw,
+              }
+            : {}),
+        },
+      },
+      {
+        returnDocument: "after",
+      },
+    );
+
+  return {
+    order: updatedOrder,
+    wallet,
+    refunded: true,
+    refundAmount,
+  };
+}
+
+async function reconcileOrderLifecycle(order) {
+  if (!order) {
+    return {
+      order: null,
+      wallet: null,
+      refunded: false,
+    };
+  }
+
+  if (
+    order.status === "received" ||
+    order.otpCode
+  ) {
+    return {
+      order,
+      wallet: null,
+      refunded: Boolean(order.refunded),
+    };
+  }
+
+  if (
+    ["cancelled", "expired"].includes(
+      order.status,
+    )
+  ) {
+    if (order.refunded) {
+      return {
+        order,
+        wallet: null,
+        refunded: true,
+      };
+    }
+
+    return refundTerminalProviderOrder({
+      order,
+      terminalStatus: order.status,
+    });
+  }
+
+  if (order.status === "cancelling") {
+    return {
+      order,
+      wallet: null,
+      refunded: Boolean(order.refunded),
+    };
+  }
+
+  if (
+    !order.provider ||
+    !order.providerOrderId
+  ) {
+    return {
+      order,
+      wallet: null,
+      refunded: Boolean(order.refunded),
+    };
+  }
+
+  let providerOrder;
+
+  try {
+    providerOrder =
+      await providerManager.getOrder(
+        order.provider,
+        order.providerOrderId,
+      );
+  } catch (error) {
+    /*
+     * Some providers return NO_ACTIVATION after an activation has aged out.
+     * Treat that as expiry only after ChapsSms' persisted expiry has passed.
+     */
+    if (
+      String(error?.code || "")
+        .trim()
+        .toUpperCase() ===
+        "NO_ACTIVATION" &&
+      orderExpiryHasPassed(order)
+    ) {
+      return refundTerminalProviderOrder({
+        order,
+        providerOrder: {
+          providerStatus:
+            "NO_ACTIVATION",
+          raw:
+            error?.rawResponse ||
+            "NO_ACTIVATION",
+        },
+        terminalStatus: "expired",
+      });
+    }
+
+    throw error;
+  }
+
+  const providerStatus = String(
+    providerOrder.providerStatus ||
+      providerOrder.status ||
+      "",
+  )
+    .trim()
+    .toUpperCase();
+
+  const normalizedStatus = String(
+    providerOrder.status || "waiting",
+  )
+    .trim()
+    .toLowerCase();
+
+  const allowedStatuses = [
+    "waiting",
+    "received",
+    "expired",
+    "cancelled",
+  ];
+
+  const status = allowedStatuses.includes(
+    normalizedStatus,
+  )
+    ? normalizedStatus
+    : "waiting";
+
+  const smsText = String(
+    providerOrder.sms || "",
+  ).trim();
+  const directOtp = String(
+    providerOrder.otpCode || "",
+  ).trim();
+  const otpMatch = smsText.match(
+    /\b\d{4,8}\b/,
+  );
+  const otpCode =
+    directOtp || otpMatch?.[0] || "";
+
+  if (
+    otpCode ||
+    status === "received"
+  ) {
+    order.providerStatus =
+      providerStatus ||
+      order.providerStatus ||
+      "STATUS_OK";
+    order.providerLastCheckedAt =
+      new Date();
+
+    if (providerOrder.raw !== undefined) {
+      order.providerResponse =
+        providerOrder.raw;
+    }
+
+    if (providerOrder.operator) {
+      order.operator = normalizeOperator(
+        providerOrder.operator,
+      );
+    }
+
+    if (smsText) {
+      order.sms = smsText;
+    }
+
+    if (otpCode) {
+      order.otpCode = otpCode;
+    }
+
+    order.status = "received";
+    order.financialStatus = "earned";
+    order.otpReceivedAt =
+      order.otpReceivedAt || new Date();
+
+    try {
+      const finishedOrder =
+        await providerManager.finishOrder(
+          order.provider,
+          order.providerOrderId,
+        );
+
+      if (finishedOrder?.providerStatus) {
+        order.providerStatus = String(
+          finishedOrder.providerStatus,
+        ).toUpperCase();
+      }
+
+      order.providerFinishedAt =
+        new Date();
+    } catch (finishError) {
+      if (
+        finishError.code !==
+        "OPERATION_NOT_SUPPORTED"
+      ) {
+        console.error(
+          "Finish activation failed:",
+          finishError,
+        );
+      }
+    }
+
+    await order.save();
+
+    return {
+      order,
+      wallet: null,
+      refunded: false,
+    };
+  }
+
+  if (
+    status === "cancelled" ||
+    status === "expired"
+  ) {
+    return refundTerminalProviderOrder({
+      order,
+      providerOrder,
+      terminalStatus: status,
+    });
+  }
+
+  /*
+   * ChapSMS owns the 20-minute customer window. If the provider is still
+   * waiting when that window ends, cancel the same provider activation
+   * server-side. A refund is only issued after the provider cancellation
+   * call succeeds, so we never credit money back while an activation is
+   * still usable. The background lifecycle sweep retries this path.
+   */
+  if (orderExpiryHasPassed(order)) {
+    try {
+      const cancelledOrder =
+        await providerManager.cancelOrder(
+          order.provider,
+          order.providerOrderId,
+        );
+
+      return refundTerminalProviderOrder({
+        order,
+        providerOrder: cancelledOrder,
+        terminalStatus: "cancelled",
+      });
+    } catch (cancelError) {
+      const cancelCode = String(
+        cancelError?.code || "",
+      )
+        .trim()
+        .toUpperCase();
+
+      /*
+       * Some providers remove an activation immediately after timeout.
+       * Once ChapSMS' own 20-minute deadline has passed, NO_ACTIVATION
+       * is sufficient terminal confirmation for an expiry refund.
+       */
+      if (cancelCode === "NO_ACTIVATION") {
+        return refundTerminalProviderOrder({
+          order,
+          providerOrder: {
+            providerStatus: "NO_ACTIVATION",
+            raw:
+              cancelError?.rawResponse ||
+              "NO_ACTIVATION",
+          },
+          terminalStatus: "expired",
+        });
+      }
+
+      throw cancelError;
+    }
+  }
+
+  order.providerStatus =
+    providerStatus ||
+    order.providerStatus ||
+    "STATUS_WAIT_CODE";
+  order.status = "waiting";
+  order.providerLastCheckedAt =
+    new Date();
+
+  if (providerOrder.raw !== undefined) {
+    order.providerResponse =
+      providerOrder.raw;
+  }
+
+  if (providerOrder.operator) {
+    order.operator = normalizeOperator(
+      providerOrder.operator,
+    );
+  }
+
+  if (smsText) {
+    order.sms = smsText;
+  }
+
+  await order.save();
+
+  return {
+    order,
+    wallet: null,
+    refunded: false,
+  };
+}
+
+let lifecycleSweepRunning = false;
+let lifecycleReconcilerStarted = false;
+
+function getLifecycleSweepIntervalMs() {
+  return getPositiveInteger(
+    process.env.ORDER_RECONCILE_INTERVAL_MS,
+    30000,
+    5 * 60 * 1000,
+  );
+}
+
+async function runLifecycleSweep() {
+  if (lifecycleSweepRunning) {
+    return;
+  }
+
+  lifecycleSweepRunning = true;
+
+  try {
+    const interval =
+      getLifecycleSweepIntervalMs();
+    const batchSize = getPositiveInteger(
+      process.env.ORDER_RECONCILE_BATCH_SIZE,
+      20,
+      100,
+    );
+    const staleCheckBefore = new Date(
+      Date.now() - interval,
+    );
+
+    const orders = await Order.find({
+      autoRefundEligible: true,
+      refunded: { $ne: true },
+      status: "waiting",
+
+      /*
+       * createdAt is ChapsSms-controlled and cannot carry an upstream
+       * timezone error. After 20 minutes, verify the real provider
+       * status before refunding.
+       */
+      createdAt: {
+        $lte: new Date(
+          Date.now() -
+            getOrderActivationTtlMs(),
+        ),
+      },
+
+      $or: [
+        { providerLastCheckedAt: null },
+        {
+          providerLastCheckedAt: {
+            $lte: staleCheckBefore,
+          },
+        },
+      ],
+    })
+      .sort({ expiresAt: 1 })
+      .limit(batchSize);
+
+    for (const order of orders) {
+      try {
+        const result =
+          await reconcileOrderLifecycle(order);
+
+        if (result.refunded) {
+          console.log(
+            "[Order lifecycle] automatic refund completed:",
+            {
+              orderId: String(
+                result.order?._id || order._id,
+              ),
+              status: result.order?.status,
+            },
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "[Order lifecycle] reconciliation failed:",
+          {
+            orderId: String(order._id),
+            code: error?.code,
+            message: error?.message,
+          },
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[Order lifecycle] background sweep failed:",
+      error?.message || error,
+    );
+  } finally {
+    lifecycleSweepRunning = false;
+  }
+}
+
+function startLifecycleReconciler() {
+  if (
+    lifecycleReconcilerStarted ||
+    String(
+      process.env.ORDER_RECONCILER_ENABLED ||
+        "true",
+    )
+      .trim()
+      .toLowerCase() === "false"
+  ) {
+    return;
+  }
+
+  lifecycleReconcilerStarted = true;
+
+  const firstRun = setTimeout(
+    () => {
+      runLifecycleSweep().catch(() => null);
+    },
+    5000,
+  );
+  firstRun.unref?.();
+
+  const timer = setInterval(
+    () => {
+      runLifecycleSweep().catch(() => null);
+    },
+    getLifecycleSweepIntervalMs(),
+  );
+  timer.unref?.();
+}
+
+startLifecycleReconciler();
 
 exports.checkOrder = async (req, res) => {
   try {
@@ -1319,108 +2507,31 @@ exports.checkOrder = async (req, res) => {
     if (!order) {
       return res.status(404).json({
         success: false,
+        code: "ORDER_NOT_FOUND",
         message: "Order not found",
       });
     }
 
-    if (!order.provider || !order.providerOrderId) {
-      return res.status(400).json({
-        success: false,
-        message: "Order has no valid provider reference",
-      });
-    }
+    const result =
+      await reconcileOrderLifecycle(order);
 
-    if (["received", "expired", "cancelled"].includes(order.status)) {
-      return res.json({
-        success: true,
-        order: sanitizeOrder(order),
-      });
-    }
-
-    const providerOrder = await providerManager.getOrder(
-      order.provider,
-      order.providerOrderId
-    );
-
-    const providerStatus = String(
-      providerOrder.providerStatus || providerOrder.status || ""
-    )
-      .trim()
-      .toUpperCase();
-
-    const normalizedStatus = String(
-      providerOrder.status || "waiting"
-    )
-      .trim()
-      .toLowerCase();
-
-    const allowedStatuses = [
-      "waiting",
-      "received",
-      "expired",
-      "cancelled",
-    ];
-
-    order.providerStatus =
-      providerStatus || order.providerStatus || "STATUS_WAIT_CODE";
-    order.status = allowedStatuses.includes(normalizedStatus)
-      ? normalizedStatus
-      : "waiting";
-    order.providerLastCheckedAt = new Date();
-
-    if (providerOrder.raw !== undefined) {
-      order.providerResponse = providerOrder.raw;
-    }
-
-    if (providerOrder.operator) {
-      order.operator = normalizeOperator(providerOrder.operator);
-    }
-
-    const smsText = String(providerOrder.sms || "").trim();
-    const directOtp = String(providerOrder.otpCode || "").trim();
-    const otpMatch = smsText.match(/\b\d{4,8}\b/);
-    const otpCode = directOtp || otpMatch?.[0] || "";
-
-    if (smsText) {
-      order.sms = smsText;
-    }
-
-    if (otpCode) {
-      order.otpCode = otpCode;
-      order.status = "received";
-      order.financialStatus = "earned";
-      order.otpReceivedAt = order.otpReceivedAt || new Date();
-
-      try {
-        const finishedOrder = await providerManager.finishOrder(
-          order.provider,
-          order.providerOrderId
-        );
-
-        if (finishedOrder?.providerStatus) {
-          order.providerStatus = String(
-            finishedOrder.providerStatus
-          ).toUpperCase();
-        }
-
-        order.providerFinishedAt = new Date();
-      } catch (finishError) {
-        if (finishError.code !== "OPERATION_NOT_SUPPORTED") {
-          console.error("Finish activation failed:", finishError);
-        }
-      }
-    }
-
-    if (order.status === "cancelled") {
-      order.providerCancelledAt =
-        order.providerCancelledAt || new Date();
-    }
-
-    await order.save();
+    const { balanceField } =
+      getOrderBalanceContext(
+        result.order || order,
+      );
 
     return res.json({
       success: true,
-      order: sanitizeOrder(order),
+      refunded: Boolean(result.refunded),
+      walletBalance: result.wallet
+        ? getWalletBalance(
+            result.wallet,
+            balanceField,
+          )
+        : undefined,
+      order: sanitizeOrder(
+        result.order || order,
+      ),
     });
   } catch (error) {
     console.error("Check order error:", error);
@@ -1434,13 +2545,24 @@ exports.checkOrder = async (req, res) => {
         "EPIPE",
         "EAI_AGAIN",
         "ERR_NETWORK",
-      ].includes(String(error.code || "").toUpperCase());
+      ].includes(
+        String(error.code || "")
+          .toUpperCase(),
+      );
 
     return res
-      .status(temporaryFailure ? 503 : error.status || 502)
+      .status(
+        temporaryFailure
+          ? 503
+          : error.status || 502,
+      )
       .json({
         success: false,
         temporary: temporaryFailure,
+        code: getPublicOrderErrorCode(
+          error,
+          "ORDER_CHECK_FAILED",
+        ),
         message: temporaryFailure
           ? "The SMS server is temporarily unavailable. Please try again."
           : extractProviderError(error),
@@ -1727,7 +2849,7 @@ exports.cancelOrder =
                     balanceField,
 
                     description:
-                      `Refund for cancelled ${claimedOrder.service} activation`,
+                      `Refund for cancelled ${claimedOrder.serviceName || claimedOrder.service} activation`,
 
                     status:
                       "completed",
@@ -1961,7 +3083,7 @@ exports.getOrders = async (req, res) => {
 
 exports.getOrder = async (req, res) => {
   try {
-    const order = await Order.findOne({
+    let order = await Order.findOne({
       _id: req.params.id,
       user: req.user._id,
     });
@@ -1969,18 +3091,56 @@ exports.getOrder = async (req, res) => {
     if (!order) {
       return res.status(404).json({
         success: false,
+        code: "ORDER_NOT_FOUND",
         message: "Order not found",
       });
     }
 
+    let result = {
+      order,
+      wallet: null,
+      refunded: Boolean(order.refunded),
+    };
+
+    if (
+      ["cancelled", "expired"].includes(
+        order.status,
+      ) ||
+      (
+        order.status === "waiting" &&
+        order.autoRefundEligible &&
+        orderExpiryHasPassed(order)
+      )
+    ) {
+      result =
+        await reconcileOrderLifecycle(order);
+      order = result.order || order;
+    }
+
+    const { balanceField } =
+      getOrderBalanceContext(order);
+
     return res.json({
       success: true,
+      refunded: Boolean(result.refunded),
+      walletBalance: result.wallet
+        ? getWalletBalance(
+            result.wallet,
+            balanceField,
+          )
+        : undefined,
       order: sanitizeOrder(order),
     });
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Unable to load order",
-    });
+    return res
+      .status(error.status || 500)
+      .json({
+        success: false,
+        code: getPublicOrderErrorCode(
+          error,
+          "ORDER_LOAD_FAILED",
+        ),
+        message: extractProviderError(error),
+      });
   }
 };
