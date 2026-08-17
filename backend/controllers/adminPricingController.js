@@ -10,9 +10,6 @@ const providerManager = require(
 const pricingService = require(
   "../services/pricingService"
 );
-const automaticPricingService = require(
-  "../services/automaticPricingService"
-);
 
 function parseBoolean(value, fallback = undefined) {
   if (value === undefined) {
@@ -95,6 +92,233 @@ function getEffectiveDashboardDateRange(query = {}) {
     : null;
 }
 
+
+function normalizeLookupKey(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function humanizeIdentifier(value) {
+  const text = String(value ?? "").trim();
+
+  if (!text || /^\d+$/.test(text)) {
+    return "";
+  }
+
+  return text
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function unwrapProviderCollection(response, possibleKeys) {
+  const containers = [
+    response,
+    response?.data,
+    response?.result,
+    response?.response,
+  ];
+
+  for (const container of containers) {
+    if (!container || typeof container !== "object") {
+      continue;
+    }
+
+    for (const key of possibleKeys) {
+      if (Object.prototype.hasOwnProperty.call(container, key)) {
+        return container[key];
+      }
+    }
+  }
+
+  for (const candidate of [
+    response?.data,
+    response?.result,
+    response?.response,
+    response,
+  ]) {
+    if (
+      Array.isArray(candidate) ||
+      (candidate && typeof candidate === "object")
+    ) {
+      return candidate;
+    }
+  }
+
+  return [];
+}
+
+function collectionEntries(collection) {
+  if (Array.isArray(collection)) {
+    return collection.map((item, index) => [String(index), item]);
+  }
+
+  if (collection && typeof collection === "object") {
+    return Object.entries(collection);
+  }
+
+  return [];
+}
+
+function createCountryNameMap(response) {
+  const rawCountries = unwrapProviderCollection(response, [
+    "countries",
+    "country",
+    "countryList",
+    "items",
+  ]);
+  const map = {};
+
+  for (const [key, item] of collectionEntries(rawCountries)) {
+    const objectItem =
+      item && typeof item === "object" && !Array.isArray(item)
+        ? item
+        : {};
+    const primitiveName =
+      typeof item === "string" ? item.trim() : "";
+    const name = String(
+      objectItem.eng ??
+        objectItem.name ??
+        objectItem.title ??
+        objectItem.label ??
+        objectItem.countryName ??
+        objectItem.country_name ??
+        primitiveName ??
+        key
+    ).trim();
+
+    if (!name) {
+      continue;
+    }
+
+    const identifiers = [
+      objectItem.id,
+      objectItem.code,
+      objectItem.iso2,
+      objectItem.iso,
+      objectItem.country,
+      objectItem.countryCode,
+      key,
+    ];
+
+    for (const identifier of identifiers) {
+      const lookupKey = normalizeLookupKey(identifier);
+      if (lookupKey) {
+        map[lookupKey] = name;
+      }
+    }
+  }
+
+  return map;
+}
+
+function createServiceNameMap(response) {
+  const rawServices = unwrapProviderCollection(response, [
+    "services",
+    "service",
+    "serviceList",
+    "items",
+  ]);
+  const map = {};
+
+  for (const [key, item] of collectionEntries(rawServices)) {
+    const objectItem =
+      item && typeof item === "object" && !Array.isArray(item)
+        ? item
+        : {};
+    const primitiveName =
+      typeof item === "string" ? item.trim() : "";
+    const name = String(
+      objectItem.name ??
+        objectItem.serviceName ??
+        objectItem.title ??
+        objectItem.label ??
+        primitiveName ??
+        key
+    ).trim();
+
+    if (!name) {
+      continue;
+    }
+
+    const identifiers = [
+      objectItem.id,
+      objectItem.code,
+      objectItem.service,
+      objectItem.slug,
+      key,
+    ];
+
+    for (const identifier of identifiers) {
+      const lookupKey = normalizeLookupKey(identifier);
+      if (lookupKey) {
+        map[lookupKey] = name;
+      }
+    }
+  }
+
+  return map;
+}
+
+async function loadAdminDisplayMaps(servers = []) {
+  const maps = {};
+
+  await Promise.all(
+    servers.map(async (server) => {
+      const [countriesResult, servicesResult] =
+        await Promise.allSettled([
+          providerManager.getCountries({ server }),
+          providerManager.getServices({ server }),
+        ]);
+
+      maps[server] = {
+        countries:
+          countriesResult.status === "fulfilled"
+            ? createCountryNameMap(countriesResult.value)
+            : {},
+        services:
+          servicesResult.status === "fulfilled"
+            ? createServiceNameMap(servicesResult.value)
+            : {},
+      };
+    })
+  );
+
+  return maps;
+}
+
+function getAdminCountryName(order, displayMaps) {
+  const storedName = String(order?.countryName || "").trim();
+  if (storedName) {
+    return storedName;
+  }
+
+  const key = normalizeLookupKey(order?.country);
+  const server = normalizeLookupKey(order?.server);
+  const resolved = displayMaps?.[server]?.countries?.[key];
+
+  if (resolved) {
+    return resolved;
+  }
+
+  // Never expose a provider numeric country ID such as "36".
+  return humanizeIdentifier(order?.country);
+}
+
+function getAdminServiceName(order, displayMaps) {
+  const storedName = String(order?.serviceName || "").trim();
+  if (storedName) {
+    return storedName;
+  }
+
+  const key = normalizeLookupKey(order?.service);
+  const server = normalizeLookupKey(order?.server);
+  const resolved = displayMaps?.[server]?.services?.[key];
+
+  return resolved || humanizeIdentifier(order?.service) || "—";
+}
+
 function ruleResponse(rule) {
   return {
     id: String(rule._id),
@@ -104,13 +328,6 @@ function ruleResponse(rule) {
     service: rule.service,
     serviceName: rule.serviceName,
     operator: rule.operator,
-    pricingStyle:
-      pricingService.normalizePricingStyle(
-        rule.pricingStyle,
-        rule.operator
-      ),
-    maxPriceBufferPercent:
-      Number(rule.maxPriceBufferPercent ?? 50),
     pricingMode: rule.pricingMode,
     fixedSellingPrice: rule.fixedSellingPrice,
     markupPercent: rule.markupPercent,
@@ -202,22 +419,6 @@ exports.upsertRule = async (req, res) => {
       }
     );
 
-    await PricingRule.updateMany(
-      {
-        _id: { $ne: rule._id },
-        server: input.server,
-        country: input.country,
-        service: input.service,
-        isActive: true,
-      },
-      {
-        $set: {
-          isActive: false,
-          updatedBy: req.user._id,
-        },
-      }
-    );
-
     return res.status(201).json({
       success: true,
       rule: ruleResponse(rule),
@@ -250,6 +451,7 @@ exports.updateRule = async (req, res) => {
     }
 
     const existing = await PricingRule.findById(req.params.id);
+
     if (!existing) {
       return res.status(404).json({
         success: false,
@@ -262,44 +464,15 @@ exports.updateRule = async (req, res) => {
       ...req.body,
     });
 
-    let rule = existing;
-    const conflict = await PricingRule.findOne({
-      _id: { $ne: existing._id },
-      server: input.server,
-      country: input.country,
-      service: input.service,
-      operator: input.operator,
+    Object.assign(existing, input, {
+      updatedBy: req.user._id,
     });
 
-    if (conflict) {
-      Object.assign(conflict, input, { updatedBy: req.user._id });
-      await conflict.save();
-      await PricingRule.findByIdAndDelete(existing._id);
-      rule = conflict;
-    } else {
-      Object.assign(existing, input, { updatedBy: req.user._id });
-      await existing.save();
-    }
-
-    await PricingRule.updateMany(
-      {
-        _id: { $ne: rule._id },
-        server: input.server,
-        country: input.country,
-        service: input.service,
-        isActive: true,
-      },
-      {
-        $set: {
-          isActive: false,
-          updatedBy: req.user._id,
-        },
-      }
-    );
+    await existing.save();
 
     return res.json({
       success: true,
-      rule: ruleResponse(rule),
+      rule: ruleResponse(existing),
       message: "Pricing rule updated successfully",
     });
   } catch (error) {
@@ -419,52 +592,28 @@ exports.getOperators = async (req, res) => {
 
 exports.previewPricing = async (req, res) => {
   try {
-    const draftRule = pricingService.normalizeRuleInput(req.body);
-    const {
+    const server = pricingService.normalizeServer(req.body.server);
+    const country = pricingService.normalizeCountry(req.body.country);
+    const service = pricingService.normalizeService(req.body.service);
+    const operator = pricingService.normalizeOperator(req.body.operator);
+
+    const quote = await providerManager.getPrice({
       server,
       country,
       service,
-      operator: configuredOperator,
-      pricingStyle,
-      maxPriceBufferPercent,
-    } = draftRule;
+      operator,
+    });
 
-    let operator = configuredOperator;
-    let quote;
-    let automaticSelection = null;
-    let pricingBasisNgn = null;
-
-    if (pricingStyle === "cheapest_buffer") {
-      automaticSelection =
-        await automaticPricingService.resolveAutomaticQuote({
-          server,
-          country,
-          service,
-          maxPriceBufferPercent,
-        });
-      operator = automaticSelection.operator;
-      quote = automaticSelection.quote;
-      pricingBasisNgn = automaticSelection.pricingBasisNgn;
-    } else {
-      quote = await providerManager.getPrice({
-        server,
-        country,
-        service,
-        operator,
-      });
-    }
+    const hasDraftRule = Boolean(req.body.pricingMode);
 
     const pricing = await pricingService.resolveCustomerPricing({
       server,
       country,
       service,
-      countryName: draftRule.countryName,
-      serviceName: draftRule.serviceName,
       operator,
       providerPrice: quote.price,
       providerCurrency: quote.currency,
-      pricingBasisNgn,
-      draftRule,
+      draftRule: hasDraftRule ? req.body : null,
     });
 
     return res.json({
@@ -473,21 +622,15 @@ exports.previewPricing = async (req, res) => {
         server,
         country,
         service,
-        pricingStyle,
-        maxPriceBufferPercent,
         operator,
         providerCost: pricing.providerPrice,
         providerCurrency: pricing.providerCurrency,
         providerCostNgn: pricing.providerCostNgn,
-        floorCostNgn:
-          automaticSelection?.floorCostNgn ?? pricing.providerCostNgn,
-        pricingBasisNgn: pricing.pricingBasisNgn,
         sellingPrice: pricing.sellingPrice,
         profit: pricing.profit,
-        stock: Number.isFinite(Number(quote.stock)) ? Number(quote.stock) : 0,
-        candidateCount: automaticSelection?.candidateCount || 0,
-        eligibleCount: automaticSelection?.eligibleCount || 0,
-        cheapPool: automaticSelection?.cheapPool || [],
+        stock: Number.isFinite(Number(quote.stock))
+          ? Number(quote.stock)
+          : 0,
         pricingMode: pricing.pricingMode,
         pricingSource: pricing.pricingSource,
         pricingRuleId: pricing.pricingRuleId
@@ -861,8 +1004,6 @@ exports.getSales = async (req, res) => {
         { customerEmail: { $regex: search, $options: "i" } },
         { phoneNumber: { $regex: search, $options: "i" } },
         { otpCode: { $regex: search, $options: "i" } },
-        { countryName: { $regex: search, $options: "i" } },
-        { serviceName: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -876,6 +1017,18 @@ exports.getSales = async (req, res) => {
       Order.countDocuments(filter),
     ]);
 
+    const servers = [
+      ...new Set(
+        orders
+          .map((order) => normalizeLookupKey(order?.server))
+          .filter((server) =>
+            ["server1", "server2"].includes(server)
+          )
+      ),
+    ];
+
+    const displayMaps = await loadAdminDisplayMaps(servers);
+
     const sales = orders.map((order) => ({
       id: String(order._id),
       server: order.server,
@@ -886,21 +1039,9 @@ exports.getSales = async (req, res) => {
         email: order.customerEmail || order.user?.email || "",
       },
       country: order.country,
-      countryName:
-        String(
-          order.countryName ||
-            order.pricingSnapshot?.countryName ||
-            order.pricingSnapshot?.country?.name ||
-            ""
-        ).trim(),
+      countryName: getAdminCountryName(order, displayMaps),
       service: order.service,
-      serviceName:
-        String(
-          order.serviceName ||
-            order.pricingSnapshot?.serviceName ||
-            order.pricingSnapshot?.service?.name ||
-            ""
-        ).trim(),
+      serviceName: getAdminServiceName(order, displayMaps),
       operator: order.operator,
       phoneNumber: order.phoneNumber,
       otpCode: order.otpCode,
@@ -1172,4 +1313,3 @@ exports.getPayments = async (req, res) => {
       });
   }
 };
-

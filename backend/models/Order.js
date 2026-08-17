@@ -30,12 +30,26 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
 
+    /* Friendly country label shown to customers/admins. */
+    countryName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     service: {
       type: String,
       required: true,
       trim: true,
       lowercase: true,
       index: true,
+    },
+
+    /* Friendly service label shown to customers/admins. */
+    serviceName: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     operator: {
@@ -159,29 +173,6 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
 
-    providerStartedAt: {
-      type: Date,
-      default: null,
-    },
-
-    expiresAt: {
-      type: Date,
-      default: null,
-      index: true,
-    },
-
-    /*
-     * Rollout safety: only orders explicitly created by the new lifecycle
-     * code are eligible for automatic provider-timeout refunds. This avoids
-     * double-crediting historical orders that may already have been manually
-     * compensated before this fix was deployed.
-     */
-    autoRefundEligible: {
-      type: Boolean,
-      default: false,
-      index: true,
-    },
-
     refunded: {
       type: Boolean,
       default: false,
@@ -233,7 +224,6 @@ orderSchema.index({ createdAt: -1 });
 orderSchema.index({ server: 1, createdAt: -1 });
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ refunded: 1, createdAt: -1 });
-orderSchema.index({ autoRefundEligible: 1, status: 1, expiresAt: 1 });
 
 function hidePrivateProviderFields(_doc, ret) {
   delete ret.provider;
