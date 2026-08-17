@@ -23,51 +23,21 @@ function capitalize(value) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : "—";
 }
 
-const SERVICE_NAME_ALIASES = {
-  wa: "WhatsApp",
-  ig: "Instagram",
-  tg: "Telegram",
-  fb: "Facebook",
-  go: "Google",
-  am: "Amazon",
-  ds: "Discord",
-  tt: "TikTok",
-  tw: "X / Twitter",
-  nf: "Netflix",
-};
-
-function getServiceDisplayName(value, explicitName = "") {
-  const name = String(explicitName || "").trim();
-
-  if (name) {
-    return name;
-  }
-
-  const code = String(value || "").trim();
-  const normalized = code.toLowerCase();
-
-  if (SERVICE_NAME_ALIASES[normalized]) {
-    return SERVICE_NAME_ALIASES[normalized];
-  }
-
-  if (!code) {
-    return "—";
-  }
-
-  return code
-    .replace(/[-_]/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+function getServiceLabel(sale) {
+  const storedName = String(sale?.serviceName || "").trim();
+  return storedName || capitalize(sale?.service);
 }
 
-function getCountryDisplayName(value, explicitName = "") {
-  const name = String(explicitName || "").trim();
+function getCountryLabel(sale) {
+  const storedName = String(sale?.countryName || "").trim();
+  if (storedName) return storedName;
 
-  if (name) {
-    return name;
-  }
+  const raw = String(sale?.country || "").trim();
+  if (!raw || /^\d+$/.test(raw)) return "—";
 
-  const raw = String(value || "").trim();
-  return raw || "—";
+  return raw
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export default function AdminOrderCard({ sale }) {
@@ -81,12 +51,12 @@ export default function AdminOrderCard({ sale }) {
   return (
     <article className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-lg font-black text-[var(--foreground)]">
-            {getServiceDisplayName(
-              sale.service,
-              sale.serviceName
-            )}
+        <div>
+          <p className="text-lg font-black text-[var(--foreground)]">
+            {getServiceLabel(sale)}
+          </p>
+          <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+            {getCountryLabel(sale)} · {sale.server === "server1" ? "Server 1" : "Server 2"}
           </p>
         </div>
         <StatusBadge status={sale.status} />
