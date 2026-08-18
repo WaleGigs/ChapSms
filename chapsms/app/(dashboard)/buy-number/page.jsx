@@ -5,12 +5,11 @@ import toast from "react-hot-toast";
 import {
   CheckCircle2,
   Copy,
-  Hash,
   LoaderCircle,
   MessageSquareText,
   Phone,
+  Plus,
   RefreshCw,
-  RotateCcw,
   Timer,
   XCircle,
 } from "lucide-react";
@@ -20,108 +19,16 @@ import { useOrders } from "@/hooks/useOrders";
 import { useWallet } from "@/hooks/useWallet";
 import { catalogService } from "@/services/catalogService";
 import { orderService } from "@/services/orderService";
-import {
-  trackNumberPurchased,
-} from "@/lib/tiktokEvents";
+import { trackNumberPurchased } from "@/lib/tiktokEvents";
 
 import SearchableCountrySelect from "@/components/dashboard/SearchableCountrySelect";
 import SearchableServiceSelect from "@/components/dashboard/SearchableServiceSelect";
 import Button from "@/components/ui/Button";
 
-const ACTIVE_ORDER_KEY = "chapsms-active-order";
 const POLLING_INTERVAL_MS = 5000;
-const MAX_POLLING_ATTEMPTS = 240;
 const FALLBACK_ORDER_LIFETIME_MS = 20 * 60 * 1000;
-
-function getOrderExpiryMs(order) {
-  const createdAt = new Date(
-    order?.createdAt || ""
-  ).getTime();
-
-  const fallbackExpiry =
-    Number.isFinite(createdAt)
-      ? createdAt +
-        FALLBACK_ORDER_LIFETIME_MS
-      : null;
-
-  const explicitExpiry = new Date(
-    order?.expiresAt || ""
-  ).getTime();
-
-  if (
-    Number.isFinite(explicitExpiry) &&
-    Number.isFinite(fallbackExpiry)
-  ) {
-    const drift = Math.abs(
-      explicitExpiry - fallbackExpiry
-    );
-
-    /*
-     * ChapsSms is a 20-minute activation window.
-     * Ignore a provider/server timestamp that would turn it
-     * into values such as 199:54.
-     */
-    return drift <= 5 * 60 * 1000
-      ? explicitExpiry
-      : fallbackExpiry;
-  }
-
-  if (Number.isFinite(explicitExpiry)) {
-    return explicitExpiry;
-  }
-
-  return Number.isFinite(fallbackExpiry)
-    ? fallbackExpiry
-    : null;
-}
-
-function formatRemainingTime(totalSeconds) {
-  const safeSeconds = Math.max(
-    0,
-    Number(totalSeconds || 0)
-  );
-
-  const minutes = Math.floor(
-    safeSeconds / 60
-  );
-  const seconds = Math.floor(
-    safeSeconds % 60
-  );
-
-  return `${String(minutes).padStart(2, "0")}:${String(
-    seconds
-  ).padStart(2, "0")}`;
-}
-
-function formatNaira(value) {
-  return `₦${Number(value || 0).toLocaleString("en-NG", {
-    maximumFractionDigits: 0,
-  })}`;
-}
-
-function formatDate(value) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "—";
-
-  return new Intl.DateTimeFormat("en-NG", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function formatName(value) {
-  if (!value) return "Unknown";
-
-  return String(value)
-    .replace(/[-_]/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
-}
+const RECENT_RECEIVED_VISIBLE_MS = 60 * 60 * 1000;
+const DISMISSED_ORDERS_KEY = "chapsms-dismissed-active-orders";
 
 const ACTIVE_SERVICE_NAME_ALIASES = {
   wa: "WhatsApp",
@@ -136,10 +43,147 @@ const ACTIVE_SERVICE_NAME_ALIASES = {
   nf: "Netflix",
 };
 
-function getActiveOrderServiceName(order, selectedService) {
-  const explicitName = String(
-    order?.serviceName || selectedService?.name || ""
-  ).trim();
+function getOrderId(order) {
+  return order?._id || order?.id || "";
+}
+
+function getOrderStatus(order) {
+  return String(order?.status || "waiting")
+    .trim()
+    .toLowerCase();
+}
+
+function isCurrentTrackableOrder(order) {
+  const server = String(order?.server || "")
+    .trim()
+    .toLowerCase();
+  const providerOrderId = String(order?.providerOrderId || "").trim();
+  const sellingPrice = Number(order?.sellingPrice);
+
+  // /orders also returns historical records from older ChapSMS versions.
+  // Those legacy rows can still say "waiting", but they may point to the
+  // retired 5sim provider or be missing fields required by the current model.
+  // Never treat those historical rows as live activations.
+  if (!["server1", "server2"].includes(server) || !providerOrderId) {
+    return false;
+  }
+
+  // New orders created by the 20-minute lifecycle/refund backend carry this
+  // rollout flag. Keep the sellingPrice fallback so the UI remains compatible
+  // if the public serializer omits the rollout flag in a later backend build.
+  if (order?.autoRefundEligible === true) {
+    return true;
+  }
+
+  return Number.isFinite(sellingPrice) && sellingPrice > 0;
+}
+
+function isLiveOrder(order) {
+  return (
+    isCurrentTrackableOrder(order) &&
+    ["waiting", "cancelling"].includes(getOrderStatus(order))
+  );
+}
+
+function isRecentReceivedOrder(order, nowMs) {
+  if (!isCurrentTrackableOrder(order)) {
+    return false;
+  }
+  if (getOrderStatus(order) !== "received" && !order?.otpCode) {
+    return false;
+  }
+
+  const createdAt = new Date(order?.createdAt || "").getTime();
+
+  if (!Number.isFinite(createdAt)) {
+    return false;
+  }
+
+  return nowMs - createdAt <= RECENT_RECEIVED_VISIBLE_MS;
+}
+
+function getOrderExpiryMs(order) {
+  const createdAt = new Date(order?.createdAt || "").getTime();
+
+  const fallbackExpiry = Number.isFinite(createdAt)
+    ? createdAt + FALLBACK_ORDER_LIFETIME_MS
+    : null;
+
+  const explicitExpiry = new Date(order?.expiresAt || "").getTime();
+
+  if (Number.isFinite(explicitExpiry) && Number.isFinite(fallbackExpiry)) {
+    const drift = Math.abs(explicitExpiry - fallbackExpiry);
+
+    // ChapSMS uses a 20-minute activation window. Ignore a bad provider
+    // timestamp that would turn the countdown into an unrealistic value.
+    return drift <= 5 * 60 * 1000 ? explicitExpiry : fallbackExpiry;
+  }
+
+  if (Number.isFinite(explicitExpiry)) {
+    return explicitExpiry;
+  }
+
+  return Number.isFinite(fallbackExpiry) ? fallbackExpiry : null;
+}
+
+function getRemainingSeconds(order, nowMs) {
+  const expiryMs = getOrderExpiryMs(order);
+
+  if (!Number.isFinite(expiryMs)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.ceil((expiryMs - nowMs) / 1000));
+}
+
+function formatRemainingTime(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = Math.floor(safeSeconds % 60);
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatNaira(value) {
+  return `₦${Number(value || 0).toLocaleString("en-NG", {
+    maximumFractionDigits: 0,
+  })}`;
+}
+
+function getPurchaseParts(value) {
+  if (!value) {
+    return { date: "—", time: "—" };
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return { date: "—", time: "—" };
+  }
+
+  return {
+    date: new Intl.DateTimeFormat("en-NG", {
+      day: "numeric",
+      month: "short",
+    }).format(date),
+    time: new Intl.DateTimeFormat("en-NG", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date),
+  };
+}
+
+function formatName(value) {
+  if (!value) return "Unknown";
+
+  return String(value)
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function getOrderServiceName(order) {
+  const explicitName = String(order?.serviceName || "").trim();
 
   if (explicitName) {
     return explicitName;
@@ -151,14 +195,8 @@ function getActiveOrderServiceName(order, selectedService) {
   return alias || formatName(code);
 }
 
-function getActiveOrderCountryName(order, selectedCountry) {
-  const explicitName = String(
-    order?.countryName ||
-      selectedCountry?.eng ||
-      selectedCountry?.name ||
-      selectedCountry?.label ||
-      ""
-  ).trim();
+function getOrderCountryName(order) {
+  const explicitName = String(order?.countryName || "").trim();
 
   if (explicitName) {
     return explicitName;
@@ -167,15 +205,51 @@ function getActiveOrderCountryName(order, selectedCountry) {
   return formatName(order?.country || "");
 }
 
-function getActiveOrderCountryFlag(selectedCountry) {
-  return String(selectedCountry?.flag || "").trim();
+function formatPhoneNumber(value) {
+  if (!value) return "—";
+
+  const digits = String(value).replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+1 ${digits.slice(1, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+
+  return String(value);
 }
 
+function getServerLabel(server) {
+  const normalized = String(server || "").toLowerCase();
 
-function getOrderId(order) {
-  return order?._id || order?.id || "";
+  if (normalized === "server1") return "S1";
+  if (normalized === "server2") return "S2";
+
+  return "—";
 }
 
+function getStatusLabel(order) {
+  const status = getOrderStatus(order);
+
+  if (order?.otpCode || status === "received") return "Code received";
+  if (status === "expired") return "Order expired";
+  if (status === "cancelled") return "Order cancelled";
+  if (status === "cancelling") return "Cancelling order";
+
+  return "Waiting for SMS";
+}
+
+function getStatusClasses(order) {
+  const status = getOrderStatus(order);
+
+  if (order?.otpCode || status === "received") {
+    return "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-900";
+  }
+
+  if (["expired", "cancelled"].includes(status)) {
+    return "bg-red-50 text-red-700 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900";
+  }
+
+  return "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900";
+}
 
 function getChapsSmsMessage(
   value,
@@ -228,8 +302,6 @@ function getChapsSmsMessage(
       : value?.message || value?.response?.data?.message || ""
   ).trim();
 
-  // Only trust customer-facing messages that have already been branded
-  // by the ChapsSms backend. Everything else is replaced with the fallback.
   if (/chapssms/i.test(message)) {
     return message;
   }
@@ -237,16 +309,224 @@ function getChapsSmsMessage(
   return fallback;
 }
 
-export default function BuyNumberPage() {
-  const { createOrder } = useOrders();
+function CompactOrderCard({
+  order,
+  nowMs,
+  refreshing,
+  cancelling,
+  onRefresh,
+  onCancel,
+  onDismiss,
+  onCopy,
+}) {
+  const orderId = getOrderId(order);
+  const status = getOrderStatus(order);
+  const otpCode = String(order?.otpCode || "").trim();
+  const live = isLiveOrder(order) && !otpCode;
+  const received = Boolean(otpCode) || status === "received";
+  const remainingSeconds = live ? getRemainingSeconds(order, nowMs) : 0;
+  const purchased = getPurchaseParts(order?.createdAt);
 
+  return (
+    <article className="min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
+      <div className="p-4 sm:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <span
+              className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${getStatusClasses(
+                order
+              )}`}
+            >
+              {received ? (
+                <CheckCircle2 size={13} />
+              ) : live ? (
+                <LoaderCircle className="animate-spin" size={13} />
+              ) : (
+                <XCircle size={13} />
+              )}
+              {getStatusLabel(order)}
+            </span>
+
+            <p className="mt-2 truncate text-sm font-black text-[var(--foreground)]">
+              {getOrderCountryName(order)}
+              <span className="mx-2 text-[var(--muted-foreground)]">•</span>
+              {getOrderServiceName(order)}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onRefresh(orderId)}
+            disabled={refreshing || !live}
+            aria-label="Refresh order"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+          </button>
+        </div>
+
+        {/* Compact horizontal metadata row: Paid / Order ID / Server / Purchased */}
+        <div className="mt-4 grid grid-cols-4 divide-x divide-[var(--border)] overflow-hidden rounded-xl bg-[var(--muted)]">
+          <div className="min-w-0 px-1.5 py-2.5 text-center sm:px-2">
+            <p className="text-[8px] font-black uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:text-[9px]">
+              Paid
+            </p>
+            <p className="mt-1 truncate text-[10px] font-black text-[var(--foreground)] sm:text-xs">
+              {formatNaira(order?.sellingPrice ?? order?.price)}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              onCopy(order?.providerOrderId || orderId, "Order ID copied")
+            }
+            className="min-w-0 px-1.5 py-2.5 text-center transition hover:bg-black/[0.03] dark:hover:bg-white/[0.03] sm:px-2"
+          >
+            <p className="text-[8px] font-black uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:text-[9px]">
+              Order ID
+            </p>
+            <p className="mt-1 truncate font-mono text-[10px] font-bold text-[var(--foreground)] sm:text-xs">
+              {order?.providerOrderId || orderId || "—"}
+            </p>
+          </button>
+
+          <div className="min-w-0 px-1.5 py-2.5 text-center sm:px-2">
+            <p className="text-[8px] font-black uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:text-[9px]">
+              Server
+            </p>
+            <p className="mt-1 text-[10px] font-black text-[var(--foreground)] sm:text-xs">
+              {getServerLabel(order?.server)}
+            </p>
+          </div>
+
+          <div className="min-w-0 px-1.5 py-2.5 text-center sm:px-2">
+            <p className="text-[8px] font-black uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:text-[9px]">
+              Purchased
+            </p>
+            <p className="mt-1 truncate text-[10px] font-black text-[var(--foreground)] sm:text-xs">
+              {purchased.date}
+            </p>
+            <p className="mt-0.5 truncate text-[9px] font-semibold text-[var(--muted-foreground)]">
+              {purchased.time}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-[var(--border)] px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[9px] font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                Virtual number
+              </p>
+              <p className="mt-1 truncate text-lg font-black tracking-tight text-[var(--foreground)] sm:text-xl">
+                {formatPhoneNumber(order?.phoneNumber)}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onCopy(order?.phoneNumber, "Number copied")}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--muted)] px-3 text-xs font-bold text-[var(--foreground)] transition hover:opacity-80"
+            >
+              <Copy size={14} />
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <div
+          className={`mt-3 rounded-xl px-3 py-3 text-white ${
+            otpCode ? "bg-blue-600" : "bg-slate-950"
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className={`text-[9px] font-black uppercase tracking-[0.12em] ${otpCode ? "text-blue-100" : "text-slate-400"}`}>
+                OTP code
+              </p>
+              <p
+                className={`mt-1 truncate text-xl font-black tracking-[0.12em] ${
+                  !otpCode && live ? "animate-pulse" : ""
+                }`}
+              >
+                {otpCode || (live ? "• • • • • •" : "Unavailable")}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={!otpCode}
+              onClick={() => onCopy(otpCode, "OTP copied")}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Copy size={14} />
+              OTP
+            </button>
+          </div>
+        </div>
+
+        {live && (
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-[var(--muted)] px-3 py-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Timer className="shrink-0 text-blue-600" size={17} />
+              <div className="min-w-0">
+                <p className="text-xs font-black text-[var(--foreground)]">
+                  Waiting for SMS
+                </p>
+                <p className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">
+                  Checking automatically every five seconds.
+                </p>
+              </div>
+            </div>
+
+            <p className="shrink-0 text-lg font-black tabular-nums text-[var(--foreground)]">
+              {formatRemainingTime(remainingSeconds)}
+            </p>
+          </div>
+        )}
+
+        {live && (
+          <button
+            type="button"
+            onClick={() => onCancel(order)}
+            disabled={cancelling}
+            className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-[var(--card)] px-4 text-xs font-black text-red-600 transition hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:hover:bg-red-950/30"
+          >
+            {cancelling ? (
+              <LoaderCircle className="animate-spin" size={15} />
+            ) : (
+              <XCircle size={15} />
+            )}
+            {cancelling ? "Cancelling..." : "Cancel Order"}
+          </button>
+        )}
+
+        {received && (
+          <button
+            type="button"
+            onClick={() => onDismiss(orderId)}
+            className="mt-3 h-10 w-full rounded-xl bg-[var(--muted)] px-4 text-xs font-black text-[var(--foreground)] transition hover:opacity-80"
+          >
+            Done — hide this order
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+export default function BuyNumberPage() {
   const {
-    updateWalletBalance,
-    refreshWallet,
-  } = useWallet();
+    orders,
+    loading: ordersLoading,
+    createOrder,
+    updateOrder,
+  } = useOrders();
+
+  const { updateWalletBalance, refreshWallet } = useWallet();
 
   const [selectedServer, setSelectedServer] = useState("server1");
-
   const {
     countries,
     services,
@@ -257,22 +537,56 @@ export default function BuyNumberPage() {
 
   const [selectedCountryCode, setSelectedCountryCode] = useState("");
   const [selectedServiceId, setSelectedServiceId] = useState("");
-
   const [livePrice, setLivePrice] = useState(null);
   const [liveStock, setLiveStock] = useState(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const [priceError, setPriceError] = useState("");
-
-  const [currentOrder, setCurrentOrder] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
-  const [checkingOrder, setCheckingOrder] = useState(false);
-  const [cancellingOrder, setCancellingOrder] = useState(false);
-  const [restoringOrder, setRestoringOrder] = useState(true);
+  const [showPurchasePanel, setShowPurchasePanel] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [refreshingOrderIds, setRefreshingOrderIds] = useState(() => new Set());
+  const [cancellingOrderIds, setCancellingOrderIds] = useState(() => new Set());
+  const [dismissedOrderIds, setDismissedOrderIds] = useState(() => new Set());
 
-  const pollingInProgress = useRef(false);
-  const pollingAttempts = useRef(0);
-  const expiryCheckOrderRef = useRef("");
-  const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const purchasePanelRef = useRef(null);
+  const pollingInProgressRef = useRef(new Set());
+  const blockedPollingRef = useRef(new Set());
+  const expiryCheckedRef = useRef(new Set());
+  const otpNotifiedRef = useRef(new Set());
+
+  // Keep changing hook/context callbacks in refs so the 5-second polling callback
+  // stays stable and is not reset by the 1-second countdown render.
+  const updateOrderRef = useRef(updateOrder);
+  const refreshWalletRef = useRef(refreshWallet);
+
+  useEffect(() => {
+    updateOrderRef.current = updateOrder;
+  }, [updateOrder]);
+
+  useEffect(() => {
+    refreshWalletRef.current = refreshWallet;
+  }, [refreshWallet]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DISMISSED_ORDERS_KEY);
+      const ids = JSON.parse(raw || "[]");
+
+      if (Array.isArray(ids)) {
+        setDismissedOrderIds(new Set(ids.map(String)));
+      }
+    } catch {
+      setDismissedOrderIds(new Set());
+    }
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
 
   const selectedCountry = useMemo(() => {
     return (
@@ -294,28 +608,15 @@ export default function BuyNumberPage() {
     return (
       availableServices.find(
         (service) =>
-          String(
-            service.id ||
-              service.code ||
-              service.service ||
-              ""
-          ) === String(selectedServiceId)
+          String(service.id || service.code || service.service || "") ===
+          String(selectedServiceId)
       ) || null
     );
   }, [availableServices, selectedServiceId]);
 
-  const orderStatus = String(
-    currentOrder?.status || "waiting"
-  ).toLowerCase();
-
-  const otpCode = currentOrder?.otpCode || "";
-
   const estimatedPrice = Number(livePrice || 0);
-
   const serviceStock =
-    liveStock === null || liveStock === undefined
-      ? null
-      : Number(liveStock);
+    liveStock === null || liveStock === undefined ? null : Number(liveStock);
 
   const serviceIsAvailable =
     Boolean(selectedCountry) &&
@@ -324,95 +625,38 @@ export default function BuyNumberPage() {
     Number.isFinite(estimatedPrice) &&
     estimatedPrice > 0;
 
-  const orderIsClosed = [
-    "received",
-    "expired",
-    "cancelled",
-  ].includes(orderStatus);
+  const visibleOrders = useMemo(() => {
+    const list = Array.isArray(orders) ? orders : [];
 
-  const currentOrderId = getOrderId(currentOrder);
+    return list
+      .filter((order) => {
+        const orderId = getOrderId(order);
 
-  useEffect(() => {
-    if (
-      !currentOrderId ||
-      orderIsClosed ||
-      otpCode
-    ) {
-      setRemainingSeconds(0);
-      return undefined;
-    }
+        if (!orderId || dismissedOrderIds.has(String(orderId))) {
+          return false;
+        }
 
-    const expiryMs = getOrderExpiryMs(
-      currentOrder
-    );
+        return isLiveOrder(order) || isRecentReceivedOrder(order, nowMs);
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a?.createdAt || 0).getTime();
+        const bTime = new Date(b?.createdAt || 0).getTime();
+        return bTime - aTime;
+      });
+  }, [orders, dismissedOrderIds, nowMs]);
 
-    if (!Number.isFinite(expiryMs)) {
-      setRemainingSeconds(0);
-      return undefined;
-    }
-
-    function updateRemaining() {
-      setRemainingSeconds(
-        Math.max(
-          0,
-          Math.ceil(
-            (expiryMs - Date.now()) /
-              1000
-          )
-        )
-      );
-    }
-
-    updateRemaining();
-
-    const interval = window.setInterval(
-      updateRemaining,
-      1000
-    );
-
-    return () =>
-      window.clearInterval(interval);
-  }, [
-    currentOrderId,
-    currentOrder?.expiresAt,
-    currentOrder?.createdAt,
-    orderIsClosed,
-    otpCode,
-  ]);
-
-  const saveActiveOrder = useCallback((order) => {
-    const orderId = getOrderId(order);
-
-    if (!orderId) return;
-
-    localStorage.setItem(ACTIVE_ORDER_KEY, orderId);
-  }, []);
-
-  const clearActiveOrder = useCallback(() => {
-    localStorage.removeItem(ACTIVE_ORDER_KEY);
-  }, []);
-
-  const applyOrder = useCallback(
-    (order) => {
-      if (!order) return;
-
-      setCurrentOrder(order);
-
-      const status = String(
-        order.status || "waiting"
-      ).toLowerCase();
-
-      if (
-        order.otpCode ||
-        ["received", "expired", "cancelled"].includes(status)
-      ) {
-        clearActiveOrder();
-      } else {
-        saveActiveOrder(order);
-      }
-    },
-    [clearActiveOrder, saveActiveOrder]
+  const liveOrders = useMemo(
+    () => visibleOrders.filter((order) => isLiveOrder(order) && !order?.otpCode),
+    [visibleOrders]
   );
+
+  const liveOrderIds = useMemo(
+    () => liveOrders.map((order) => String(getOrderId(order))).filter(Boolean),
+    [liveOrders]
+  );
+
+  const liveOrderIdsKey = liveOrderIds.join("|");
+  const shouldShowPurchasePanel = showPurchasePanel || liveOrders.length === 0;
 
   useEffect(() => {
     if (!selectedCountryCode) {
@@ -420,8 +664,7 @@ export default function BuyNumberPage() {
     }
 
     const countryStillExists = countries.some(
-      (country) =>
-        String(country.id) === String(selectedCountryCode)
+      (country) => String(country.id) === String(selectedCountryCode)
     );
 
     if (!countryStillExists) {
@@ -437,12 +680,8 @@ export default function BuyNumberPage() {
 
     const serviceStillExists = availableServices.some(
       (service) =>
-        String(
-          service.id ||
-            service.code ||
-            service.service ||
-            ""
-        ) === String(selectedServiceId)
+        String(service.id || service.code || service.service || "") ===
+        String(selectedServiceId)
     );
 
     if (!serviceStillExists) {
@@ -475,21 +714,16 @@ export default function BuyNumberPage() {
             selectedCountry.label ||
             "",
           service:
-            selectedService.id ||
-            selectedService.code ||
-            selectedService.service,
+            selectedService.id || selectedService.code || selectedService.service,
           serviceName:
             selectedService.name ||
             selectedService.title ||
             selectedService.label ||
             "",
-          operator:
-            selectedService.preferredOperator || "any",
+          operator: selectedService.preferredOperator || "any",
         });
 
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         const price = Number(response?.price);
         const stock = Number(response?.stock);
@@ -501,9 +735,7 @@ export default function BuyNumberPage() {
         setLivePrice(price);
         setLiveStock(Number.isFinite(stock) ? stock : null);
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         setLivePrice(null);
         setLiveStock(null);
@@ -526,190 +758,153 @@ export default function BuyNumberPage() {
     };
   }, [selectedServer, selectedCountry, selectedService]);
 
-  useEffect(() => {
-    async function restoreActiveOrder() {
-      try {
-        const savedOrderId = localStorage.getItem(
-          ACTIVE_ORDER_KEY
-        );
+  const checkOrderById = useCallback(async (orderId, { showToast = false } = {}) => {
+    const normalizedOrderId = String(orderId || "").trim();
 
-        if (!savedOrderId) return;
-
-        const restoredOrder =
-          await orderService.getOrder(savedOrderId);
-
-        applyOrder(restoredOrder);
-
-        if (
-          restoredOrder?.refunded ||
-          ["cancelled", "expired"].includes(
-            String(
-              restoredOrder?.status || ""
-            ).toLowerCase()
-          )
-        ) {
-          await refreshWallet();
-        }
-      } catch (error) {
-        console.error(
-          "Active order restoration failed:",
-          error
-        );
-
-        clearActiveOrder();
-      } finally {
-        setRestoringOrder(false);
-      }
+    if (
+      !normalizedOrderId ||
+      blockedPollingRef.current.has(normalizedOrderId) ||
+      pollingInProgressRef.current.has(normalizedOrderId)
+    ) {
+      return null;
     }
 
-    restoreActiveOrder();
-  }, [
-    applyOrder,
-    clearActiveOrder,
-    refreshWallet,
-  ]);
+    try {
+      pollingInProgressRef.current.add(normalizedOrderId);
 
-  const checkCurrentOrder = useCallback(
-    async ({ showToast = false } = {}) => {
-      if (
-        !currentOrderId ||
-        pollingInProgress.current ||
-        orderIsClosed
-      ) {
+      const updatedOrder = await orderService.checkOrder(normalizedOrderId);
+
+      if (!updatedOrder) {
         return null;
       }
 
-      try {
-        pollingInProgress.current = true;
+      updateOrderRef.current?.(updatedOrder);
 
-        const updatedOrder =
-          await orderService.checkOrder(currentOrderId);
-
-        applyOrder(updatedOrder);
-
-        const updatedStatus = String(
-          updatedOrder?.status || ""
-        ).toLowerCase();
-
-        if (
-          updatedOrder?.refunded ||
-          ["cancelled", "expired"].includes(
-            updatedStatus
-          )
-        ) {
-          await refreshWallet();
-        }
-
-        if (updatedOrder.otpCode) {
-          toast.success("OTP received successfully");
-        } else if (showToast) {
-          toast.success("Order refreshed");
-        }
-
-        return updatedOrder;
-      } catch (error) {
-        console.error("Order check failed:", error);
-
-        if (showToast) {
-          toast.error(
-            getChapsSmsMessage(
-              error,
-              "ChapsSms could not refresh the order right now."
-            )
-          );
-        }
-
-        return null;
-      } finally {
-        pollingInProgress.current = false;
-      }
-    },
-    [
-      currentOrderId,
-      orderIsClosed,
-      applyOrder,
-      refreshWallet,
-    ]
-  );
-
-  useEffect(() => {
-    if (
-      !currentOrderId ||
-      orderIsClosed ||
-      otpCode ||
-      remainingSeconds > 0
-    ) {
-      return;
-    }
-
-    if (
-      expiryCheckOrderRef.current ===
-      currentOrderId
-    ) {
-      return;
-    }
-
-    expiryCheckOrderRef.current =
-      currentOrderId;
-
-    checkCurrentOrder({
-      showToast: false,
-    });
-  }, [
-    currentOrderId,
-    orderIsClosed,
-    otpCode,
-    remainingSeconds,
-    checkCurrentOrder,
-  ]);
-
-  useEffect(() => {
-    if (
-      !currentOrderId ||
-      orderIsClosed ||
-      otpCode
-    ) {
-      pollingAttempts.current = 0;
-      return;
-    }
-
-    pollingAttempts.current = 0;
-
-    const interval = window.setInterval(async () => {
-      pollingAttempts.current += 1;
+      const updatedId = String(getOrderId(updatedOrder) || normalizedOrderId);
+      const updatedStatus = getOrderStatus(updatedOrder);
 
       if (
-        pollingAttempts.current >
-        MAX_POLLING_ATTEMPTS
+        updatedOrder?.refunded ||
+        ["cancelled", "expired"].includes(updatedStatus)
       ) {
-        window.clearInterval(interval);
+        await refreshWalletRef.current?.();
+      }
 
+      if (updatedOrder?.otpCode && !otpNotifiedRef.current.has(updatedId)) {
+        otpNotifiedRef.current.add(updatedId);
+        toast.success(`${getOrderServiceName(updatedOrder)} OTP received`);
+      } else if (showToast) {
+        toast.success("Order refreshed");
+      }
+
+      return updatedOrder;
+    } catch (error) {
+      const message = String(error?.message || "");
+      const legacyOrderError =
+        /Unsupported SMS server reference:\s*5sim/i.test(message) ||
+        /Order validation failed:.*(?:server|providerCostNgn|sellingPrice)/i.test(
+          message
+        );
+
+      if (legacyOrderError) {
+        // A stale historical order slipped through the API result. Block it
+        // permanently for this page session instead of hammering the backend
+        // every five seconds.
+        blockedPollingRef.current.add(normalizedOrderId);
+        return null;
+      }
+
+      console.error(`Order ${normalizedOrderId} check failed:`, error);
+
+      if (showToast) {
         toast.error(
-          "Automatic order checking stopped. You can refresh the order manually."
+          getChapsSmsMessage(
+            error,
+            "ChapsSms could not refresh this order right now."
+          )
         );
-
-        return;
       }
 
-      const updatedOrder = await checkCurrentOrder();
+      return null;
+    } finally {
+      pollingInProgressRef.current.delete(normalizedOrderId);
+    }
+  }, []);
 
-      if (
-        updatedOrder?.otpCode ||
-        ["received", "expired", "cancelled"].includes(
-          String(updatedOrder?.status || "").toLowerCase()
-        )
-      ) {
-        window.clearInterval(interval);
-      }
+  // Poll every waiting activation independently. One order receiving an OTP no
+  // longer stops the other active orders from being checked.
+  useEffect(() => {
+    if (!liveOrderIdsKey) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      const ids = liveOrderIdsKey.split("|").filter(Boolean);
+
+      Promise.allSettled(
+        ids.map((orderId) => checkOrderById(orderId, { showToast: false }))
+      );
     }, POLLING_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [
-    currentOrderId,
-    orderIsClosed,
-    otpCode,
-    checkCurrentOrder,
-  ]);
+  }, [liveOrderIdsKey, checkOrderById]);
+
+  // At 00:00 immediately ask the backend to reconcile/cancel/refund that exact
+  // order. The backend remains the authority for the actual refund.
+  useEffect(() => {
+    for (const order of liveOrders) {
+      const orderId = String(getOrderId(order) || "");
+
+      if (!orderId || expiryCheckedRef.current.has(orderId)) {
+        continue;
+      }
+
+      if (getRemainingSeconds(order, nowMs) > 0) {
+        continue;
+      }
+
+      expiryCheckedRef.current.add(orderId);
+      checkOrderById(orderId, { showToast: false });
+    }
+  }, [liveOrders, nowMs, checkOrderById]);
+
+  function resetLivePrice() {
+    setLivePrice(null);
+    setLiveStock(null);
+    setPriceError("");
+    setPriceLoading(false);
+  }
+
+  function handleServerChange(server) {
+    if (purchasing) return;
+
+    setSelectedServer(server);
+    setSelectedCountryCode("");
+    setSelectedServiceId("");
+    resetLivePrice();
+  }
+
+  function handleCountryChange(countryId) {
+    setSelectedCountryCode(String(countryId || ""));
+    setSelectedServiceId("");
+    resetLivePrice();
+  }
+
+  function handleServiceChange(serviceId) {
+    setSelectedServiceId(String(serviceId || ""));
+    resetLivePrice();
+  }
+
+  function openPurchasePanel() {
+    setShowPurchasePanel(true);
+
+    window.requestAnimationFrame(() => {
+      purchasePanelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
 
   async function handlePurchase() {
     if (purchasing) return;
@@ -724,23 +919,15 @@ export default function BuyNumberPage() {
       return;
     }
 
-    if (
-      Number.isFinite(serviceStock) &&
-      serviceStock <= 0
-    ) {
+    if (Number.isFinite(serviceStock) && serviceStock <= 0) {
       toast.error(
         "ChapsSms does not currently have numbers available for this selection."
       );
       return;
     }
 
-    if (
-      !Number.isFinite(estimatedPrice) ||
-      estimatedPrice <= 0
-    ) {
-      toast.error(
-        "A valid live price is not available"
-      );
+    if (!Number.isFinite(estimatedPrice) || estimatedPrice <= 0) {
+      toast.error("A valid live price is not available");
       return;
     }
 
@@ -756,25 +943,18 @@ export default function BuyNumberPage() {
           selectedCountry.label ||
           "",
         service:
-          selectedService.id ||
-          selectedService.code ||
-          selectedService.service,
+          selectedService.id || selectedService.code || selectedService.service,
         serviceName:
           selectedService.name ||
           selectedService.title ||
           selectedService.label ||
           "",
-        operator:
-          selectedService.preferredOperator || "any",
+        operator: selectedService.preferredOperator || "any",
       });
 
       if (!response?.order) {
-        throw new Error(
-          "The server did not return the new order"
-        );
+        throw new Error("The server did not return the new order");
       }
-
-      applyOrder(response.order);
 
       if (
         response.walletBalance !== undefined &&
@@ -785,21 +965,15 @@ export default function BuyNumberPage() {
         await refreshWallet();
       }
 
-      pollingAttempts.current = 0;
+      const newOrderId = String(getOrderId(response.order) || "");
+      blockedPollingRef.current.delete(newOrderId);
+      expiryCheckedRef.current.delete(newOrderId);
+      otpNotifiedRef.current.delete(newOrderId);
 
-      /*
-       * The backend has returned a real created order at this point.
-       * Track product usage separately from wallet-funding revenue so
-       * TikTok does not count the same customer money twice as Purchase.
-       */
       trackNumberPurchased({
-        value:
-          response?.order?.price ??
-          estimatedPrice,
+        value: response?.order?.sellingPrice ?? response?.order?.price ?? estimatedPrice,
         currency: "NGN",
-        orderId:
-          response?.order?._id ||
-          response?.order?.id,
+        orderId: newOrderId,
         serviceName:
           response?.order?.serviceName ||
           selectedService?.name ||
@@ -809,27 +983,21 @@ export default function BuyNumberPage() {
       });
 
       toast.success("Number purchased successfully");
+
+      // Collapse the buy form after purchase so the active-order area stays
+      // compact. The customer can immediately tap “Buy another number”.
+      setShowPurchasePanel(false);
+      setSelectedServiceId("");
+      resetLivePrice();
     } catch (error) {
       console.error("Purchase failed:", error);
 
-      /*
-       * The backend reserves the wallet before asking the provider for a
-       * number. If the provider returns NO_NUMBERS, the backend immediately
-       * reverses that reservation. Always fetch the authoritative wallet
-       * here so the customer never keeps seeing the temporary deduction.
-       */
       try {
         if (
-          error?.data?.walletBalance !==
-            undefined &&
-          error?.data?.walletBalance !==
-            null
+          error?.data?.walletBalance !== undefined &&
+          error?.data?.walletBalance !== null
         ) {
-          updateWalletBalance(
-            Number(
-              error.data.walletBalance
-            )
-          );
+          updateWalletBalance(Number(error.data.walletBalance));
         }
 
         await refreshWallet();
@@ -851,110 +1019,114 @@ export default function BuyNumberPage() {
     }
   }
 
-  async function refreshOrder() {
-    if (
-      !currentOrderId ||
-      checkingOrder ||
-      orderIsClosed
-    ) {
+  async function refreshOrder(orderId) {
+    const normalizedOrderId = String(orderId || "");
+
+    if (!normalizedOrderId || refreshingOrderIds.has(normalizedOrderId)) {
       return;
     }
 
-    try {
-      setCheckingOrder(true);
+    setRefreshingOrderIds((current) => {
+      const next = new Set(current);
+      next.add(normalizedOrderId);
+      return next;
+    });
 
-      await checkCurrentOrder({
-        showToast: true,
-      });
+    try {
+      await checkOrderById(normalizedOrderId, { showToast: true });
     } finally {
-      setCheckingOrder(false);
+      setRefreshingOrderIds((current) => {
+        const next = new Set(current);
+        next.delete(normalizedOrderId);
+        return next;
+      });
     }
   }
-async function handleCancel() {
-  if (
-    !currentOrderId ||
-    cancellingOrder
-  ) {
-    return;
-  }
 
-  const confirmed =
-    window.confirm(
+  async function handleCancel(order) {
+    const orderId = String(getOrderId(order) || "");
+
+    if (!orderId || cancellingOrderIds.has(orderId)) {
+      return;
+    }
+
+    const confirmed = window.confirm(
       "Cancel this order? A refund will only be issued after ChapsSms confirms the cancellation."
     );
 
-  if (!confirmed) return;
+    if (!confirmed) return;
 
-  try {
-    setCancellingOrder(true);
+    setCancellingOrderIds((current) => {
+      const next = new Set(current);
+      next.add(orderId);
+      return next;
+    });
 
-    const response =
-      await orderService.cancelOrder(
-        currentOrderId
-      );
+    try {
+      const response = await orderService.cancelOrder(orderId);
 
-    if (!response?.order) {
-      throw new Error(
-        "The server did not return the cancelled order"
-      );
-    }
+      if (!response?.order) {
+        throw new Error("The server did not return the cancelled order");
+      }
 
-    applyOrder(response.order);
+      updateOrderRef.current?.(response.order);
 
-    if (
-      response.walletBalance !==
-        undefined &&
-      response.walletBalance !== null
-    ) {
-      updateWalletBalance(
-        Number(
-          response.walletBalance
-        )
-      );
-    }
+      if (
+        response.walletBalance !== undefined &&
+        response.walletBalance !== null
+      ) {
+        updateWalletBalance(Number(response.walletBalance));
+      }
 
-    /*
-     * Always retrieve the authoritative
-     * wallet and transaction state after
-     * a cancellation.
-     */
-    await refreshWallet();
+      await refreshWallet();
 
-    toast.success(
-      getChapsSmsMessage(
-        response.message,
+      toast.success(
         response.refunded
           ? "Order cancelled and wallet refunded"
           : "Order cancelled"
-      )
-    );
-  } catch (error) {
-    console.error(
-      "Cancellation failed:",
-      error
-    );
+      );
+    } catch (error) {
+      console.error("Cancellation failed:", error);
 
-    /*
-     * Refresh even after an error because
-     * 5SIM may have cancelled the order
-     * before the connection failed.
-     */
-    try {
-      await refreshWallet();
-    } catch {
-      // Keep the original cancellation error.
+      try {
+        await refreshWallet();
+      } catch {
+        // Preserve the original cancellation error.
+      }
+
+      toast.error(
+        getChapsSmsMessage(
+          error,
+          "ChapsSms could not cancel this order right now."
+        )
+      );
+    } finally {
+      setCancellingOrderIds((current) => {
+        const next = new Set(current);
+        next.delete(orderId);
+        return next;
+      });
     }
-
-    toast.error(
-      getChapsSmsMessage(
-        error,
-        "ChapsSms could not cancel this order right now."
-      )
-    );
-  } finally {
-    setCancellingOrder(false);
   }
-}
+
+  function dismissOrder(orderId) {
+    const normalizedOrderId = String(orderId || "");
+
+    if (!normalizedOrderId) return;
+
+    setDismissedOrderIds((current) => {
+      const next = new Set(current);
+      next.add(normalizedOrderId);
+
+      try {
+        localStorage.setItem(DISMISSED_ORDERS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Hiding still works for the current render if storage is unavailable.
+      }
+
+      return next;
+    });
+  }
 
   async function copyText(value, message) {
     if (!value) {
@@ -963,125 +1135,11 @@ async function handleCancel() {
     }
 
     try {
-      await navigator.clipboard.writeText(
-        String(value)
-      );
-
+      await navigator.clipboard.writeText(String(value));
       toast.success(message);
     } catch {
       toast.error("Could not copy");
     }
-  }
-  function resetLivePrice() {
-    setLivePrice(null);
-    setLiveStock(null);
-    setPriceError("");
-    setPriceLoading(false);
-  }
-
-  function handleServerChange(server) {
-    if (
-      purchasing ||
-      checkingOrder ||
-      cancellingOrder
-    ) {
-      return;
-    }
-
-    setSelectedServer(server);
-    setSelectedCountryCode("");
-    setSelectedServiceId("");
-    resetLivePrice();
-  }
-
-  function handleCountryChange(countryId) {
-    setSelectedCountryCode(String(countryId || ""));
-    setSelectedServiceId("");
-    resetLivePrice();
-  }
-
-  function handleServiceChange(serviceId) {
-    setSelectedServiceId(String(serviceId || ""));
-    resetLivePrice();
-  }
-  function startNewOrder() {
-    clearActiveOrder();
-    setCurrentOrder(null);
-    pollingAttempts.current = 0;
-    expiryCheckOrderRef.current = "";
-    setRemainingSeconds(0);
-  }
-
-  function formatPhoneNumber(value) {
-    if (!value) return "—";
-
-    const digits = String(value).replace(/\D/g, "");
-
-    if (
-      digits.length === 11 &&
-      digits.startsWith("1")
-    ) {
-      return `+1 ${digits.slice(1, 4)} ${digits.slice(
-        4,
-        7
-      )} ${digits.slice(7)}`;
-    }
-
-    return String(value);
-  }
-
-  function getStatusLabel() {
-    if (otpCode) return "Code received";
-
-    if (orderStatus === "received") {
-      return "SMS received";
-    }
-
-    if (orderStatus === "expired") {
-      return "Order expired";
-    }
-
-    if (orderStatus === "cancelled") {
-      return "Order cancelled";
-    }
-
-    if (orderStatus === "cancelling") {
-      return "Cancelling order";
-    }
-
-    return "Waiting for SMS";
-  }
-
-  function getStatusClasses() {
-    if (otpCode || orderStatus === "received") {
-      return "bg-green-50 text-green-700 ring-green-200 dark:bg-green-950/40 dark:text-green-300 dark:ring-green-900";
-    }
-
-    if (
-      orderStatus === "expired" ||
-      orderStatus === "cancelled"
-    ) {
-      return "bg-red-50 text-red-700 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900";
-    }
-
-    return "bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900";
-  }
-
-  if (restoringOrder) {
-    return (
-      <div className="mx-auto flex min-h-[55vh] w-full max-w-[1050px] items-center justify-center">
-        <div className="text-center">
-          <LoaderCircle
-            className="mx-auto animate-spin text-blue-600"
-            size={30}
-          />
-
-          <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-            Restoring your active order...
-          </p>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -1090,23 +1148,80 @@ async function handleCancel() {
         <h1 className="text-2xl font-black tracking-tight text-[var(--foreground)] sm:text-3xl">
           Receive <span className="text-blue-600">SMS</span>
         </h1>
-
         <p className="mt-2 text-sm text-[var(--muted-foreground)] sm:text-base">
-          Buy a number and receive your verification code in seconds.
+          Buy numbers, keep multiple activations open, and receive each OTP independently.
         </p>
       </div>
 
-      {!currentOrder ? (
-        <>
-          {/* <div className="mb-5 flex justify-center sm:mb-6">
-            <div className="grid w-full max-w-md grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-sm sm:w-auto">
-             
-
-            
+      {(visibleOrders.length > 0 || ordersLoading) && (
+        <section className="mb-5 sm:mb-6">
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-[var(--foreground)] sm:text-xl">
+                Active orders
+                {liveOrders.length > 0 ? ` (${liveOrders.length})` : ""}
+              </h2>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)] sm:text-sm">
+                Every waiting order keeps its own 20-minute timer and 5-second OTP check.
+              </p>
             </div>
-          </div> */}
 
-          <div className="grid min-w-0 items-stretch gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_310px]">
+            {liveOrders.length > 0 && (
+              <button
+                type="button"
+                onClick={openPurchasePanel}
+                className="hidden shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-700 sm:flex"
+              >
+                <Plus size={15} />
+                Buy another
+              </button>
+            )}
+          </div>
+
+          {ordersLoading && visibleOrders.length === 0 ? (
+            <div className="flex min-h-28 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--card)]">
+              <LoaderCircle className="animate-spin text-blue-600" size={24} />
+            </div>
+          ) : (
+            <div className="grid min-w-0 gap-4 xl:grid-cols-2">
+              {visibleOrders.map((order) => {
+                const orderId = String(getOrderId(order) || "");
+
+                return (
+                  <CompactOrderCard
+                    key={orderId}
+                    order={order}
+                    nowMs={nowMs}
+                    refreshing={refreshingOrderIds.has(orderId)}
+                    cancelling={cancellingOrderIds.has(orderId)}
+                    onRefresh={refreshOrder}
+                    onCancel={handleCancel}
+                    onDismiss={dismissOrder}
+                    onCopy={copyText}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {liveOrders.length > 0 && !showPurchasePanel && (
+            <button
+              type="button"
+              onClick={openPurchasePanel}
+              className="mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white transition hover:bg-blue-700"
+            >
+              <Plus size={17} />
+              Buy another number
+            </button>
+          )}
+        </section>
+      )}
+
+      {shouldShowPurchasePanel && (
+        <div
+          ref={purchasePanelRef}
+          className="grid min-w-0 items-stretch gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_310px]"
+        >
           <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
             <div className="flex items-start justify-between gap-3 sm:gap-4">
               <div className="flex min-w-0 items-start gap-3 sm:gap-4">
@@ -1116,61 +1231,48 @@ async function handleCancel() {
 
                 <div className="min-w-0">
                   <h2 className="text-lg font-black text-[var(--foreground)] sm:text-xl">
-                    Buy a number
+                    {liveOrders.length > 0 ? "Buy another number" : "Buy a number"}
                   </h2>
-<div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-sm">
-  <div className="relative grid grid-cols-2">
-    <div
-      aria-hidden="true"
-      className={`absolute inset-y-0 w-1/2 rounded-xl bg-blue-600 shadow-sm transition-transform duration-300 ease-out ${
-        selectedServer === "server2"
-          ? "translate-x-full"
-          : "translate-x-0"
-      }`}
-    />
 
-    {[
-      {
-        id: "server1",
-        label: "Server 1",
-      },
-      {
-        id: "server2",
-        label: "Server 2",
-      },
-    ].map((server) => {
-      const isActive =
-        selectedServer === server.id;
+                  <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1.5 shadow-sm">
+                    <div className="relative grid grid-cols-2">
+                      <div
+                        aria-hidden="true"
+                        className={`absolute inset-y-0 w-1/2 rounded-xl bg-blue-600 shadow-sm transition-transform duration-300 ease-out ${
+                          selectedServer === "server2"
+                            ? "translate-x-full"
+                            : "translate-x-0"
+                        }`}
+                      />
 
-      return (
-        <button
-          key={server.id}
-          type="button"
-          onClick={() =>
-            handleServerChange(
-              server.id
-            )
-          }
-          disabled={
-            purchasing ||
-            checkingOrder ||
-            cancellingOrder
-          }
-          aria-pressed={isActive}
-          className={`relative z-10 min-h-11 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
-            isActive
-              ? "text-white"
-              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          }`}
-        >
-          {server.label}
-        </button>
-      );
-    })}
-  </div>
-</div>
-                  <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-                    Select a country and service to continue.
+                      {[
+                        { id: "server1", label: "Server 1" },
+                        { id: "server2", label: "Server 2" },
+                      ].map((server) => {
+                        const isActive = selectedServer === server.id;
+
+                        return (
+                          <button
+                            key={server.id}
+                            type="button"
+                            onClick={() => handleServerChange(server.id)}
+                            disabled={purchasing}
+                            aria-pressed={isActive}
+                            className={`relative z-10 min-h-11 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isActive
+                                ? "text-white"
+                                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                            }`}
+                          >
+                            {server.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+                    Select a country and service. Existing activations will keep running.
                   </p>
                 </div>
               </div>
@@ -1184,26 +1286,23 @@ async function handleCancel() {
               >
                 <RefreshCw
                   size={17}
-                  className={
-                    catalogLoading ? "animate-spin" : ""
-                  }
+                  className={catalogLoading ? "animate-spin" : ""}
                 />
               </button>
             </div>
 
             {catalogError && !countries.length && (
-              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-4">
+              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/40">
                 <p className="text-sm font-semibold text-red-700 dark:text-red-300">
                   {getChapsSmsMessage(
                     catalogError,
                     "ChapsSms could not load the available countries and services. Please try again."
                   )}
                 </p>
-
                 <button
                   type="button"
                   onClick={reloadCatalog}
-                  className="mt-3 text-sm font-bold text-red-700 dark:text-red-300 underline"
+                  className="mt-3 text-sm font-bold text-red-700 underline dark:text-red-300"
                 >
                   Try again
                 </button>
@@ -1217,7 +1316,6 @@ async function handleCancel() {
                     className="mx-auto animate-spin text-blue-600"
                     size={30}
                   />
-
                   <p className="mt-3 text-sm text-[var(--muted-foreground)]">
                     Loading live countries and services...
                   </p>
@@ -1229,7 +1327,6 @@ async function handleCancel() {
                   <label className="mb-2 block text-sm font-bold text-[var(--foreground)]">
                     Country
                   </label>
-
                   <SearchableCountrySelect
                     countries={countries}
                     value={selectedCountryCode}
@@ -1241,7 +1338,6 @@ async function handleCancel() {
                   <label className="mb-2 block text-sm font-bold text-[var(--foreground)]">
                     Service
                   </label>
-
                   <SearchableServiceSelect
                     services={availableServices}
                     value={selectedServiceId}
@@ -1255,7 +1351,6 @@ async function handleCancel() {
                     <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
                       Live price
                     </p>
-
                     <p className="mt-1 text-2xl font-black text-[var(--foreground)]">
                       {priceLoading
                         ? "Checking..."
@@ -1263,7 +1358,6 @@ async function handleCancel() {
                           ? formatNaira(estimatedPrice)
                           : "—"}
                     </p>
-
                     {priceError && (
                       <p className="mt-1 max-w-xs text-xs font-semibold text-red-600">
                         {priceError}
@@ -1273,22 +1367,17 @@ async function handleCancel() {
 
                   <div className="min-w-0 text-left min-[420px]:text-right">
                     <p className="truncate text-sm font-bold text-[var(--foreground)]">
-                    
                       {selectedCountry?.eng ||
                         selectedCountry?.name ||
                         selectedCountry?.label ||
                         "Select country"}
                     </p>
-
                     <p className="mt-1 truncate text-sm text-[var(--muted-foreground)]">
-                      {selectedService?.name ||
-                        "Select service"}
+                      {selectedService?.name || "Select service"}
                     </p>
-
                     {selectedService && (
                       <p className="mt-1 text-xs font-semibold text-[var(--muted-foreground)]">
-                        {Number.isFinite(serviceStock) &&
-                        serviceStock > 0
+                        {Number.isFinite(serviceStock) && serviceStock > 0
                           ? `${serviceStock.toLocaleString()} available`
                           : "Availability checked at purchase"}
                       </p>
@@ -1310,18 +1399,12 @@ async function handleCancel() {
                 >
                   {purchasing ? (
                     <>
-                      <LoaderCircle
-                        className="animate-spin"
-                        size={18}
-                      />
+                      <LoaderCircle className="animate-spin" size={18} />
                       Purchasing...
                     </>
                   ) : priceLoading ? (
                     <>
-                      <LoaderCircle
-                        className="animate-spin"
-                        size={18}
-                      />
+                      <LoaderCircle className="animate-spin" size={18} />
                       Checking price...
                     </>
                   ) : (
@@ -1331,30 +1414,35 @@ async function handleCancel() {
                     </>
                   )}
                 </Button>
+
+                {liveOrders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPurchasePanel(false)}
+                    className="w-full text-center text-xs font-bold text-[var(--muted-foreground)] underline underline-offset-4"
+                  >
+                    Hide purchase form
+                  </button>
+                )}
               </div>
             )}
           </section>
 
           <aside className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6">
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--muted-foreground)]">
-              How it works
+              Multiple orders
             </p>
-
             <div className="mt-6 space-y-6">
               {[
-                "Select a country and service.",
-                "Copy the number into the target app.",
-                "Request the verification code in that app.",
-                "Copy your OTP when it arrives.",
+                "Buy one number and keep it waiting.",
+                "Tap Buy another number for a second service.",
+                "Each number checks for its own OTP every five seconds.",
+                "Each order has its own 20-minute expiry and refund flow.",
               ].map((item, index) => (
-                <div
-                  key={item}
-                  className="flex items-start gap-3"
-                >
+                <div key={item} className="flex items-start gap-3">
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-black text-blue-600">
                     {index + 1}
                   </span>
-
                   <p className="pt-1 text-sm leading-6 text-[var(--muted-foreground)]">
                     {item}
                   </p>
@@ -1362,299 +1450,7 @@ async function handleCancel() {
               ))}
             </div>
           </aside>
-          </div>
-        </>
-      ) : (
-        <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6 lg:p-8">
-          <div className="flex items-start justify-between gap-3 sm:gap-4">
-            <div className="min-w-0">
-              <h2 className="text-lg font-black text-[var(--foreground)] sm:text-xl">
-                Active order
-              </h2>
-
-              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-                Use this number on{" "}
-                {getActiveOrderServiceName(
-                  currentOrder,
-                  selectedService
-                )}{" "}
-                and request the verification code.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={refreshOrder}
-              disabled={
-                checkingOrder || orderIsClosed
-              }
-              className="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCw
-                size={16}
-                className={
-                  checkingOrder ? "animate-spin" : ""
-                }
-              />
-
-              <span className="hidden sm:inline">
-                Refresh
-              </span>
-            </button>
-          </div>
-
-          <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-            <div>
-              <span
-                className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ring-1 ${getStatusClasses()}`}
-              >
-                {otpCode ? (
-                  <CheckCircle2 size={14} />
-                ) : orderIsClosed ? (
-                  <XCircle size={14} />
-                ) : (
-                  <LoaderCircle
-                    className="animate-spin"
-                    size={14}
-                  />
-                )}
-
-                {getStatusLabel()}
-              </span>
-
-              <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-bold text-[var(--foreground)]">
-                {getActiveOrderCountryFlag(
-                  selectedCountry
-                ) ? (
-                  <span aria-hidden="true">
-                    {getActiveOrderCountryFlag(
-                      selectedCountry
-                    )}
-                  </span>
-                ) : null}
-
-                <span>
-                  {getActiveOrderCountryName(
-                    currentOrder,
-                    selectedCountry
-                  )}
-                </span>
-
-                <span className="text-[var(--muted-foreground)]">
-                  •
-                </span>
-
-                <span>
-                  {getActiveOrderServiceName(
-                    currentOrder,
-                    selectedService
-                  )}
-                </span>
-              </p>
-            </div>
-
-            <div className="w-full rounded-xl bg-[var(--muted)] px-4 py-3 text-left sm:w-auto sm:text-right">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                Paid
-              </p>
-
-              <p className="mt-1 font-black text-[var(--foreground)]">
-                {formatNaira(
-                  currentOrder.price ?? estimatedPrice
-                )}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-5 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-2xl bg-[var(--muted)] p-4">
-              <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
-                <Hash size={14} />
-
-                <p className="text-[10px] font-bold uppercase tracking-[0.14em]">
-                  Order ID
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  copyText(
-                    currentOrder.providerOrderId ||
-                      currentOrderId,
-                    "Order ID copied"
-                  )
-                }
-                className="mt-2 max-w-full truncate text-left font-mono text-sm font-bold text-[var(--foreground)]"
-              >
-                {currentOrder.providerOrderId ||
-                  currentOrderId}
-              </button>
-            </div>
-
-          <div className="rounded-2xl bg-[var(--muted)] p-4">
-  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-    Server
-  </p>
-
-  <p className="mt-2 text-sm font-bold text-[var(--foreground)]">
-    {currentOrder.server === "server1"
-      ? "SERVER 1"
-      : currentOrder.server === "server2"
-      ? "SERVER 2"
-      : "UNKNOWN"}
-  </p>
-</div>
-
-            <div className="rounded-2xl bg-[var(--muted)] p-4">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                Purchased
-              </p>
-
-              <p className="mt-2 text-sm font-bold text-[var(--foreground)]">
-                {formatDate(currentOrder.createdAt)}
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-2xl border border-[var(--border)] p-4 sm:p-5">
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-              Virtual number
-            </p>
-
-            <div className="mt-3 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-              <p className="break-all text-2xl font-black tracking-tight text-[var(--foreground)] min-[420px]:text-3xl sm:text-[34px]">
-                {formatPhoneNumber(
-                  currentOrder.phoneNumber
-                )}
-              </p>
-
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() =>
-                  copyText(
-                    currentOrder.phoneNumber,
-                    "Number copied"
-                  )
-                }
-              >
-                <Copy size={17} />
-                Copy
-              </Button>
-            </div>
-          </div>
-
-          <div
-            className={`mt-5 rounded-2xl p-4 text-white sm:p-5 ${
-              otpCode
-                ? "bg-blue-600"
-                : "bg-slate-950"
-            }`}
-          >
-            <p
-              className={`text-xs font-bold uppercase tracking-[0.14em] ${
-                otpCode
-                  ? "text-blue-100"
-                  : "text-[var(--muted-foreground)]"
-              }`}
-            >
-              OTP code
-            </p>
-
-            <div className="mt-3 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-              <p
-                className={`min-h-10 break-all text-2xl font-black tracking-[0.12em] min-[420px]:text-3xl min-[420px]:tracking-[0.18em] sm:text-4xl ${
-                  !otpCode && !orderIsClosed
-                    ? "animate-pulse"
-                    : ""
-                }`}
-              >
-                {otpCode ||
-                  (orderIsClosed
-                    ? "Unavailable"
-                    : "• • • • • •")}
-              </p>
-
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!otpCode}
-                onClick={() =>
-                  copyText(otpCode, "OTP copied")
-                }
-              >
-                <Copy size={17} />
-                Copy OTP
-              </Button>
-            </div>
-          </div>
-
-          {!otpCode && !orderIsClosed && (
-            <div className="mt-5 rounded-2xl bg-[var(--muted)] p-4">
-              <div className="flex flex-col gap-4 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <Timer
-                    className="shrink-0 text-blue-600"
-                    size={19}
-                  />
-
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-[var(--foreground)]">
-                      Waiting for SMS
-                    </p>
-
-                    <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-                      Checking automatically every five seconds.
-                    </p>
-                  </div>
-                </div>
-
-                <p className="shrink-0 text-left text-xl font-black text-[var(--foreground)] min-[420px]:text-right">
-                  {formatRemainingTime(
-                    remainingSeconds
-                  )}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-            {orderIsClosed && (
-              <Button
-                type="button"
-                variant="secondary"
-                className="h-12 w-full sm:flex-1"
-                onClick={startNewOrder}
-              >
-                <RotateCcw size={17} />
-                New Order
-              </Button>
-            )}
-
-            {!otpCode && !orderIsClosed && (
-              <button
-                type="button"
-                onClick={handleCancel}
-                disabled={cancellingOrder}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-[var(--card)] dark:border-red-900 px-5 text-sm font-bold text-red-600 transition hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-1"
-              >
-                {cancellingOrder ? (
-                  <LoaderCircle
-                    className="animate-spin"
-                    size={17}
-                  />
-                ) : (
-                  <XCircle size={17} />
-                )}
-
-                {cancellingOrder
-                  ? "Cancelling..."
-                  : "Cancel Order"}
-              </button>
-            )}
-          </div>
-        </section>
+        </div>
       )}
     </div>
   );
