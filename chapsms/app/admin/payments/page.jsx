@@ -98,6 +98,48 @@ function gatewayLabel(payment) {
   );
 }
 
+function purchaseAttemptLabel(payment) {
+  if (String(payment?.type || "").toLowerCase() !== "purchase") {
+    return "";
+  }
+
+  const service = String(payment?.serviceName || "").trim();
+  const country = String(payment?.countryName || "").trim();
+
+  if (service || country) {
+    return [service || "Number purchase", country]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  const description = String(payment?.description || "").trim();
+
+  if (!description) {
+    return "Number purchase";
+  }
+
+  const legacyReservation = description.match(
+    /^Reserved for\s+(.+?)\s+\((.+?)\)\s+-\s+(server\d+)/i
+  );
+
+  if (legacyReservation) {
+    const rawCountry = String(legacyReservation[2] || "").trim();
+
+    return [
+      title(legacyReservation[1]),
+      /^\d+$/.test(rawCountry) ? "" : title(rawCountry),
+      title(legacyReservation[3]),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  return description
+    .replace(/^Reserved for\s+/i, "")
+    .replace(/^Number purchase\s*-?\s*/i, "")
+    .trim();
+}
+
 function statusClass(status) {
   const value = String(
     status || ""
@@ -209,7 +251,7 @@ export default function AdminPaymentsPage() {
     }, [payments, search]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl">
+    <div className="mx-auto min-w-0 w-full max-w-6xl overflow-x-hidden">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
@@ -321,7 +363,7 @@ export default function AdminPaymentsPage() {
                       key={
                         payment.id
                       }
-                      className="rounded-2xl border border-[var(--border)] bg-[var(--muted)]/45 p-4"
+                      className="min-w-0 max-w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--muted)]/45 p-4"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -370,6 +412,22 @@ export default function AdminPaymentsPage() {
                           </p>
                         </div>
                       </div>
+
+                      {payment.type === "purchase" ? (
+                        <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
+                            Order attempt
+                          </p>
+                          <p className="mt-1 break-words text-sm font-bold text-[var(--foreground)]">
+                            {purchaseAttemptLabel(payment)}
+                          </p>
+                          {payment.status === "pending" ? (
+                            <p className="mt-1 text-xs leading-5 text-amber-600 dark:text-amber-300">
+                              Pending reservation. ChapsSms will reconcile it with an order or refund it automatically if the purchase was interrupted.
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
 
                       <p className="mt-3 truncate text-xs font-semibold text-[var(--muted-foreground)]">
                         {payment.reference ||
@@ -449,9 +507,16 @@ export default function AdminPaymentsPage() {
                           </p>
                         </td>
                         <td className="px-6 py-4 font-semibold text-[var(--foreground)]">
-                          {gatewayLabel(
-                            payment
-                          )}
+                          <p>
+                            {gatewayLabel(
+                              payment
+                            )}
+                          </p>
+                          {payment.type === "purchase" ? (
+                            <p className="mt-1 max-w-72 break-words text-xs font-medium text-[var(--muted-foreground)]">
+                              {purchaseAttemptLabel(payment)}
+                            </p>
+                          ) : null}
                         </td>
                         <td className="max-w-64 truncate px-6 py-4 text-xs font-semibold text-[var(--muted-foreground)]">
                           {payment.reference ||

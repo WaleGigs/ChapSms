@@ -105,23 +105,6 @@ function capitalize(value) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : "—";
 }
 
-function getServiceLabel(sale) {
-  const storedName = String(sale?.serviceName || "").trim();
-  return storedName || capitalize(sale?.service);
-}
-
-function getCountryLabel(sale) {
-  const storedName = String(sale?.countryName || "").trim();
-  if (storedName) return storedName;
-
-  const raw = String(sale?.country || "").trim();
-  if (!raw || /^\d+$/.test(raw)) return "—";
-
-  return raw
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 export default function AdminOrdersPage() {
   const [filters, setFilters] = useState({
     server: "",
@@ -235,8 +218,8 @@ export default function AdminOrdersPage() {
       sale.server,
       `${sale?.customer?.firstName || ""} ${sale?.customer?.lastName || ""}`.trim(),
       sale?.customer?.email || "",
-      getCountryLabel(sale),
-      getServiceLabel(sale),
+      sale.country,
+      sale.service,
       sale.operator,
       sale.phoneNumber,
       sale.otpCode,
@@ -269,7 +252,7 @@ export default function AdminOrdersPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6 overflow-x-hidden">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
@@ -281,10 +264,10 @@ export default function AdminOrdersPage() {
             </div>
             <div>
               <h1 className="text-3xl font-black tracking-tight text-[var(--foreground)] sm:text-4xl">
-                Sales & Profit
+                Orders
               </h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
-                Review each sale with the customer, phone number, OTP, provider cost, ChapsSmS price, profit, status, date and time.
+                Every real order is shown here, including waiting, cancelling, received, cancelled and expired orders.
               </p>
             </div>
           </div>
@@ -370,6 +353,7 @@ export default function AdminOrdersPage() {
             >
               <option value="">All statuses</option>
               <option value="waiting">Waiting</option>
+              <option value="cancelling">Cancelling</option>
               <option value="received">Received</option>
               <option value="cancelled">Cancelled</option>
               <option value="expired">Expired</option>
@@ -428,7 +412,7 @@ export default function AdminOrdersPage() {
         </div>
       )}
 
-      <section className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
+      <section className="min-w-0 max-w-full overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
         <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] p-5 sm:p-6">
           <div>
             <h2 className="text-xl font-black text-[var(--foreground)]">
@@ -457,7 +441,7 @@ export default function AdminOrdersPage() {
           </div>
         ) : (
           <>
-            <div className="grid gap-4 p-4 md:hidden">
+            <div className="grid min-w-0 max-w-full gap-4 p-3 min-[390px]:p-4 md:hidden">
               {sales.map((sale, index) => (
                 <AdminOrderCard
                   key={getSaleKey(sale, index)}
@@ -513,10 +497,10 @@ export default function AdminOrdersPage() {
                         </td>
                         <td className="px-4 py-4">
                           <p className="font-black text-[var(--foreground)]">
-                            {getServiceLabel(sale)}
+                            {sale.serviceName || capitalize(sale.service)}
                           </p>
                           <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                            {getCountryLabel(sale)} · {sale.operator || "any"}
+                            {sale.countryName || sale.country} · {sale.operator || "any"}
                           </p>
                         </td>
                         <td className="px-4 py-4">
