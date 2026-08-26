@@ -87,7 +87,19 @@ function gatewayLabel(payment) {
       payment?.description || ""
     )
   ) {
-    return "Admin wallet credit";
+    const type = String(
+      payment?.type || ""
+    ).toLowerCase();
+
+    if (type === "withdraw") {
+      return "Admin wallet debit";
+    }
+
+    if (type === "deposit") {
+      return "Admin wallet credit";
+    }
+
+    return "Admin wallet adjustment";
   }
 
   return (
@@ -96,6 +108,58 @@ function gatewayLabel(payment) {
     title(payment?.type) ||
     "Wallet"
   );
+}
+
+function paymentDirection(payment) {
+  const type = String(
+    payment?.type || ""
+  ).toLowerCase();
+
+  if (
+    type === "purchase" ||
+    type === "withdraw"
+  ) {
+    return "debit";
+  }
+
+  if (
+    type === "deposit" ||
+    type === "refund"
+  ) {
+    return "credit";
+  }
+
+  return "neutral";
+}
+
+function signedPaymentAmount(payment) {
+  const direction =
+    paymentDirection(payment);
+
+  if (direction === "debit") {
+    return `-${money(payment?.amount)}`;
+  }
+
+  if (direction === "credit") {
+    return `+${money(payment?.amount)}`;
+  }
+
+  return money(payment?.amount);
+}
+
+function amountClass(payment) {
+  const direction =
+    paymentDirection(payment);
+
+  if (direction === "debit") {
+    return "text-red-600 dark:text-red-300";
+  }
+
+  if (direction === "credit") {
+    return "text-emerald-600 dark:text-emerald-300";
+  }
+
+  return "text-[var(--foreground)]";
 }
 
 function purchaseAttemptLabel(payment) {
@@ -264,7 +328,7 @@ export default function AdminPaymentsPage() {
                 Payment History
               </h1>
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-                Latest real wallet activity across NeuraPay, Flutterwave, admin credits, purchases and refunds.
+                Latest real wallet activity across NeuraPay, Flutterwave, admin wallet adjustments, purchases and refunds.
               </p>
             </div>
           </div>
@@ -401,13 +465,13 @@ export default function AdminPaymentsPage() {
                             </p>
                           </div>
 
-                          <p className="shrink-0 text-lg font-black text-[var(--foreground)]">
-                            {payment.type ===
-                              "purchase"
-                              ? "-"
-                              : "+"}
-                            {money(
-                              payment.amount
+                          <p
+                            className={`shrink-0 text-lg font-black ${amountClass(
+                              payment
+                            )}`}
+                          >
+                            {signedPaymentAmount(
+                              payment
                             )}
                           </p>
                         </div>
@@ -533,13 +597,13 @@ export default function AdminPaymentsPage() {
                               "completed"}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-right font-black text-[var(--foreground)]">
-                          {payment.type ===
-                            "purchase"
-                            ? "-"
-                            : "+"}
-                          {money(
-                            payment.amount
+                        <td
+                          className={`px-6 py-4 text-right font-black ${amountClass(
+                            payment
+                          )}`}
+                        >
+                          {signedPaymentAmount(
+                            payment
                           )}
                         </td>
                         <td className="px-6 py-4 text-right text-xs text-[var(--muted-foreground)]">
