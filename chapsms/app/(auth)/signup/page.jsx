@@ -1,26 +1,16 @@
 "use client";
 
-import {
-  useState,
-} from "react";
-import {
-  useRouter,
-} from "next/navigation";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  Mail,
-  UserRound,
-} from "lucide-react";
+import { Mail, UserRound } from "lucide-react";
 import toast from "react-hot-toast";
 
-import {
-  useAuth,
-} from "@/context/AuthContext";
+import { useAuth } from "@/context/AuthContext";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import PasswordField from "@/components/auth/PasswordField";
-import GoogleAuthButton from "@/components/auth/GoogleAuthButton";
 
 function normalizeEmail(value) {
   return String(value || "")
@@ -28,20 +18,20 @@ function normalizeEmail(value) {
     .toLowerCase();
 }
 
-function validatePassword(
-  password
-) {
-  const value =
-    String(password || "");
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+    String(value || "").trim()
+  );
+}
+
+function validatePassword(password) {
+  const value = String(password || "");
 
   if (!value) {
     return "Password is required";
   }
 
-  if (
-    value.length < 6 ||
-    value.length > 64
-  ) {
+  if (value.length < 6 || value.length > 64) {
     return "Password must contain 6–64 characters";
   }
 
@@ -52,86 +42,21 @@ function validatePassword(
   return "";
 }
 
-function saveVerificationTiming(
-  email,
-  response
-) {
-  if (
-    typeof window ===
-      "undefined" ||
-    !email
-  ) {
-    return;
-  }
-
-  const key =
-    `chapsms-verification:${email}`;
-
-  const now = Date.now();
-
-  const expiresAt =
-    response
-      ?.verificationExpiresAt ||
-    new Date(
-      now + 10 * 60 * 1000
-    ).toISOString();
-
-  const resendAvailableAt =
-    response
-      ?.resendAvailableAt ||
-    new Date(
-      now + 60 * 1000
-    ).toISOString();
-
-  window.sessionStorage.setItem(
-    key,
-    JSON.stringify({
-      expiresAt,
-      resendAvailableAt,
-    })
-  );
-}
-
-function getDestination(user) {
-  return user?.role ===
-    "admin"
-    ? "/admin"
-    : "/buy-number";
-}
-
 export default function SignupPage() {
-  const router =
-    useRouter();
+  const router = useRouter();
+  const { signup } = useAuth();
 
-  const {
-    signup,
-    googleLogin,
-  } = useAuth();
+  const [form, setForm] = useState({
+    username: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+    terms: false,
+  });
 
-  const [form, setForm] =
-    useState({
-      username: "",
-      email: "",
-      password: "",
-      confirmPassword: "",
-      terms: false,
-    });
-
-  const [errors, setErrors] =
-    useState({});
-
-  const [
-    submitError,
-    setSubmitError,
-  ] = useState("");
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [
-    googleLoading,
-    setGoogleLoading,
-  ] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [submitError, setSubmitError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   function updateField(event) {
     const {
@@ -157,24 +82,18 @@ export default function SignupPage() {
       ...current,
       [name]: "",
       ...(name === "password"
-        ? {
-            confirmPassword:
-              "",
-          }
+        ? { confirmPassword: "" }
         : {}),
     }));
   }
 
   function validateForm() {
     const nextErrors = {};
-
     const username =
       form.username.trim();
 
     const email =
-      normalizeEmail(
-        form.email
-      );
+      normalizeEmail(form.email);
 
     if (!username) {
       nextErrors.username =
@@ -185,9 +104,7 @@ export default function SignupPage() {
       nextErrors.email =
         "Email address is required";
     } else if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-        email
-      )
+      !isValidEmail(email)
     ) {
       nextErrors.email =
         "Enter a valid email address";
@@ -203,9 +120,7 @@ export default function SignupPage() {
         passwordError;
     }
 
-    if (
-      !form.confirmPassword
-    ) {
+    if (!form.confirmPassword) {
       nextErrors.confirmPassword =
         "Confirm your password";
     } else if (
@@ -224,31 +139,22 @@ export default function SignupPage() {
     return nextErrors;
   }
 
-  async function handleSubmit(
-    event
-  ) {
+  async function handleSubmit(event) {
     event.preventDefault();
 
-    if (
-      loading ||
-      googleLoading
-    ) {
+    if (loading) {
       return;
     }
 
     const validationErrors =
       validateForm();
 
-    setErrors(
-      validationErrors
-    );
-
+    setErrors(validationErrors);
     setSubmitError("");
 
     if (
-      Object.keys(
-        validationErrors
-      ).length > 0
+      Object.keys(validationErrors)
+        .length > 0
     ) {
       return;
     }
@@ -257,9 +163,7 @@ export default function SignupPage() {
       form.username.trim();
 
     const email =
-      normalizeEmail(
-        form.email
-      );
+      normalizeEmail(form.email);
 
     try {
       setLoading(true);
@@ -272,14 +176,9 @@ export default function SignupPage() {
             form.password,
         });
 
-      saveVerificationTiming(
-        email,
-        response
-      );
-
       toast.success(
         response?.message ||
-          "Verification code sent"
+          "Account created. Check your email for the verification code."
       );
 
       router.push(
@@ -292,89 +191,10 @@ export default function SignupPage() {
         error?.message ||
         "Unable to create your account. Please try again.";
 
-      const errorCode =
-        error?.code ||
-        error?.data?.code;
-
-      const accountCreated =
-        error?.data
-          ?.accountCreated ===
-        true;
-
-      if (
-        accountCreated &&
-        errorCode ===
-          "EMAIL_DELIVERY_FAILED"
-      ) {
-        saveVerificationTiming(
-          email,
-          error.data
-        );
-
-        toast.error(message);
-
-        router.push(
-          `/verify-email?email=${encodeURIComponent(
-            email
-          )}&delivery=failed`
-        );
-
-        return;
-      }
-
-      setSubmitError(
-        message
-      );
-
+      setSubmitError(message);
       toast.error(message);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleGoogle(
-    credential
-  ) {
-    if (
-      loading ||
-      googleLoading
-    ) {
-      return;
-    }
-
-    try {
-      setGoogleLoading(true);
-      setSubmitError("");
-
-      const response =
-        await googleLogin(
-          credential
-        );
-
-      toast.success(
-        response?.message ||
-          "Google authentication successful"
-      );
-
-      router.replace(
-        getDestination(
-          response?.user
-        )
-      );
-
-      router.refresh();
-    } catch (error) {
-      const message =
-        error?.message ||
-        "Google signup failed. Please try again.";
-
-      setSubmitError(
-        message
-      );
-
-      toast.error(message);
-    } finally {
-      setGoogleLoading(false);
     }
   }
 
@@ -383,21 +203,43 @@ export default function SignupPage() {
       form.password
     );
 
+  const passwordsDoNotMatch =
+    Boolean(
+      form.password &&
+        form.confirmPassword
+    ) &&
+    form.password !==
+      form.confirmPassword;
+
+  const passwordsMatch =
+    Boolean(
+      form.password &&
+        form.confirmPassword
+    ) &&
+    !passwordError &&
+    form.password ===
+      form.confirmPassword;
+
+  const confirmPasswordError =
+    errors.confirmPassword ||
+    (passwordsDoNotMatch
+      ? "Passwords do not match"
+      : "");
+
   const canSubmit =
     Boolean(
       form.username.trim()
     ) &&
-    Boolean(
+    isValidEmail(
       normalizeEmail(
         form.email
       )
     ) &&
     !passwordError &&
-    form.password ===
-      form.confirmPassword &&
+    !passwordsDoNotMatch &&
+    Boolean(form.confirmPassword) &&
     form.terms &&
-    !loading &&
-    !googleLoading;
+    !loading;
 
   return (
     <Card className="rounded-[26px] p-5 shadow-xl sm:p-8">
@@ -410,10 +252,10 @@ export default function SignupPage() {
           Create your ChapsSmS account
         </h1>
 
-        <p className="mt-3 text-sm leading-7 text-[var(--muted-foreground)] sm:text-base">
-          Sign up with Google or
-          create an account using
-          your email address.
+        <p className="mt-3 text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
+          Choose a username, enter
+          your email address, and
+          create a password.
         </p>
       </div>
 
@@ -426,35 +268,8 @@ export default function SignupPage() {
         </div>
       ) : null}
 
-      <GoogleAuthButton
-        onCredential={
-          handleGoogle
-        }
-        disabled={
-          loading ||
-          googleLoading
-        }
-        text="signup_with"
-      />
-
-      <p className="mt-3 text-center text-xs leading-5 text-[var(--muted-foreground)]">
-        By continuing with Google,
-        you agree to the Terms and
-        Privacy Policy.
-      </p>
-
-      <div className="my-6 flex items-center gap-3">
-        <span className="h-px flex-1 bg-[var(--border)]" />
-        <span className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-          or use email
-        </span>
-        <span className="h-px flex-1 bg-[var(--border)]" />
-      </div>
-
       <form
-        onSubmit={
-          handleSubmit
-        }
+        onSubmit={handleSubmit}
         className="space-y-5"
         noValidate
       >
@@ -467,18 +282,10 @@ export default function SignupPage() {
           autoCapitalize="none"
           spellCheck={false}
           maxLength={50}
-          value={
-            form.username
-          }
-          onChange={
-            updateField
-          }
-          error={
-            errors.username
-          }
-          leftIcon={
-            UserRound
-          }
+          value={form.username}
+          onChange={updateField}
+          error={errors.username}
+          leftIcon={UserRound}
           required
         />
 
@@ -493,12 +300,8 @@ export default function SignupPage() {
           spellCheck={false}
           maxLength={254}
           value={form.email}
-          onChange={
-            updateField
-          }
-          error={
-            errors.email
-          }
+          onChange={updateField}
+          error={errors.email}
           leftIcon={Mail}
           required
         />
@@ -510,15 +313,9 @@ export default function SignupPage() {
           autoComplete="new-password"
           minLength={6}
           maxLength={64}
-          value={
-            form.password
-          }
-          onChange={
-            updateField
-          }
-          error={
-            errors.password
-          }
+          value={form.password}
+          onChange={updateField}
+          error={errors.password}
           required
         />
 
@@ -529,30 +326,40 @@ export default function SignupPage() {
           autoComplete="new-password"
           minLength={6}
           maxLength={64}
-          value={
-            form.confirmPassword
-          }
-          onChange={
-            updateField
-          }
+          value={form.confirmPassword}
+          onChange={updateField}
           error={
-            errors
-              .confirmPassword
+            confirmPasswordError
+          }
+          aria-invalid={
+            passwordsDoNotMatch ||
+            Boolean(
+              errors.confirmPassword
+            )
           }
           required
         />
+
+        {passwordsMatch ? (
+          <p
+            role="status"
+            className="-mt-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400"
+          >
+            Passwords match
+          </p>
+        ) : null}
+
+        <p className="-mt-2 text-xs text-[var(--muted-foreground)]">
+          Password must contain 6–64 characters and no spaces.
+        </p>
 
         <div>
           <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4 text-sm text-[var(--muted-foreground)]">
             <input
               name="terms"
               type="checkbox"
-              checked={
-                form.terms
-              }
-              onChange={
-                updateField
-              }
+              checked={form.terms}
+              onChange={updateField}
               className="mt-0.5 h-4 w-4 shrink-0 rounded border-[var(--input)] accent-blue-600"
             />
 
@@ -586,12 +393,8 @@ export default function SignupPage() {
           type="submit"
           className="w-full"
           size="lg"
-          disabled={
-            !canSubmit
-          }
-          aria-busy={
-            loading
-          }
+          disabled={!canSubmit}
+          aria-busy={loading}
         >
           {loading
             ? "Creating account..."
@@ -601,7 +404,6 @@ export default function SignupPage() {
 
       <p className="mt-6 text-center text-sm text-[var(--muted-foreground)]">
         Already have an account?{" "}
-
         <Link
           href="/login"
           className="font-bold text-blue-600 hover:text-blue-700"
