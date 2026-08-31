@@ -112,6 +112,106 @@ function getWalletBalance(
   );
 }
 
+
+function normalizeWalletReference(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function walletHasReference(
+  wallet,
+  reference,
+) {
+  const target =
+    normalizeWalletReference(
+      reference,
+    );
+
+  if (!target) {
+    return false;
+  }
+
+  return Boolean(
+    wallet?.transactions?.some(
+      (item) =>
+        normalizeWalletReference(
+          item?.reference,
+        ) === target,
+    ),
+  );
+}
+
+async function ensureWallet(userId) {
+  try {
+    const wallet =
+      await Wallet.findOneAndUpdate(
+        {
+          user: userId,
+        },
+        {
+          $setOnInsert: {
+            user: userId,
+            balance: 0,
+            testBalance: 0,
+            currency: "NGN",
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+          runValidators: true,
+        },
+      );
+
+    if (!wallet) {
+      const error =
+        new Error(
+          "ChapsSms could not create the customer wallet",
+        );
+
+      error.status = 500;
+      error.code =
+        "WALLET_CREATE_FAILED";
+
+      throw error;
+    }
+
+    return wallet;
+  } catch (error) {
+    /*
+     * Wallet.user is unique. If two requests try to create the same
+     * brand-new wallet at the same moment, one can receive E11000.
+     * Recover by reading the wallet created by the winner.
+     */
+    if (error?.code === 11000) {
+      const existing =
+        await Wallet.findOne({
+          user: userId,
+        });
+
+      if (existing) {
+        return existing;
+      }
+    }
+
+    if (
+      !error.code ||
+      error.code === 11000
+    ) {
+      error.code =
+        "WALLET_CREATE_FAILED";
+    }
+
+    if (!error.status) {
+      error.status = 500;
+    }
+
+    throw error;
+  }
+}
+
 function createTransactionReference(
   userId,
 ) {
@@ -517,11 +617,46 @@ async function creditVerifiedPayment({
       paymentEnvironment,
     );
 
-  if (payment.credited) {
-    const existingWallet =
-      await Wallet.findOne({
-        user: payment.user,
+  const transactionId =
+    String(
+      transaction?.id || "",
+    ).trim();
+
+  /*
+   * FINANCIAL INVARIANT:
+   * A verified external payment must always have a local wallet target.
+   * Never assume signup/login created the row successfully.
+   */
+  let existingWallet =
+    await ensureWallet(
+      payment.user,
+    );
+
+  /*
+   * The WALLET transaction is the authoritative idempotency record.
+   *
+   * This also repairs an older inconsistent state where Payment.credited
+   * became true but the wallet transaction was missing: do NOT return early
+   * just because payment.credited is true.
+   */
+  if (
+    walletHasReference(
+      existingWallet,
+      payment.txRef,
+    )
+  ) {
+    if (
+      !payment.credited ||
+      payment.status !==
+        "successful"
+    ) {
+      await markPaymentSuccessful({
+        payment,
+        transactionId:
+          transactionId ||
+          payment.flutterwaveId,
       });
+    }
 
     return {
       alreadyCredited: true,
@@ -532,29 +667,42 @@ async function creditVerifiedPayment({
     };
   }
 
-  const transactionId =
-    String(
-      transaction.id || "",
+  if (payment.credited) {
+    console.warn(
+      "[Flutterwave] repairing credited payment with missing wallet transaction:",
+      {
+        txRef:
+          payment.txRef,
+        userId:
+          String(
+            payment.user,
+          ),
+      },
     );
+  }
 
   /*
-   * The reference filter is the idempotency guard.
-   * Duplicate callbacks and webhook retries cannot credit twice.
+   * Atomic idempotent credit.
+   * Two webhook/callback requests racing together cannot both match after
+   * one of them inserts this txRef into transactions.
    */
-  const wallet =
+  let wallet =
     await Wallet.findOneAndUpdate(
       {
-        user: payment.user,
+        user:
+          payment.user,
 
         "transactions.reference": {
-          $ne: payment.txRef,
+          $ne:
+            payment.txRef,
         },
       },
-
       {
         $inc: {
           [balanceField]:
-            payment.amount,
+            Number(
+              payment.amount,
+            ),
         },
 
         $push: {
@@ -565,7 +713,9 @@ async function creditVerifiedPayment({
                   "deposit",
 
                 amount:
-                  payment.amount,
+                  Number(
+                    payment.amount,
+                  ),
 
                 environment:
                   paymentEnvironment,
@@ -602,7 +752,6 @@ async function creditVerifiedPayment({
           },
         },
       },
-
       {
         new: true,
         runValidators: true,
@@ -610,36 +759,24 @@ async function creditVerifiedPayment({
     );
 
   if (!wallet) {
-    const existingWallet =
-      await Wallet.findOne({
-        user: payment.user,
-      });
-
-    if (!existingWallet) {
-      const error =
-        new Error(
-          "Wallet not found",
-        );
-
-      error.status = 404;
-      error.code =
-        "WALLET_NOT_FOUND";
-
-      throw error;
-    }
-
-    const transactionExists =
-      existingWallet.transactions.some(
-        (item) =>
-          String(
-            item.reference || "",
-          ) === payment.txRef,
+    /*
+     * Most commonly this means a duplicate request won the atomic race.
+     * Re-read and confirm the transaction reference before acknowledging.
+     */
+    existingWallet =
+      await ensureWallet(
+        payment.user,
       );
 
-    if (!transactionExists) {
+    if (
+      !walletHasReference(
+        existingWallet,
+        payment.txRef,
+      )
+    ) {
       const error =
         new Error(
-          "Wallet could not be credited",
+          "ChapsSms received the payment but could not credit the wallet",
         );
 
       error.status = 500;
@@ -649,27 +786,26 @@ async function creditVerifiedPayment({
       throw error;
     }
 
-    await markPaymentSuccessful({
-      payment,
-      transactionId,
-    });
-
-    return {
-      alreadyCredited: true,
-      wallet:
-        existingWallet,
-      paymentEnvironment,
-      balanceField,
-    };
+    wallet =
+      existingWallet;
   }
 
+  /*
+   * Mark Payment successful ONLY AFTER the wallet transaction is confirmed.
+   * A crash before this save is safe: a retry sees the wallet reference and
+   * repairs Payment.credited without adding the money twice.
+   */
   await markPaymentSuccessful({
     payment,
     transactionId,
   });
 
   return {
-    alreadyCredited: false,
+    alreadyCredited:
+      walletHasReference(
+        existingWallet,
+        payment.txRef,
+      ),
     wallet,
     paymentEnvironment,
     balanceField,
@@ -749,6 +885,107 @@ async function verifyAndCredit({
   };
 }
 
+async function verifyAndCreditByReference({
+  txRef,
+  userId = null,
+}) {
+  const normalizedTxRef =
+    String(txRef || "")
+      .trim()
+      .toUpperCase();
+
+  if (!normalizedTxRef) {
+    const error =
+      new Error(
+        "Payment reference is required",
+      );
+
+    error.status = 400;
+    error.code =
+      "INVALID_PAYMENT_REFERENCE";
+    throw error;
+  }
+
+  const query = {
+    txRef:
+      normalizedTxRef,
+  };
+
+  if (userId) {
+    query.user = userId;
+  }
+
+  const payment =
+    await Payment.findOne(
+      query,
+    );
+
+  if (!payment) {
+    const error =
+      new Error(
+        "Payment record not found",
+      );
+
+    error.status = 404;
+    error.code =
+      "PAYMENT_NOT_FOUND";
+    throw error;
+  }
+
+  const transaction =
+    await fetchFlutterwaveTransactionByReference(
+      normalizedTxRef,
+    );
+
+  if (
+    !transaction ||
+    String(
+      transaction.status ||
+        "",
+    ).toLowerCase() !==
+      "successful"
+  ) {
+    const error =
+      new Error(
+        "Flutterwave payment is not successful yet",
+      );
+
+    error.status = 409;
+    error.code =
+      "PAYMENT_NOT_SUCCESSFUL";
+    throw error;
+  }
+
+  if (
+    !isValidTransaction(
+      transaction,
+      payment,
+    )
+  ) {
+    const error =
+      new Error(
+        "Payment verification failed",
+      );
+
+    error.status = 400;
+    error.code =
+      "PAYMENT_VERIFICATION_FAILED";
+    throw error;
+  }
+
+  const result =
+    await creditVerifiedPayment({
+      payment,
+      transaction,
+    });
+
+  return {
+    ...result,
+    payment,
+    transaction,
+  };
+}
+
 exports.initializePayment =
   async (req, res) => {
     let payment = null;
@@ -790,6 +1027,14 @@ exports.initializePayment =
         createTransactionReference(
           req.user._id,
         );
+
+      /*
+       * Do not allow a customer to enter Flutterwave unless ChapsSms has
+       * a durable wallet row ready to receive the verified payment.
+       */
+      await ensureWallet(
+        req.user._id,
+      );
 
       payment =
         await Payment.create({
@@ -1202,10 +1447,9 @@ exports.getPaymentStatus =
         );
 
       const wallet =
-        await Wallet.findOne({
-          user:
-            req.user._id,
-        });
+        await ensureWallet(
+          req.user._id,
+        );
 
       return res
         .status(200)
@@ -1431,12 +1675,25 @@ exports.handleWebhook =
       );
 
       /*
-       * A permanent 4xx verification problem is acknowledged.
-       * A transient server/provider failure returns 500 for retry.
+       * Never acknowledge a LOCAL wallet/database failure as success.
+       * Returning HTTP 200 after WALLET_NOT_FOUND/WALLET_CREDIT_FAILED
+       * is how a verified external debit can become permanently uncredited.
+       *
+       * Only genuinely permanent payment-record/verification mismatches are
+       * acknowledged here. Everything else remains retryable with HTTP 500.
        */
+      const permanentCodes =
+        new Set([
+          "PAYMENT_NOT_FOUND",
+          "PAYMENT_VERIFICATION_FAILED",
+        ]);
+
       if (
-        error.status &&
-        error.status < 500
+        permanentCodes.has(
+          String(
+            error.code || "",
+          ),
+        )
       ) {
         return res
           .sendStatus(200);
@@ -1449,3 +1706,10 @@ exports.handleWebhook =
 
 exports.flutterwaveWebhook =
   exports.handleWebhook;
+
+/*
+ * Used by the controlled reconciliation script.
+ * It performs the same provider verification + idempotent wallet credit path.
+ */
+exports.verifyAndCreditByReference =
+  verifyAndCreditByReference;
