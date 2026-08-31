@@ -1140,6 +1140,22 @@ exports.getPayments = async (req, res) => {
             true,
         },
       },
+      {
+        $lookup: {
+          from: "orders",
+          localField:
+            "transactions.orderId",
+          foreignField: "_id",
+          as: "linkedOrder",
+        },
+      },
+      {
+        $unwind: {
+          path: "$linkedOrder",
+          preserveNullAndEmptyArrays:
+            true,
+        },
+      },
       ...(search
         ? [
             {
@@ -1177,6 +1193,18 @@ exports.getPayments = async (req, res) => {
                   },
                   {
                     "transactions.paymentGateway": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "linkedOrder.serviceName": {
+                      $regex: search,
+                      $options: "i",
+                    },
+                  },
+                  {
+                    "linkedOrder.countryName": {
                       $regex: search,
                       $options: "i",
                     },
@@ -1245,12 +1273,43 @@ exports.getPayments = async (req, res) => {
                   "$transactions.paymentMethod",
                 description:
                   "$transactions.description",
-                server:
-                  "$transactions.server",
-                serviceName:
-                  "$transactions.serviceName",
-                countryName:
-                  "$transactions.countryName",
+                server: {
+                  $ifNull: [
+                    "$transactions.server",
+                    "$linkedOrder.server",
+                  ],
+                },
+                orderId: {
+                  $cond: [
+                    {
+                      $ne: [
+                        "$transactions.orderId",
+                        null,
+                      ],
+                    },
+                    {
+                      $toString:
+                        "$transactions.orderId",
+                    },
+                    null,
+                  ],
+                },
+                service:
+                  "$linkedOrder.service",
+                country:
+                  "$linkedOrder.country",
+                serviceName: {
+                  $ifNull: [
+                    "$transactions.serviceName",
+                    "$linkedOrder.serviceName",
+                  ],
+                },
+                countryName: {
+                  $ifNull: [
+                    "$transactions.countryName",
+                    "$linkedOrder.countryName",
+                  ],
+                },
                 environment:
                   "$transactions.environment",
                 createdAt:
@@ -1313,3 +1372,4 @@ exports.getPayments = async (req, res) => {
       });
   }
 };
+

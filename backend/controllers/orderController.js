@@ -1,5 +1,4 @@
 const crypto = require("node:crypto");
-const mongoose = require("mongoose");
 
 const Order = require("../models/Order");
 const Wallet = require("../models/Wallet");
@@ -35,6 +34,64 @@ function normalizeOperator(value) {
 
 function normalizeServer(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isDefinitiveAvailabilityFailure(error) {
+  const code = String(
+    error?.code || ""
+  )
+    .trim()
+    .toUpperCase();
+
+  /*
+   * Only these responses prove that this particular operator/pool
+   * did NOT create an activation.
+   *
+   * Never retry a purchase after timeout, connection reset,
+   * invalid/unknown response, or any other uncertain mutation.
+   */
+  return new Set([
+    "NO_NUMBERS",
+    "NO_NUMBER",
+    "NO_STOCK",
+    "OPERATOR_NOT_AVAILABLE",
+    "POOL_UNAVAILABLE",
+    "NO_OPERATORS",
+  ]).has(code);
+}
+
+function buildAutomaticPurchaseCandidates(
+  automaticSelection,
+  selectedOperator
+) {
+  const selected =
+    normalizeOperator(
+      selectedOperator
+    );
+
+  const candidates = [
+    selected,
+    ...(
+      Array.isArray(
+        automaticSelection?.cheapPool
+      )
+        ? automaticSelection.cheapPool.map(
+            (item) =>
+              normalizeOperator(
+                item?.operator
+              )
+          )
+        : []
+    ),
+  ].filter(
+    (operator) =>
+      operator &&
+      operator !== "any"
+  );
+
+  return [
+    ...new Set(candidates),
+  ];
 }
 
 function extractProviderError(error) {
@@ -474,204 +531,6 @@ function createReservationReference(
     .toUpperCase();
 }
 
-async function failPendingPurchaseAndRefundAtomically({
-  userId,
-  reservationReference,
-  refundReference,
-  alternateRefundReferences = [],
-  amount,
-  balanceField,
-  environment = "live",
-  refundDescription,
-  purchaseDescription,
-  serviceName = "",
-  countryName = "",
-  server = null,
-}) {
-  const numericAmount = Number(amount);
-
-  if (
-    !Number.isFinite(numericAmount) ||
-    numericAmount <= 0
-  ) {
-    return null;
-  }
-
-  const normalizedReservationReference =
-    String(reservationReference || "")
-      .trim()
-      .toUpperCase();
-
-  const normalizedRefundReference =
-    String(refundReference || "")
-      .trim()
-      .toUpperCase();
-
-  const blockedRefundReferences = [
-    normalizedRefundReference,
-    ...(Array.isArray(alternateRefundReferences)
-      ? alternateRefundReferences
-      : []),
-  ]
-    .map((value) =>
-      String(value || "")
-        .trim()
-        .toUpperCase(),
-    )
-    .filter(Boolean);
-
-  if (
-    !normalizedReservationReference ||
-    !normalizedRefundReference
-  ) {
-    return null;
-  }
-
-  const now = new Date();
-
-  /*
-   * MongoDB does not allow one classic update document to both:
-   *   1) update transactions.$[purchase].status, and
-   *   2) $push a new item into transactions.
-   *
-   * That produces error code 40 (ConflictingUpdateOperators), which is
-   * exactly what left ChapsSms reservations stuck as Pending.
-   *
-   * An update pipeline rewrites the transactions array ONCE, so the
-   * reservation failure + refund insert + balance credit remain one
-   * atomic document update and the reference guard still prevents a
-   * duplicate refund.
-   */
-  const refundTransaction = {
-    _id: new mongoose.Types.ObjectId(),
-    type: "refund",
-    amount: numericAmount,
-    environment:
-      String(environment || "live")
-        .trim()
-        .toLowerCase() === "test"
-        ? "test"
-        : "live",
-    balanceField,
-    description:
-      String(refundDescription || "Automatic number purchase refund"),
-    status: "completed",
-    reference: normalizedRefundReference,
-    transactionId: "",
-    paymentGateway: null,
-    currency: "NGN",
-    paymentMethod: "",
-    orderId: null,
-    server:
-      VALID_SERVERS.includes(server)
-        ? server
-        : null,
-    serviceName:
-      String(serviceName || "").trim(),
-    countryName:
-      String(countryName || "").trim(),
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  return Wallet.findOneAndUpdate(
-    {
-      user: userId,
-      transactions: {
-        $elemMatch: {
-          reference:
-            normalizedReservationReference,
-          status: "pending",
-        },
-      },
-      "transactions.reference": {
-        $nin:
-          blockedRefundReferences,
-      },
-    },
-    [
-      {
-        $set: {
-          [balanceField]: {
-            $add: [
-              {
-                $ifNull: [
-                  `$${balanceField}`,
-                  0,
-                ],
-              },
-              numericAmount,
-            ],
-          },
-          transactions: {
-            $concatArrays: [
-              [refundTransaction],
-              {
-                $map: {
-                  input: {
-                    $ifNull: [
-                      "$transactions",
-                      [],
-                    ],
-                  },
-                  as: "transaction",
-                  in: {
-                    $cond: [
-                      {
-                        $and: [
-                          {
-                            $eq: [
-                              "$$transaction.reference",
-                              normalizedReservationReference,
-                            ],
-                          },
-                          {
-                            $eq: [
-                              "$$transaction.status",
-                              "pending",
-                            ],
-                          },
-                        ],
-                      },
-                      {
-                        $mergeObjects: [
-                          "$$transaction",
-                          {
-                            status: "failed",
-                            description:
-                              String(
-                                purchaseDescription ||
-                                  "Number purchase failed and was refunded",
-                              ),
-                            serviceName:
-                              String(serviceName || "").trim(),
-                            countryName:
-                              String(countryName || "").trim(),
-                            updatedAt: now,
-                          },
-                        ],
-                      },
-                      "$$transaction",
-                    ],
-                  },
-                },
-              },
-            ],
-          },
-          updatedAt: now,
-        },
-      },
-    ],
-    {
-      returnDocument: "after",
-      // Mongoose requires this flag when the update argument is an
-      // aggregation pipeline (array). Without it Mongoose rejects the
-      // update before MongoDB receives it.
-      updatePipeline: true,
-    },
-  );
-}
-
 async function refundReservedWallet({
   userId,
   amount,
@@ -702,28 +561,94 @@ async function refundReservedWallet({
       .toUpperCase();
 
   /*
-   * Reverse a failed provider purchase in one atomic Wallet update.
-   * The helper uses an update pipeline so MongoDB does not see a
-   * conflicting update on the same `transactions` array.
+   * Immediate compensation is atomic:
+   * - only a matching PENDING reservation can be reversed;
+   * - the refund reference can only be inserted once;
+   * - the same update restores the balance, fails the reservation and
+   *   records the completed refund.
    */
   const wallet =
-    await failPendingPurchaseAndRefundAtomically({
-      userId,
-      reservationReference,
-      refundReference,
-      amount: numericAmount,
-      balanceField,
-      environment,
-      refundDescription:
-        `${reason}: ${service} (${country})`,
-      purchaseDescription:
-        `${reason}: ${service} (${country})`,
-      serviceName:
-        service || "",
-      countryName:
-        country || "",
-      server,
-    });
+    await Wallet.findOneAndUpdate(
+      {
+        user: userId,
+
+        transactions: {
+          $elemMatch: {
+            reference:
+              reservationReference,
+            status: "pending",
+          },
+        },
+
+        "transactions.reference": {
+          $ne:
+            refundReference,
+        },
+      },
+
+      {
+        $inc: {
+          [balanceField]:
+            numericAmount,
+        },
+
+        $set: {
+          "transactions.$[purchase].status":
+            "failed",
+
+          "transactions.$[purchase].description":
+            `${reason}: ${service} (${country})`,
+        },
+
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type:
+                  "refund",
+
+                amount:
+                  numericAmount,
+
+                environment,
+
+                balanceField,
+
+                description:
+                  `${reason}: ${service} (${country})`,
+
+                status:
+                  "completed",
+
+                reference:
+                  refundReference,
+
+                server,
+
+                currency:
+                  "NGN",
+              },
+            ],
+
+            $position: 0,
+          },
+        },
+      },
+
+      {
+        new: true,
+        runValidators: true,
+
+        arrayFilters: [
+          {
+            "purchase.reference":
+              reservationReference,
+            "purchase.status":
+              "pending",
+          },
+        ],
+      },
+    );
 
   if (wallet) {
     return wallet;
@@ -846,7 +771,7 @@ async function reconcileReservation({
       },
 
       {
-        returnDocument: "after",
+        new: true,
         runValidators: true,
       },
     );
@@ -876,7 +801,7 @@ async function reconcileReservation({
       },
 
       {
-        returnDocument: "after",
+        new: true,
         runValidators: true,
       },
     );
@@ -898,7 +823,7 @@ async function reconcileReservation({
     },
 
     {
-      returnDocument: "after",
+      new: true,
       runValidators: true,
     },
   );
@@ -932,12 +857,6 @@ async function completePurchaseTransaction({
         "transactions.$.description":
           `${service} (${country}) - ${server}`,
 
-        "transactions.$.serviceName":
-          service || "",
-
-        "transactions.$.countryName":
-          country || "",
-
         "transactions.$.orderId":
           orderId,
       },
@@ -948,750 +867,6 @@ async function completePurchaseTransaction({
     },
   );
 }
-
-
-const MIN_STALE_RESERVATION_AGE_MS =
-  2 * 60 * 1000;
-
-const DEFAULT_STALE_RESERVATION_AGE_MS =
-  10 * 60 * 1000;
-
-function getStaleReservationAgeMs() {
-  const configured = Number.parseInt(
-    process.env.STALE_ORDER_RESERVATION_MS ||
-      String(
-        DEFAULT_STALE_RESERVATION_AGE_MS,
-      ),
-    10,
-  );
-
-  if (
-    !Number.isFinite(configured) ||
-    configured <= 0
-  ) {
-    return DEFAULT_STALE_RESERVATION_AGE_MS;
-  }
-
-  return Math.max(
-    MIN_STALE_RESERVATION_AGE_MS,
-    configured,
-  );
-}
-
-function parseReservationDescription(
-  value,
-) {
-  const text = String(value || "").trim();
-
-  if (!text) {
-    return {
-      serviceName: "",
-      countryName: "",
-    };
-  }
-
-  const match =
-    text.match(
-      /^Reserved for\s+(.+?)\s+\((.+?)\)\s+-\s+/i,
-    );
-
-  if (!match) {
-    return {
-      serviceName: "",
-      countryName: "",
-    };
-  }
-
-  return {
-    serviceName:
-      String(match[1] || "").trim(),
-    countryName:
-      String(match[2] || "").trim(),
-  };
-}
-
-function getReservationDisplayNames(
-  reservation,
-  matchingOrder = null,
-) {
-  const parsed =
-    parseReservationDescription(
-      reservation?.description,
-    );
-
-  return {
-    serviceName:
-      String(
-        matchingOrder?.serviceName ||
-          matchingOrder?.service ||
-          reservation?.serviceName ||
-          parsed.serviceName ||
-          "Number",
-      ).trim(),
-
-    countryName:
-      String(
-        matchingOrder?.countryName ||
-          matchingOrder?.country ||
-          reservation?.countryName ||
-          parsed.countryName ||
-          "",
-      ).trim(),
-  };
-}
-
-function getReservationBalanceField(
-  reservation,
-) {
-  if (
-    [
-      "balance",
-      "testBalance",
-    ].includes(
-      reservation?.balanceField,
-    )
-  ) {
-    return reservation.balanceField;
-  }
-
-  return String(
-    reservation?.environment ||
-      "live",
-  )
-    .trim()
-    .toLowerCase() ===
-    "test"
-    ? "testBalance"
-    : "balance";
-}
-
-function getReservationRefundReferences(
-  reservationReference,
-) {
-  const normalized =
-    String(
-      reservationReference || "",
-    )
-      .trim()
-      .toUpperCase();
-
-  return {
-    canonical:
-      `${normalized}-REFUND`,
-    legacy:
-      `${normalized}-RECOVERY-REFUND`,
-  };
-}
-
-function walletHasReference(
-  wallet,
-  references,
-) {
-  const expected = new Set(
-    (Array.isArray(references)
-      ? references
-      : [references]
-    )
-      .filter(Boolean)
-      .map((reference) =>
-        String(reference)
-          .trim()
-          .toUpperCase()
-      ),
-  );
-
-  return Boolean(
-    wallet?.transactions?.some(
-      (transaction) =>
-        expected.has(
-          String(
-            transaction?.reference ||
-              "",
-          )
-            .trim()
-            .toUpperCase(),
-        ),
-    ),
-  );
-}
-
-async function findOrderForReservation({
-  userId,
-  reservation,
-  reservationReference,
-  amount,
-}) {
-  let matchingOrder =
-    await Order.findOne({
-      user: userId,
-      walletReservationReference:
-        reservationReference,
-    });
-
-  if (matchingOrder) {
-    return matchingOrder;
-  }
-
-  const createdAt =
-    reservation?.createdAt
-      ? new Date(
-          reservation.createdAt,
-        )
-      : null;
-
-  if (
-    !createdAt ||
-    Number.isNaN(
-      createdAt.getTime(),
-    )
-  ) {
-    return null;
-  }
-
-  const fallbackFilter = {
-    user: userId,
-
-    createdAt: {
-      $gte: new Date(
-        createdAt.getTime() -
-          60 * 1000,
-      ),
-      $lte: new Date(
-        createdAt.getTime() +
-          5 * 60 * 1000,
-      ),
-    },
-
-    $or: [
-      {
-        sellingPrice:
-          amount,
-      },
-      {
-        price:
-          amount,
-      },
-    ],
-  };
-
-  if (
-    VALID_SERVERS.includes(
-      reservation?.server,
-    )
-  ) {
-    fallbackFilter.server =
-      reservation.server;
-  }
-
-  matchingOrder =
-    await Order.findOne(
-      fallbackFilter,
-    ).sort({
-      createdAt: 1,
-    });
-
-  return matchingOrder;
-}
-
-async function reconcileStaleReservation({
-  userId,
-  reservation,
-}) {
-  const reservationReference =
-    String(
-      reservation?.reference || "",
-    )
-      .trim()
-      .toUpperCase();
-
-  const amount =
-    Number(
-      reservation?.amount || 0,
-    );
-
-  if (
-    !reservationReference ||
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    return {
-      repaired: false,
-      refunded: false,
-      completed: false,
-      amount: 0,
-      wallet: null,
-    };
-  }
-
-  const matchingOrder =
-    await findOrderForReservation({
-      userId,
-      reservation,
-      reservationReference,
-      amount,
-    });
-
-  const {
-    serviceName,
-    countryName,
-  } =
-    getReservationDisplayNames(
-      reservation,
-      matchingOrder,
-    );
-
-  if (matchingOrder) {
-    const finalAmount =
-      Number(
-        matchingOrder.sellingPrice ??
-          matchingOrder.price ??
-          amount,
-      );
-
-    const result =
-      await Wallet.updateOne(
-        {
-          user: userId,
-
-          transactions: {
-            $elemMatch: {
-              reference:
-                reservationReference,
-              status:
-                "pending",
-            },
-          },
-        },
-
-        {
-          $set: {
-            "transactions.$[purchase].status":
-              "completed",
-
-            "transactions.$[purchase].orderId":
-              matchingOrder._id,
-
-            "transactions.$[purchase].amount":
-              Number.isFinite(
-                finalAmount,
-              )
-                ? finalAmount
-                : amount,
-
-            "transactions.$[purchase].serviceName":
-              serviceName,
-
-            "transactions.$[purchase].countryName":
-              countryName,
-
-            "transactions.$[purchase].description":
-              `Number purchase - ${serviceName}${countryName ? ` - ${countryName}` : ""} - ${matchingOrder.server || reservation.server || "server"}`,
-          },
-        },
-
-        {
-          arrayFilters: [
-            {
-              "purchase.reference":
-                reservationReference,
-              "purchase.status":
-                "pending",
-            },
-          ],
-
-          runValidators: true,
-        },
-      );
-
-    return {
-      repaired:
-        result.modifiedCount > 0,
-      refunded: false,
-      completed:
-        result.modifiedCount > 0,
-      amount: 0,
-      wallet: null,
-      orderId:
-        matchingOrder._id,
-    };
-  }
-
-  const balanceField =
-    getReservationBalanceField(
-      reservation,
-    );
-
-  const {
-    canonical:
-      refundReference,
-    legacy:
-      legacyRefundReference,
-  } =
-    getReservationRefundReferences(
-      reservationReference,
-    );
-
-  /*
-   * Compatibility guard:
-   * older recovery code used -RECOVERY-REFUND while immediate failed
-   * purchase rollback uses -REFUND. Either one means money has already
-   * been restored and must never be credited again.
-   */
-  let currentWallet =
-    await Wallet.findOne({
-      user: userId,
-    });
-
-  const refundAlreadyExists =
-    walletHasReference(
-      currentWallet,
-      [
-        refundReference,
-        legacyRefundReference,
-      ],
-    );
-
-  if (refundAlreadyExists) {
-    const result =
-      await Wallet.updateOne(
-        {
-          user: userId,
-          transactions: {
-            $elemMatch: {
-              reference:
-                reservationReference,
-              status:
-                "pending",
-            },
-          },
-        },
-        {
-          $set: {
-            "transactions.$[purchase].status":
-              "failed",
-            "transactions.$[purchase].serviceName":
-              serviceName,
-            "transactions.$[purchase].countryName":
-              countryName,
-            "transactions.$[purchase].description":
-              "Interrupted number purchase was already refunded",
-          },
-        },
-        {
-          arrayFilters: [
-            {
-              "purchase.reference":
-                reservationReference,
-              "purchase.status":
-                "pending",
-            },
-          ],
-          runValidators: true,
-        },
-      );
-
-    return {
-      repaired:
-        result.modifiedCount > 0,
-      refunded: false,
-      completed: false,
-      alreadyRefunded: true,
-      amount: 0,
-      wallet:
-        currentWallet,
-    };
-  }
-
-  const recovered =
-    await failPendingPurchaseAndRefundAtomically({
-      userId,
-      reservationReference,
-      refundReference,
-      alternateRefundReferences: [
-        legacyRefundReference,
-      ],
-      amount,
-      balanceField,
-      environment:
-        reservation.environment ||
-        "live",
-      refundDescription:
-        `Automatic refund for interrupted number purchase${serviceName ? ` - ${serviceName}` : ""}${countryName ? ` - ${countryName}` : ""}`,
-      purchaseDescription:
-        `Interrupted number purchase automatically refunded${serviceName ? ` - ${serviceName}` : ""}${countryName ? ` - ${countryName}` : ""}`,
-      serviceName,
-      countryName,
-      server:
-        VALID_SERVERS.includes(
-          reservation.server,
-        )
-          ? reservation.server
-          : null,
-    });
-
-  if (recovered) {
-    return {
-      repaired: true,
-      refunded: true,
-      completed: false,
-      amount,
-      wallet:
-        recovered,
-    };
-  }
-
-  /*
-   * A concurrent request may have repaired the same reservation between
-   * our read and update. Re-read before deciding this needs another retry.
-   */
-  currentWallet =
-    await Wallet.findOne({
-      user: userId,
-    });
-
-  if (
-    walletHasReference(
-      currentWallet,
-      [
-        refundReference,
-        legacyRefundReference,
-      ],
-    )
-  ) {
-    return {
-      repaired: true,
-      refunded: false,
-      completed: false,
-      alreadyRefunded: true,
-      amount: 0,
-      wallet:
-        currentWallet,
-    };
-  }
-
-  return {
-    repaired: false,
-    refunded: false,
-    completed: false,
-    amount: 0,
-    wallet:
-      currentWallet,
-  };
-}
-
-async function recoverStaleReservationsForUser(
-  userId,
-) {
-  const staleAfterMs =
-    getStaleReservationAgeMs();
-
-  const cutoff =
-    new Date(
-      Date.now() -
-        staleAfterMs,
-    );
-
-  let wallet =
-    await Wallet.findOne({
-      user: userId,
-    });
-
-  if (!wallet) {
-    return {
-      wallet: null,
-      repaired: 0,
-      refundedCount: 0,
-      completedCount: 0,
-      refundedAmount: 0,
-    };
-  }
-
-  const staleReservations =
-    (
-      Array.isArray(
-        wallet.transactions,
-      )
-        ? wallet.transactions
-        : []
-    ).filter(
-      (transaction) => {
-        const createdAt =
-          transaction?.createdAt
-            ? new Date(
-                transaction.createdAt,
-              )
-            : null;
-
-        return (
-          String(
-            transaction?.type ||
-              "",
-          )
-            .trim()
-            .toLowerCase() ===
-            "purchase" &&
-          String(
-            transaction?.status ||
-              "",
-          )
-            .trim()
-            .toLowerCase() ===
-            "pending" &&
-          Boolean(
-            transaction?.reference,
-          ) &&
-          createdAt &&
-          !Number.isNaN(
-            createdAt.getTime(),
-          ) &&
-          createdAt <= cutoff
-        );
-      },
-    );
-
-  let repaired = 0;
-  let refundedCount = 0;
-  let completedCount = 0;
-  let refundedAmount = 0;
-
-  for (
-    const reservation of
-      staleReservations
-  ) {
-    try {
-      const result =
-        await reconcileStaleReservation({
-          userId,
-          reservation,
-        });
-
-      if (result.repaired) {
-        repaired += 1;
-      }
-
-      if (result.refunded) {
-        refundedCount += 1;
-        refundedAmount +=
-          Number(
-            result.amount || 0,
-          );
-      }
-
-      if (result.completed) {
-        completedCount += 1;
-      }
-
-      if (result.wallet) {
-        wallet =
-          result.wallet;
-      }
-    } catch (error) {
-      console.warn(
-        "[Order reservation] recovery failed:",
-        {
-          userId:
-            String(userId),
-          reference:
-            String(
-              reservation?.reference ||
-                "",
-            ),
-          code:
-            error?.code,
-          message:
-            error?.message,
-        },
-      );
-    }
-  }
-
-  const latestWallet =
-    await Wallet.findOne({
-      user: userId,
-    });
-
-  return {
-    wallet:
-      latestWallet || wallet,
-    repaired,
-    refundedCount,
-    completedCount,
-    refundedAmount,
-  };
-}
-
-/*
- * Manual/self-service recovery endpoint. The background reconciler below
- * means customers do not need to keep the browser open for this to work.
- */
-exports.recoverStaleReservations =
-  async (req, res) => {
-    try {
-      const result =
-        await recoverStaleReservationsForUser(
-          req.user._id,
-        );
-
-      if (!result.wallet) {
-        return res
-          .status(404)
-          .json({
-            success: false,
-            code:
-              "WALLET_NOT_FOUND",
-            message:
-              "Wallet not found",
-          });
-      }
-
-      const balanceField =
-        getWalletBalanceField(
-          getPaymentEnvironment(),
-        );
-
-      return res.json({
-        success: true,
-        repaired:
-          result.repaired,
-        refundedCount:
-          result.refundedCount,
-        completedCount:
-          result.completedCount,
-        refundedAmount:
-          result.refundedAmount,
-        walletBalance:
-          getWalletBalance(
-            result.wallet,
-            balanceField,
-          ),
-        message:
-          result.refundedCount > 0
-            ? `Recovered ${result.refundedCount} interrupted purchase reservation(s) and returned ₦${result.refundedAmount.toLocaleString("en-NG")} to the wallet.`
-            : result.completedCount > 0
-              ? `Reconciled ${result.completedCount} completed purchase reservation(s).`
-              : "No stale purchase reservations needed recovery.",
-      });
-    } catch (error) {
-      console.error(
-        "Recover stale reservations error:",
-        error,
-      );
-
-      return res
-        .status(
-          error.status || 500,
-        )
-        .json({
-          success: false,
-          code:
-            error.code ||
-            "RESERVATION_RECOVERY_FAILED",
-          message:
-            error.message ||
-            "Unable to recover stale purchase reservations",
-        });
-    }
-  };
 
 exports.createOrder =
   async (req, res) => {
@@ -1719,6 +894,12 @@ exports.createOrder =
       "";
 
     let normalizedServer =
+      "";
+
+    let displayCountryName =
+      "";
+
+    let displayServiceName =
       "";
 
     try {
@@ -1816,6 +997,14 @@ exports.createOrder =
         String(
           serviceName || "",
         ).trim();
+
+      displayCountryName =
+        normalizedCountryName ||
+        normalizedCountry;
+
+      displayServiceName =
+        normalizedServiceName ||
+        normalizedService;
 
       const requestedOperator =
         normalizeOperator(
@@ -2056,7 +1245,7 @@ exports.createOrder =
                     balanceField,
 
                     description:
-                      `Reserved for ${normalizedService} (${normalizedCountry}) - ${normalizedServer}`,
+                      `Reserved for ${displayServiceName} (${displayCountryName}) - ${normalizedServer}`,
 
                     status:
                       "pending",
@@ -2066,14 +1255,6 @@ exports.createOrder =
 
                     server:
                       normalizedServer,
-
-                    serviceName:
-                      normalizedServiceName ||
-                      normalizedService,
-
-                    countryName:
-                      normalizedCountryName ||
-                      normalizedCountry,
 
                     currency:
                       "NGN",
@@ -2086,7 +1267,7 @@ exports.createOrder =
           },
 
           {
-            returnDocument: "after",
+            new: true,
             runValidators: true,
           },
         );
@@ -2142,20 +1323,250 @@ exports.createOrder =
       debitedAmount =
         reservedAmount;
 
-      purchasedProviderOrder =
-        await providerManager.buyNumber({
-          server:
-            normalizedServer,
-
-          country:
-            normalizedCountry,
-
-          service:
-            normalizedService,
-
-          operator:
+      /*
+       * Automatic Cheapest-5 purchases get availability failover.
+       *
+       * Important safety rule:
+       * - A different candidate is tried ONLY after the provider explicitly
+       *   says the previous operator/pool had no number.
+       * - Network timeouts / connection errors / malformed responses are NOT
+       *   retried because the provider could already have created an activation.
+       * - Manual fixed-operator rules never fall back to another operator.
+       * - A fallback candidate is used only if its calculated customer price
+       *   is <= the amount already shown/reserved for the customer.
+       */
+      if (automaticSelection) {
+        const purchaseCandidates =
+          buildAutomaticPurchaseCandidates(
+            automaticSelection,
             normalizedOperator,
-        });
+          );
+
+        let lastAvailabilityError =
+          null;
+
+        for (
+          const candidateOperator of
+          purchaseCandidates
+        ) {
+          let candidateQuote;
+
+          try {
+            candidateQuote =
+              candidateOperator ===
+                normalizedOperator
+                ? preliminaryQuote
+                : await providerManager
+                    .getPrice({
+                      server:
+                        normalizedServer,
+                      country:
+                        normalizedCountry,
+                      service:
+                        normalizedService,
+                      operator:
+                        candidateOperator,
+                    });
+          } catch (quoteError) {
+            /*
+             * Quoting is read-only, so an unavailable candidate may simply
+             * be skipped without any double-purchase risk.
+             */
+            if (
+              isDefinitiveAvailabilityFailure(
+                quoteError
+              )
+            ) {
+              lastAvailabilityError =
+                quoteError;
+              continue;
+            }
+
+            throw quoteError;
+          }
+
+          const candidateStock =
+            Number(
+              candidateQuote?.stock
+            );
+
+          if (
+            Number.isFinite(
+              candidateStock
+            ) &&
+            candidateStock <= 0
+          ) {
+            const stockError =
+              new Error(
+                "Automatic operator has no live stock"
+              );
+
+            stockError.status = 409;
+            stockError.code =
+              "NO_NUMBERS";
+
+            lastAvailabilityError =
+              stockError;
+            continue;
+          }
+
+          const candidatePricing =
+            await pricingService
+              .resolveCustomerPricing({
+                server:
+                  normalizedServer,
+                country:
+                  normalizedCountry,
+                service:
+                  normalizedService,
+                countryName:
+                  displayCountryName,
+                serviceName:
+                  displayServiceName,
+                operator:
+                  candidateOperator,
+                providerPrice:
+                  candidateQuote.price,
+                providerCurrency:
+                  candidateQuote.currency,
+              });
+
+          const candidateSellingPrice =
+            Number(
+              candidatePricing
+                .sellingPrice
+            );
+
+          /*
+           * The user must never be silently charged more than the live price
+           * that was displayed/reserved before they pressed Buy Number.
+           */
+          if (
+            !Number.isFinite(
+              candidateSellingPrice
+            ) ||
+            candidateSellingPrice >
+              reservedAmount
+          ) {
+            continue;
+          }
+
+          try {
+            purchasedProviderOrder =
+              await providerManager
+                .buyNumber({
+                  server:
+                    normalizedServer,
+                  country:
+                    normalizedCountry,
+                  service:
+                    normalizedService,
+                  operator:
+                    candidateOperator,
+                });
+
+            normalizedOperator =
+              candidateOperator;
+
+            preliminaryQuote =
+              candidateQuote;
+
+            if (
+              process.env.NODE_ENV !==
+              "production"
+            ) {
+              console.log(
+                "[Automatic pricing] purchase candidate succeeded:",
+                {
+                  server:
+                    normalizedServer,
+                  country:
+                    normalizedCountry,
+                  service:
+                    normalizedService,
+                  operator:
+                    candidateOperator,
+                }
+              );
+            }
+
+            break;
+          } catch (purchaseError) {
+            if (
+              isDefinitiveAvailabilityFailure(
+                purchaseError
+              )
+            ) {
+              lastAvailabilityError =
+                purchaseError;
+
+              if (
+                process.env.NODE_ENV !==
+                "production"
+              ) {
+                console.log(
+                  "[Automatic pricing] candidate unavailable, checking next Cheapest-5 candidate:",
+                  {
+                    server:
+                      normalizedServer,
+                    country:
+                      normalizedCountry,
+                    service:
+                      normalizedService,
+                    operator:
+                      candidateOperator,
+                    code:
+                      purchaseError?.code,
+                  }
+                );
+              }
+
+              continue;
+            }
+
+            /*
+             * Uncertain mutation result: stop immediately.
+             * The outer rollback path will restore the ChapsSms reservation,
+             * but we DO NOT send another provider purchase request.
+             */
+            throw purchaseError;
+          }
+        }
+
+        if (!purchasedProviderOrder) {
+          if (lastAvailabilityError) {
+            throw lastAvailabilityError;
+          }
+
+          const noCandidateError =
+            new Error(
+              "No Cheapest-5 operator can currently provide this number at the displayed ChapsSms price"
+            );
+
+          noCandidateError.status =
+            409;
+          noCandidateError.code =
+            "NO_NUMBERS";
+          throw noCandidateError;
+        }
+      } else {
+        /*
+         * Fixed/manual operator means exact operator only.
+         * Never silently switch an admin-configured fixed operator.
+         */
+        purchasedProviderOrder =
+          await providerManager
+            .buyNumber({
+              server:
+                normalizedServer,
+              country:
+                normalizedCountry,
+              service:
+                normalizedService,
+              operator:
+                normalizedOperator,
+            });
+      }
 
       const providerPrice =
         Number(
@@ -2377,15 +1788,13 @@ exports.createOrder =
               normalizedCountry,
 
             countryName:
-              normalizedCountryName ||
-              normalizedCountry,
+              displayCountryName,
 
             service:
               normalizedService,
 
             serviceName:
-              normalizedServiceName ||
-              normalizedService,
+              displayServiceName,
 
             operator:
               actualOperator,
@@ -2494,12 +1903,10 @@ exports.createOrder =
           finalAmount,
 
         service:
-          normalizedServiceName ||
-          normalizedService,
+          displayServiceName,
 
         country:
-          normalizedCountryName ||
-          normalizedCountry,
+          displayCountryName,
 
         server:
           normalizedServer,
@@ -2581,10 +1988,12 @@ exports.createOrder =
               reservationReference,
 
               service:
+                displayServiceName ||
                 normalizedService ||
                 "SMS",
 
               country:
+                displayCountryName ||
                 normalizedCountry ||
                 "unknown",
 
@@ -2706,57 +2115,32 @@ async function refundTerminalProviderOrder({
    * Some of them were manually compensated before this fix existed.
    */
   if (!latestOrder.autoRefundEligible) {
-    const providerStatus = String(
+    latestOrder.status = terminalStatus;
+    latestOrder.providerStatus = String(
       providerOrder?.providerStatus ||
         latestOrder.providerStatus ||
         (terminalStatus === "expired"
           ? "NO_ACTIVATION"
           : "STATUS_CANCEL"),
     ).toUpperCase();
+    latestOrder.providerLastCheckedAt =
+      new Date();
 
-    /*
-     * Historical Order documents may pre-date the current required pricing
-     * and server fields. Using document.save() here re-validates the whole
-     * old document and can fail even though we are only updating lifecycle
-     * metadata. A targeted update keeps those old records readable without
-     * weakening validation for newly-created orders.
-     */
-    const updatedHistoricalOrder =
-      await Order.findByIdAndUpdate(
-        latestOrder._id,
-        {
-          $set: {
-            status: terminalStatus,
-            providerStatus,
-            providerLastCheckedAt:
-              new Date(),
-            ...(providerOrder?.raw !==
-            undefined
-              ? {
-                  providerResponse:
-                    providerOrder.raw,
-                }
-              : {}),
-            ...(terminalStatus ===
-            "cancelled"
-              ? {
-                  providerCancelledAt:
-                    latestOrder.providerCancelledAt ||
-                    new Date(),
-                }
-              : {}),
-          },
-        },
-        {
-          returnDocument: "after",
-          runValidators: false,
-        },
-      );
+    if (providerOrder?.raw !== undefined) {
+      latestOrder.providerResponse =
+        providerOrder.raw;
+    }
+
+    if (terminalStatus === "cancelled") {
+      latestOrder.providerCancelledAt =
+        latestOrder.providerCancelledAt ||
+        new Date();
+    }
+
+    await latestOrder.save();
 
     return {
-      order:
-        updatedHistoricalOrder ||
-        latestOrder,
+      order: latestOrder,
       wallet: null,
       refunded: false,
     };
@@ -2904,7 +2288,7 @@ async function refundTerminalProviderOrder({
         },
       },
       {
-        returnDocument: "after",
+        new: true,
         runValidators: true,
       },
     );
@@ -3031,34 +2415,6 @@ async function reconcileOrderLifecycle(order) {
       order,
       wallet: null,
       refunded: Boolean(order.refunded),
-    };
-  }
-
-  const providerReference =
-    String(order.provider || "")
-      .trim()
-      .toLowerCase();
-
-  /*
-   * Historical ChapSMS records can contain the retired `5sim` provider.
-   * It is NOT a supported provider anymore and must never be sent through
-   * providerManager. Keep the record visible in history, but do not poll or
-   * cancel it through the current Server 1 / Server 2 integration.
-   */
-  if (
-    providerReference &&
-    ![
-      "smsbower",
-      "benotp",
-      "server1",
-      "server2",
-    ].includes(providerReference)
-  ) {
-    return {
-      order,
-      wallet: null,
-      refunded: Boolean(order.refunded),
-      legacyProvider: true,
     };
   }
 
@@ -3230,55 +2586,6 @@ async function reconcileOrderLifecycle(order) {
     });
   }
 
-  /*
-   * ChapSMS owns the 20-minute customer window. If the provider is still
-   * waiting when that window ends, cancel the same provider activation
-   * server-side. A refund is only issued after the provider cancellation
-   * call succeeds, so we never credit money back while an activation is
-   * still usable. The background lifecycle sweep retries this path.
-   */
-  if (orderExpiryHasPassed(order)) {
-    try {
-      const cancelledOrder =
-        await providerManager.cancelOrder(
-          order.provider,
-          order.providerOrderId,
-        );
-
-      return refundTerminalProviderOrder({
-        order,
-        providerOrder: cancelledOrder,
-        terminalStatus: "cancelled",
-      });
-    } catch (cancelError) {
-      const cancelCode = String(
-        cancelError?.code || "",
-      )
-        .trim()
-        .toUpperCase();
-
-      /*
-       * Some providers remove an activation immediately after timeout.
-       * Once ChapSMS' own 20-minute deadline has passed, NO_ACTIVATION
-       * is sufficient terminal confirmation for an expiry refund.
-       */
-      if (cancelCode === "NO_ACTIVATION") {
-        return refundTerminalProviderOrder({
-          order,
-          providerOrder: {
-            providerStatus: "NO_ACTIVATION",
-            raw:
-              cancelError?.rawResponse ||
-              "NO_ACTIVATION",
-          },
-          terminalStatus: "expired",
-        });
-      }
-
-      throw cancelError;
-    }
-  }
-
   order.providerStatus =
     providerStatus ||
     order.providerStatus ||
@@ -3440,167 +2747,6 @@ function startLifecycleReconciler() {
 }
 
 startLifecycleReconciler();
-
-let staleReservationSweepRunning =
-  false;
-
-let staleReservationReconcilerStarted =
-  false;
-
-function getStaleReservationSweepIntervalMs() {
-  return getPositiveInteger(
-    process.env
-      .STALE_RESERVATION_RECONCILE_INTERVAL_MS,
-    60000,
-    10 * 60 * 1000,
-  );
-}
-
-async function runStaleReservationSweep() {
-  if (
-    staleReservationSweepRunning
-  ) {
-    return;
-  }
-
-  staleReservationSweepRunning =
-    true;
-
-  try {
-    const cutoff =
-      new Date(
-        Date.now() -
-          getStaleReservationAgeMs(),
-      );
-
-    const batchSize =
-      getPositiveInteger(
-        process.env
-          .STALE_RESERVATION_RECONCILE_BATCH_SIZE,
-        20,
-        100,
-      );
-
-    /*
-     * Only select user IDs here. recoverStaleReservationsForUser() performs
-     * the authoritative wallet read and atomic repair.
-     */
-    const wallets =
-      await Wallet.find({
-        transactions: {
-          $elemMatch: {
-            type:
-              "purchase",
-            status:
-              "pending",
-            createdAt: {
-              $lte:
-                cutoff,
-            },
-          },
-        },
-      })
-        .select(
-          "user",
-        )
-        .limit(
-          batchSize,
-        )
-        .lean();
-
-    for (
-      const wallet of wallets
-    ) {
-      if (!wallet?.user) {
-        continue;
-      }
-
-      const result =
-        await recoverStaleReservationsForUser(
-          wallet.user,
-        );
-
-      if (
-        result.refundedCount >
-          0 ||
-        result.completedCount >
-          0
-      ) {
-        console.log(
-          "[Order reservation] automatic recovery completed:",
-          {
-            userId:
-              String(
-                wallet.user,
-              ),
-            refundedCount:
-              result.refundedCount,
-            completedCount:
-              result.completedCount,
-            refundedAmount:
-              result.refundedAmount,
-          },
-        );
-      }
-    }
-  } catch (error) {
-    console.warn(
-      "[Order reservation] background recovery failed:",
-      error?.message ||
-        error,
-    );
-  } finally {
-    staleReservationSweepRunning =
-      false;
-  }
-}
-
-function startStaleReservationReconciler() {
-  if (
-    staleReservationReconcilerStarted ||
-    String(
-      process.env
-        .STALE_RESERVATION_RECONCILER_ENABLED ||
-        "true",
-    )
-      .trim()
-      .toLowerCase() ===
-      "false"
-  ) {
-    return;
-  }
-
-  staleReservationReconcilerStarted =
-    true;
-
-  const firstRun =
-    setTimeout(
-      () => {
-        runStaleReservationSweep()
-          .catch(
-            () => null,
-          );
-      },
-      10000,
-    );
-
-  firstRun.unref?.();
-
-  const timer =
-    setInterval(
-      () => {
-        runStaleReservationSweep()
-          .catch(
-            () => null,
-          );
-      },
-      getStaleReservationSweepIntervalMs(),
-    );
-
-  timer.unref?.();
-}
-
-startStaleReservationReconciler();
 
 exports.checkOrder = async (req, res) => {
   try {
@@ -3979,7 +3125,7 @@ exports.cancelOrder =
           },
 
           {
-            returnDocument: "after",
+            new: true,
             runValidators: true,
           },
         );
@@ -4249,3 +3395,4 @@ exports.getOrder = async (req, res) => {
       });
   }
 };
+
