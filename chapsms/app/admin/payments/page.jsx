@@ -46,6 +46,77 @@ function title(value) {
     );
 }
 
+const LEGACY_SERVICE_NAMES = {
+  wa: "WhatsApp",
+  ig: "Instagram",
+  tg: "Telegram",
+  fb: "Facebook",
+  go: "Google",
+  am: "Amazon",
+  ds: "Discord",
+  tt: "TikTok",
+  tw: "X / Twitter",
+  nf: "Netflix",
+};
+
+function serviceDisplayName(
+  value,
+  explicitName = ""
+) {
+  const friendly = String(
+    explicitName || ""
+  ).trim();
+
+  if (friendly) {
+    return friendly;
+  }
+
+  const raw = String(
+    value || ""
+  ).trim();
+
+  if (!raw) {
+    return "";
+  }
+
+  return (
+    LEGACY_SERVICE_NAMES[
+      raw.toLowerCase()
+    ] ||
+    title(raw)
+  );
+}
+
+function countryDisplayName(
+  value,
+  explicitName = ""
+) {
+  const friendly = String(
+    explicitName || ""
+  ).trim();
+
+  if (friendly) {
+    return friendly;
+  }
+
+  const raw = String(
+    value || ""
+  ).trim();
+
+  /*
+   * Old provider IDs such as "58" are internal catalog identifiers,
+   * not customer-facing country names. Never show them as WA-58.
+   */
+  if (
+    !raw ||
+    /^\\d+$/.test(raw)
+  ) {
+    return "";
+  }
+
+  return title(raw);
+}
+
 function gatewayLabel(payment) {
   const gateway = String(
     payment?.gateway || ""
@@ -68,9 +139,22 @@ function gatewayLabel(payment) {
   if (
     payment?.type === "purchase"
   ) {
+    const service =
+      serviceDisplayName(
+        payment?.service,
+        payment?.serviceName
+      );
+
+    const country =
+      countryDisplayName(
+        payment?.country,
+        payment?.countryName
+      );
+
     return [
-      payment?.serviceName,
-      payment?.countryName,
+      service ||
+        "Number purchase",
+      country,
       payment?.server === "server1"
         ? "Server 1"
         : payment?.server === "server2"
@@ -78,8 +162,7 @@ function gatewayLabel(payment) {
           : "",
     ]
       .filter(Boolean)
-      .join(" • ") ||
-      "Number purchase";
+      .join(" • ");
   }
 
   if (
@@ -163,44 +246,108 @@ function amountClass(payment) {
 }
 
 function purchaseAttemptLabel(payment) {
-  if (String(payment?.type || "").toLowerCase() !== "purchase") {
+  if (
+    String(
+      payment?.type || ""
+    ).toLowerCase() !==
+    "purchase"
+  ) {
     return "";
   }
 
-  const service = String(payment?.serviceName || "").trim();
-  const country = String(payment?.countryName || "").trim();
+  const service =
+    serviceDisplayName(
+      payment?.service,
+      payment?.serviceName
+    );
+
+  const country =
+    countryDisplayName(
+      payment?.country,
+      payment?.countryName
+    );
 
   if (service || country) {
-    return [service || "Number purchase", country]
-      .filter(Boolean)
-      .join(" · ");
-  }
-
-  const description = String(payment?.description || "").trim();
-
-  if (!description) {
-    return "Number purchase";
-  }
-
-  const legacyReservation = description.match(
-    /^Reserved for\s+(.+?)\s+\((.+?)\)\s+-\s+(server\d+)/i
-  );
-
-  if (legacyReservation) {
-    const rawCountry = String(legacyReservation[2] || "").trim();
-
     return [
-      title(legacyReservation[1]),
-      /^\d+$/.test(rawCountry) ? "" : title(rawCountry),
-      title(legacyReservation[3]),
+      service ||
+        "Number purchase",
+      country,
     ]
       .filter(Boolean)
       .join(" · ");
   }
 
+  const description =
+    String(
+      payment?.description ||
+        ""
+    ).trim();
+
+  if (!description) {
+    return "Number purchase";
+  }
+
+  const legacyReservation =
+    description.match(
+      /^Reserved for\s+(.+?)\s+\((.+?)\)\s+-\s+(server\d+)/i
+    );
+
+  const legacyCompleted =
+    description.match(
+      /^(.+?)\s+\((.+?)\)\s+-\s+(server\d+)$/i
+    );
+
+  const match =
+    legacyReservation ||
+    legacyCompleted;
+
+  if (match) {
+    const parsedService =
+      serviceDisplayName(
+        match[1]
+      );
+
+    const parsedCountry =
+      countryDisplayName(
+        match[2]
+      );
+
+    return [
+      parsedService ||
+        "Number purchase",
+      parsedCountry,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  /*
+   * Last-resort legacy cleanup:
+   * convert a bare "wa" to WhatsApp and never expose strings such as WA-58.
+   */
+  const compact =
+    description.match(
+      /^([a-z]{1,8})[-_](\d+)$/i
+    );
+
+  if (compact) {
+    return (
+      serviceDisplayName(
+        compact[1]
+      ) ||
+      "Number purchase"
+    );
+  }
+
   return description
-    .replace(/^Reserved for\s+/i, "")
-    .replace(/^Number purchase\s*-?\s*/i, "")
+    .replace(
+      /^Reserved for\s+/i,
+      ""
+    )
+    .replace(
+      /^Number purchase\s*-?\s*/i,
+      ""
+    )
     .trim();
 }
 
