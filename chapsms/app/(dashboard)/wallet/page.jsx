@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -7,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+
 import Script from "next/script";
 import toast from "react-hot-toast";
 import {
@@ -115,7 +117,7 @@ export default function WalletPage() {
   } = useWallet();
 
   const [amount, setAmount] = useState(5000);
-  const [gateway, setGateway] = useState("flutterwave");
+  const [gateway, setGateway] = useState("neurapay");
   const [paymentMethod, setPaymentMethod] = useState("bank");
 
   // Flutterwave state
@@ -668,7 +670,7 @@ export default function WalletPage() {
             Add <span className="text-blue-600">Funds</span>
           </h1>
           <p className="mt-2 text-sm text-[var(--muted-foreground)] sm:text-base">
-            Choose Flutterwave or NeuraPay to fund your ChapsSms wallet securely.
+            Choose NeuraPay or Flutterwave to fund your ChapsSms wallet securely.
           </p>
         </div>
 
@@ -731,18 +733,6 @@ export default function WalletPage() {
           <div className="mt-4 grid grid-cols-2 rounded-2xl border border-[var(--border)] bg-[var(--muted)] p-1.5">
             <button
               type="button"
-              onClick={() => setGateway("flutterwave")}
-              className={`min-h-12 rounded-xl text-sm font-black transition ${
-                gateway === "flutterwave"
-                  ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
-                  : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-              }`}
-            >
-              Flutterwave
-            </button>
-
-            <button
-              type="button"
               onClick={() => {
                 setGateway("neurapay");
                 setNeurapayFundingActive(true);
@@ -765,6 +755,18 @@ export default function WalletPage() {
               }`}
             >
               NeuraPay
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setGateway("flutterwave")}
+              className={`min-h-12 rounded-xl text-sm font-black transition ${
+                gateway === "flutterwave"
+                  ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm ring-1 ring-blue-500/40"
+                  : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              }`}
+            >
+              Flutterwave
             </button>
           </div>
 
