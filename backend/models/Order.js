@@ -265,6 +265,13 @@ const orderSchema = new mongoose.Schema(
 
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ server: 1, createdAt: -1 });
+orderSchema.index({
+  server: 1,
+  country: 1,
+  service: 1,
+  operator: 1,
+  createdAt: -1,
+});
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ refunded: 1, createdAt: -1 });
 orderSchema.index({ autoRefundEligible: 1, status: 1, expiresAt: 1 });

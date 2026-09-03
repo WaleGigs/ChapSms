@@ -10,6 +10,9 @@ const providerManager = require(
 const pricingService = require(
   "../services/pricingService"
 );
+const automaticPricingService = require(
+  "../services/automaticPricingService"
+);
 
 function parseBoolean(value, fallback = undefined) {
   if (value === undefined) {
@@ -328,6 +331,15 @@ function ruleResponse(rule) {
     service: rule.service,
     serviceName: rule.serviceName,
     operator: rule.operator,
+    pricingStyle:
+      pricingService.normalizePricingStyle(
+        rule.pricingStyle,
+        rule.operator
+      ),
+    maxPriceBufferPercent:
+      Number.isFinite(Number(rule.maxPriceBufferPercent))
+        ? Number(rule.maxPriceBufferPercent)
+        : 50,
     pricingMode: rule.pricingMode,
     fixedSellingPrice: rule.fixedSellingPrice,
     markupPercent: rule.markupPercent,
@@ -590,30 +602,97 @@ exports.getOperators = async (req, res) => {
   }
 };
 
+exports.getExchangeRate = async (_req, res) => {
+  try {
+    const exchangeRate = await pricingService.getExchangeRate({
+      forceRefresh: true,
+    });
+
+    return res.json({
+      success: true,
+      exchangeRate: {
+        currencyFrom: "USD",
+        currencyTo: "NGN",
+        ...exchangeRate,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Unable to load exchange rate",
+      code: error.code || "EXCHANGE_RATE_LOAD_FAILED",
+    });
+  }
+};
+
+exports.updateExchangeRate = async (req, res) => {
+  try {
+    const exchangeRate = await pricingService.setExchangeRate(
+      req.body?.rate,
+      req.user?._id || null
+    );
+
+    return res.json({
+      success: true,
+      exchangeRate: {
+        currencyFrom: "USD",
+        currencyTo: "NGN",
+        ...exchangeRate,
+      },
+      message: "USD to NGN rate updated successfully",
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Unable to update exchange rate",
+      code: error.code || "EXCHANGE_RATE_UPDATE_FAILED",
+    });
+  }
+};
+
 exports.previewPricing = async (req, res) => {
   try {
     const server = pricingService.normalizeServer(req.body.server);
     const country = pricingService.normalizeCountry(req.body.country);
     const service = pricingService.normalizeService(req.body.service);
-    const operator = pricingService.normalizeOperator(req.body.operator);
+    const draftRule = pricingService.normalizeRuleInput(req.body);
 
-    const quote = await providerManager.getPrice({
-      server,
-      country,
-      service,
-      operator,
-    });
+    let operator = draftRule.operator;
+    let quote;
+    let automaticSelection = null;
+    let pricingBasisNgn = null;
 
-    const hasDraftRule = Boolean(req.body.pricingMode);
+    if (draftRule.pricingStyle === "cheapest_buffer") {
+      automaticSelection = await automaticPricingService.resolveAutomaticQuote({
+        server,
+        country,
+        service,
+        maxPriceBufferPercent: draftRule.maxPriceBufferPercent,
+      });
+
+      operator = automaticSelection.operator;
+      quote = automaticSelection.quote;
+      pricingBasisNgn = automaticSelection.pricingBasisNgn;
+    } else {
+      quote = await providerManager.getPrice({
+        server,
+        country,
+        service,
+        operator,
+      });
+    }
 
     const pricing = await pricingService.resolveCustomerPricing({
       server,
       country,
       service,
+      countryName: String(req.body.countryName || "").trim(),
+      serviceName: String(req.body.serviceName || "").trim(),
       operator,
       providerPrice: quote.price,
       providerCurrency: quote.currency,
-      draftRule: hasDraftRule ? req.body : null,
+      pricingBasisNgn,
+      draftRule: req.body,
     });
 
     return res.json({
@@ -626,13 +705,26 @@ exports.previewPricing = async (req, res) => {
         providerCost: pricing.providerPrice,
         providerCurrency: pricing.providerCurrency,
         providerCostNgn: pricing.providerCostNgn,
+        exchangeRateNgnPerUsd: pricing.exchangeRateNgnPerUsd,
+        floorCostNgn:
+          automaticSelection?.floorCostNgn ?? pricing.providerCostNgn,
+        pricingBasisNgn: pricing.pricingBasisNgn,
         sellingPrice: pricing.sellingPrice,
         profit: pricing.profit,
         stock: Number.isFinite(Number(quote.stock))
           ? Number(quote.stock)
           : 0,
         pricingMode: pricing.pricingMode,
+        pricingStyle: pricing.pricingStyle,
         pricingSource: pricing.pricingSource,
+        eligibleCount: automaticSelection?.eligibleCount || 0,
+        selectionStrategy: automaticSelection?.strategy || "fixed_operator",
+        otpSuccessRate: automaticSelection?.otpSuccessRate ?? null,
+        otpSuccessCount: automaticSelection?.otpSuccessCount || 0,
+        otpFailureCount: automaticSelection?.otpFailureCount || 0,
+        otpSampleSize: automaticSelection?.otpSampleSize || 0,
+        reliabilityProven:
+          automaticSelection?.reliabilityProven === true,
         pricingRuleId: pricing.pricingRuleId
           ? String(pricing.pricingRuleId)
           : null,
@@ -1372,4 +1464,3 @@ exports.getPayments = async (req, res) => {
       });
   }
 };
-

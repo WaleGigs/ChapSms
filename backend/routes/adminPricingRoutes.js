@@ -5,6 +5,8 @@ const {
   updateRule,
   disableRule,
   getOperators,
+  getExchangeRate,
+  updateExchangeRate,
   previewPricing,
   getDashboardSummary,
   getSales,
@@ -25,6 +27,8 @@ router.patch("/rules/:id", updateRule);
 router.delete("/rules/:id", disableRule);
 
 router.get("/operators", getOperators);
+router.get("/exchange-rate", getExchangeRate);
+router.patch("/exchange-rate", updateExchangeRate);
 router.post("/preview", previewPricing);
 router.get("/summary", getDashboardSummary);
 router.get("/sales", getSales);

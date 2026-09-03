@@ -1030,9 +1030,9 @@ exports.createOrder =
           });
       }
 
-      let normalizedOperator =
+      const pricingStrategy =
         await pricingService
-          .resolveEffectiveOperator({
+          .resolvePricingStrategy({
             server:
               normalizedServer,
 
@@ -1051,18 +1051,23 @@ exports.createOrder =
             requestedOperator,
           });
 
+      let normalizedOperator =
+        pricingStrategy.operator;
+
       let preliminaryQuote;
       let automaticSelection =
         null;
+      let pricingBasisNgn =
+        null;
 
       /*
-       * Manual operator/fixed-rule choices still override automation.
-       * Cheapest 5 selection is used only when no specific operator
-       * has been selected by the customer/admin pricing rule.
+       * Manual/fixed-operator choices still override automation.
+       * Cheapest + buffer is used only when the resolved pricing style
+       * is automatic, and it now uses the rule's saved price buffer.
        */
       if (
-        normalizedOperator ===
-        "any"
+        pricingStrategy.pricingStyle ===
+        "cheapest_buffer"
       ) {
         automaticSelection =
           await automaticPricingService
@@ -1073,6 +1078,9 @@ exports.createOrder =
                 normalizedCountry,
               service:
                 normalizedService,
+              maxPriceBufferPercent:
+                pricingStrategy
+                  .maxPriceBufferPercent,
             });
 
         normalizedOperator =
@@ -1080,6 +1088,10 @@ exports.createOrder =
 
         preliminaryQuote =
           automaticSelection.quote;
+
+        pricingBasisNgn =
+          automaticSelection
+            .pricingBasisNgn;
       } else {
         preliminaryQuote =
           await providerManager
@@ -1120,6 +1132,14 @@ exports.createOrder =
             candidateCount:
               automaticSelection
                 ?.candidateCount ||
+              0,
+            otpSuccessRate:
+              automaticSelection
+                ?.otpSuccessRate ??
+              null,
+            otpSampleSize:
+              automaticSelection
+                ?.otpSampleSize ||
               0,
           }
         );
@@ -1179,6 +1199,8 @@ exports.createOrder =
 
             providerCurrency:
               preliminaryQuote.currency,
+
+            pricingBasisNgn,
           });
 
       const reservedAmount =
@@ -1324,7 +1346,7 @@ exports.createOrder =
         reservedAmount;
 
       /*
-       * Automatic Cheapest-5 purchases get availability failover.
+       * Automatic Cheapest + buffer purchases get availability failover.
        *
        * Important safety rule:
        * - A different candidate is tried ONLY after the provider explicitly
@@ -1429,6 +1451,8 @@ exports.createOrder =
                   candidateQuote.price,
                 providerCurrency:
                   candidateQuote.currency,
+
+                pricingBasisNgn,
               });
 
           const candidateSellingPrice =
@@ -1505,7 +1529,7 @@ exports.createOrder =
                 "production"
               ) {
                 console.log(
-                  "[Automatic pricing] candidate unavailable, checking next Cheapest-5 candidate:",
+                  "[Automatic pricing] candidate unavailable, checking next Cheapest + buffer candidate:",
                   {
                     server:
                       normalizedServer,
@@ -1540,7 +1564,7 @@ exports.createOrder =
 
           const noCandidateError =
             new Error(
-              "No Cheapest-5 operator can currently provide this number at the displayed ChapsSms price"
+              "No eligible Cheapest + buffer operator can currently provide this number at the displayed ChapsSms price"
             );
 
           noCandidateError.status =
@@ -1628,6 +1652,8 @@ exports.createOrder =
             providerPrice,
 
             providerCurrency,
+
+            pricingBasisNgn,
           });
 
       const finalAmount =
@@ -3395,4 +3421,3 @@ exports.getOrder = async (req, res) => {
       });
   }
 };
-

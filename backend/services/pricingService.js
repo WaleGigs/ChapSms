@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const PricingRule = require("../models/PricingRule");
 
 const VALID_SERVERS = new Set(["server1", "server2"]);
@@ -10,6 +11,17 @@ const VALID_PRICING_STYLES = new Set([
   "cheapest_buffer",
   "fixed_operator",
 ]);
+
+const EXCHANGE_RATE_SETTING_KEY = "pricing.ngn_per_usd";
+const DEFAULT_NGN_PER_USD = 1600;
+const EXCHANGE_RATE_CACHE_TTL_MS = 60 * 1000;
+
+let exchangeRateCache = {
+  rate: null,
+  updatedAt: null,
+  source: null,
+  expiresAt: 0,
+};
 
 function createPricingError(message, { code = "PRICING_ERROR", status = 400 } = {}) {
   const error = new Error(message);
@@ -77,6 +89,170 @@ function normalizePricingStyle(value, operator = "any") {
     : "fixed_operator";
 }
 
+function getEnvironmentExchangeRate() {
+  const configured = Number(process.env.NGN_PER_USD);
+
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_NGN_PER_USD;
+}
+
+function getCachedExchangeRateValue() {
+  const cached = Number(exchangeRateCache.rate);
+
+  if (Number.isFinite(cached) && cached > 0) {
+    return cached;
+  }
+
+  return getEnvironmentExchangeRate();
+}
+
+function getSettingsCollection() {
+  if (!mongoose.connection?.db) {
+    throw createPricingError("Database connection is not ready", {
+      code: "SETTINGS_DATABASE_NOT_READY",
+      status: 503,
+    });
+  }
+
+  return mongoose.connection.db.collection("app_settings");
+}
+
+async function getExchangeRate({ forceRefresh = false } = {}) {
+  if (
+    !forceRefresh &&
+    Number.isFinite(Number(exchangeRateCache.rate)) &&
+    Date.now() < exchangeRateCache.expiresAt
+  ) {
+    return {
+      rate: Number(exchangeRateCache.rate),
+      updatedAt: exchangeRateCache.updatedAt,
+      source: exchangeRateCache.source || "database",
+    };
+  }
+
+  try {
+    const collection = getSettingsCollection();
+    let setting = await collection.findOne({
+      key: EXCHANGE_RATE_SETTING_KEY,
+    });
+
+    if (!setting) {
+      const now = new Date();
+
+      await collection.updateOne(
+        { key: EXCHANGE_RATE_SETTING_KEY },
+        {
+          $setOnInsert: {
+            key: EXCHANGE_RATE_SETTING_KEY,
+            value: DEFAULT_NGN_PER_USD,
+            currencyFrom: "USD",
+            currencyTo: "NGN",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        { upsert: true }
+      );
+
+      setting = await collection.findOne({
+        key: EXCHANGE_RATE_SETTING_KEY,
+      });
+    }
+
+    const rate = Number(setting?.value);
+
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw createPricingError("Saved USD to NGN rate is invalid", {
+        code: "INVALID_SAVED_EXCHANGE_RATE",
+        status: 500,
+      });
+    }
+
+    exchangeRateCache = {
+      rate,
+      updatedAt: setting?.updatedAt || null,
+      source: "database",
+      expiresAt: Date.now() + EXCHANGE_RATE_CACHE_TTL_MS,
+    };
+
+    /* Keep legacy code that still reads process.env in sync for this process. */
+    process.env.NGN_PER_USD = String(rate);
+
+    return {
+      rate,
+      updatedAt: exchangeRateCache.updatedAt,
+      source: "database",
+    };
+  } catch (error) {
+    const rate = getCachedExchangeRateValue();
+
+    exchangeRateCache = {
+      rate,
+      updatedAt: exchangeRateCache.updatedAt,
+      source: "environment_fallback",
+      expiresAt: Date.now() + 5000,
+    };
+
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[Pricing] exchange-rate database fallback:", error.message);
+    }
+
+    return {
+      rate,
+      updatedAt: exchangeRateCache.updatedAt,
+      source: "environment_fallback",
+    };
+  }
+}
+
+async function setExchangeRate(value, updatedBy = null) {
+  const rate = Number(value);
+
+  if (!Number.isFinite(rate) || rate <= 0 || rate > 1000000) {
+    throw createPricingError("Enter a valid USD to NGN exchange rate", {
+      code: "INVALID_EXCHANGE_RATE",
+      status: 400,
+    });
+  }
+
+  const collection = getSettingsCollection();
+  const now = new Date();
+
+  await collection.updateOne(
+    { key: EXCHANGE_RATE_SETTING_KEY },
+    {
+      $set: {
+        value: rate,
+        currencyFrom: "USD",
+        currencyTo: "NGN",
+        updatedAt: now,
+        updatedBy: updatedBy || null,
+      },
+      $setOnInsert: {
+        key: EXCHANGE_RATE_SETTING_KEY,
+        createdAt: now,
+      },
+    },
+    { upsert: true }
+  );
+
+  exchangeRateCache = {
+    rate,
+    updatedAt: now,
+    source: "database",
+    expiresAt: Date.now() + EXCHANGE_RATE_CACHE_TTL_MS,
+  };
+
+  process.env.NGN_PER_USD = String(rate);
+
+  return {
+    rate,
+    updatedAt: now,
+    source: "database",
+  };
+}
+
 function convertProviderCostToNaira(providerPrice, providerCurrency) {
   const price = Number(providerPrice);
   if (!Number.isFinite(price) || price <= 0) {
@@ -95,13 +271,7 @@ function convertProviderCostToNaira(providerPrice, providerCurrency) {
     });
   }
 
-  const exchangeRate = Number(process.env.NGN_PER_USD);
-  if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) {
-    throw createPricingError("NGN_PER_USD is not configured", {
-      code: "EXCHANGE_RATE_NOT_CONFIGURED",
-      status: 500,
-    });
-  }
+  const exchangeRate = getCachedExchangeRateValue();
 
   return Math.ceil(price * exchangeRate);
 }
@@ -385,6 +555,7 @@ async function resolveCustomerPricing({
   pricingBasisNgn = null,
   draftRule = null,
 }) {
+  const exchangeRate = await getExchangeRate();
   const normalizedServer = normalizeServer(server);
   const normalizedCountry = normalizeCountry(country);
   const normalizedService = normalizeService(service);
@@ -455,6 +626,7 @@ async function resolveCustomerPricing({
     providerPrice: Number(providerPrice),
     providerCurrency: normalizeCurrency(providerCurrency),
     providerCostNgn,
+    exchangeRateNgnPerUsd: exchangeRate.rate,
     pricingBasisNgn: effectiveBasisNgn,
     sellingPrice,
     profit,
@@ -470,6 +642,7 @@ async function resolveCustomerPricing({
       pricingStyle,
       maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
       pricingBasisNgn: effectiveBasisNgn,
+      exchangeRateNgnPerUsd: exchangeRate.rate,
       fixedSellingPrice: finiteNonNegative(rule.fixedSellingPrice),
       markupPercent: finiteNonNegative(rule.markupPercent),
       fixedMarkup: finiteNonNegative(rule.fixedMarkup),
@@ -493,6 +666,8 @@ module.exports = {
   normalizeOperator,
   normalizePricingStyle,
   normalizeRuleInput,
+  getExchangeRate,
+  setExchangeRate,
   convertProviderCostToNaira,
   ruleMatchesSelection,
   findApplicableRule,

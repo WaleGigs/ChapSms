@@ -7,6 +7,9 @@ const Wallet = require("../models/Wallet");
 const FLW_BASE_URL =
   "https://api.flutterwave.com/v3";
 
+const FLW_WALLET_TRANSFER_NOTE =
+  "ChapsSms Wallet Funding FLW";
+
 const FLW_HTTP_TIMEOUT_MS = Math.max(
   30000,
   Number(
@@ -421,7 +424,7 @@ async function createFlutterwaveBankTransferCharge({
         lastname:
           lastName,
         narration:
-          "ChapsSms Wallet Funding",
+          FLW_WALLET_TRANSFER_NOTE,
         is_permanent:
           false,
       },
@@ -493,10 +496,7 @@ async function createFlutterwaveBankTransferCharge({
     bankName,
 
     transferNote:
-      String(
-        data.note ||
-          "Transfer the exact amount shown to this account",
-      ).trim(),
+      FLW_WALLET_TRANSFER_NOTE,
 
     transferAmount,
 
@@ -532,7 +532,7 @@ function serializeBankTransfer(
       details.bankName,
 
     transferNote:
-      details.transferNote || "",
+      FLW_WALLET_TRANSFER_NOTE,
 
     transferAmount:
       Number(
