@@ -531,6 +531,62 @@ function createReservationReference(
     .toUpperCase();
 }
 
+async function ensureRefundHistoryRecord({
+  userId,
+  amount,
+  balanceField,
+  environment,
+  refundReference,
+  service,
+  country,
+  server,
+  reason,
+}) {
+  const wallet =
+    await Wallet.findOneAndUpdate(
+      {
+        user: userId,
+        "transactions.reference": {
+          $ne: refundReference,
+        },
+      },
+      {
+        $push: {
+          transactions: {
+            $each: [
+              {
+                type: "refund",
+                amount,
+                environment,
+                balanceField,
+                description:
+                  `${reason}: ${service} (${country})`,
+                status: "completed",
+                reference:
+                  refundReference,
+                server,
+                currency: "NGN",
+              },
+            ],
+            $position: 0,
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+  if (wallet) {
+    return wallet;
+  }
+
+  return Wallet.findOne({
+    user: userId,
+  });
+}
+
 async function refundReservedWallet({
   userId,
   amount,
@@ -561,17 +617,23 @@ async function refundReservedWallet({
       .toUpperCase();
 
   /*
-   * Immediate compensation is atomic:
-   * - only a matching PENDING reservation can be reversed;
-   * - the refund reference can only be inserted once;
-   * - the same update restores the balance, fails the reservation and
-   *   records the completed refund.
+   * IMPORTANT:
+   * Do NOT update a matched transactions element and $push to the same
+   * transactions array in one MongoDB update. MongoDB can reject that as a
+   * conflicting update path, which is exactly the situation that can leave a
+   * failed purchase stuck as PENDING with the customer's balance still held.
+   *
+   * Refund in two idempotent stages instead:
+   *   1. restore the balance + mark only the matching PENDING reservation FAILED;
+   *   2. append the visible refund-history row, without changing the balance.
+   *
+   * Stage 1 is the money-critical operation. Because it only matches a PENDING
+   * reservation, retries cannot credit the same reservation twice.
    */
-  const wallet =
+  let wallet =
     await Wallet.findOneAndUpdate(
       {
         user: userId,
-
         transactions: {
           $elemMatch: {
             reference:
@@ -579,66 +641,22 @@ async function refundReservedWallet({
             status: "pending",
           },
         },
-
-        "transactions.reference": {
-          $ne:
-            refundReference,
-        },
       },
-
       {
         $inc: {
           [balanceField]:
             numericAmount,
         },
-
         $set: {
           "transactions.$[purchase].status":
             "failed",
-
           "transactions.$[purchase].description":
             `${reason}: ${service} (${country})`,
         },
-
-        $push: {
-          transactions: {
-            $each: [
-              {
-                type:
-                  "refund",
-
-                amount:
-                  numericAmount,
-
-                environment,
-
-                balanceField,
-
-                description:
-                  `${reason}: ${service} (${country})`,
-
-                status:
-                  "completed",
-
-                reference:
-                  refundReference,
-
-                server,
-
-                currency:
-                  "NGN",
-              },
-            ],
-
-            $position: 0,
-          },
-        },
       },
-
       {
         new: true,
         runValidators: true,
-
         arrayFilters: [
           {
             "purchase.reference":
@@ -651,7 +669,33 @@ async function refundReservedWallet({
     );
 
   if (wallet) {
-    return wallet;
+    try {
+      return (
+        await ensureRefundHistoryRecord({
+          userId,
+          amount: numericAmount,
+          balanceField,
+          environment,
+          refundReference,
+          service,
+          country,
+          server,
+          reason,
+        })
+      ) || wallet;
+    } catch (historyError) {
+      /*
+       * Never turn a successfully restored balance back into a customer-facing
+       * refund failure merely because the extra history row could not be added.
+       * The failed reservation itself still proves the reversal and prevents a
+       * duplicate credit. A later recovery pass can add the history row.
+       */
+      console.error(
+        "Refund history write failed after balance was restored:",
+        historyError,
+      );
+      return wallet;
+    }
   }
 
   const existingWallet =
@@ -682,17 +726,13 @@ async function refundReservedWallet({
             refundReference,
       );
 
-  /*
-   * A duplicate/retried error path is safe: if this exact refund already
-   * exists, return the authoritative wallet without crediting twice.
-   */
   if (refundExists) {
     return existingWallet;
   }
 
-  const reservationExists =
+  const reservation =
     existingWallet.transactions
-      .some(
+      .find(
         (item) =>
           String(
             item.reference ||
@@ -704,9 +744,45 @@ async function refundReservedWallet({
             ).toUpperCase(),
       );
 
+  /*
+   * If stage 1 already ran on an earlier/retried request, the reservation is
+   * FAILED and the balance has already been restored. Only repair the missing
+   * history row here — never increment the balance again.
+   */
+  if (
+    reservation &&
+    String(
+      reservation.status ||
+        "",
+    ).toLowerCase() ===
+      "failed"
+  ) {
+    try {
+      return (
+        await ensureRefundHistoryRecord({
+          userId,
+          amount: numericAmount,
+          balanceField,
+          environment,
+          refundReference,
+          service,
+          country,
+          server,
+          reason,
+        })
+      ) || existingWallet;
+    } catch (historyError) {
+      console.error(
+        "Refund history recovery failed:",
+        historyError,
+      );
+      return existingWallet;
+    }
+  }
+
   const error =
     new Error(
-      reservationExists
+      reservation
         ? "Failed purchase reservation could not be reversed automatically"
         : "Failed purchase reservation was not found during automatic reversal",
     );
@@ -715,6 +791,220 @@ async function refundReservedWallet({
   error.code =
     "WALLET_ROLLBACK_FAILED";
   throw error;
+}
+
+function getStaleReservationMs() {
+  const configured = Number(
+    process.env.STALE_ORDER_RESERVATION_MS,
+  );
+
+  if (
+    Number.isFinite(configured) &&
+    configured >= 60_000
+  ) {
+    return configured;
+  }
+
+  /*
+   * Immediate purchase errors refund at once. This 10-minute window is only a
+   * second safety net for a process/network interruption where the request died
+   * before the normal catch block could reverse the wallet reservation.
+   */
+  return 10 * 60 * 1000;
+}
+
+async function recoverStaleReservationsForUser(
+  userId,
+) {
+  const wallet =
+    await Wallet.findOne({
+      user: userId,
+    });
+
+  if (!wallet) {
+    return {
+      checked: 0,
+      recovered: 0,
+      reconciled: 0,
+      failed: 0,
+      wallet: null,
+    };
+  }
+
+  const cutoff =
+    Date.now() -
+    getStaleReservationMs();
+
+  const pendingReservations =
+    (wallet.transactions || [])
+      .filter((transaction) => {
+        const reference =
+          String(
+            transaction?.reference ||
+              "",
+          ).toUpperCase();
+        const createdAt =
+          new Date(
+            transaction?.createdAt ||
+              0,
+          ).getTime();
+
+        return (
+          transaction?.type ===
+            "purchase" &&
+          transaction?.status ===
+            "pending" &&
+          reference.startsWith(
+            "ORDER-",
+          ) &&
+          Number.isFinite(
+            createdAt,
+          ) &&
+          createdAt > 0 &&
+          createdAt <= cutoff
+        );
+      });
+
+  let recovered = 0;
+  let reconciled = 0;
+  let failed = 0;
+  let latestWallet = wallet;
+
+  for (
+    const reservation of
+    pendingReservations
+  ) {
+    const reference =
+      String(
+        reservation.reference ||
+          "",
+      ).toUpperCase();
+
+    try {
+      const matchingOrder =
+        await Order.findOne({
+          user: userId,
+          walletReservationReference:
+            reference,
+        }).select(
+          "_id sellingPrice price service serviceName country countryName server",
+        );
+
+      if (matchingOrder) {
+        const amount =
+          Number(
+            matchingOrder.sellingPrice ||
+              matchingOrder.price ||
+              reservation.amount,
+          );
+
+        await Wallet.updateOne(
+          {
+            user: userId,
+            transactions: {
+              $elemMatch: {
+                reference,
+                status: "pending",
+              },
+            },
+          },
+          {
+            $set: {
+              "transactions.$[purchase].status":
+                "completed",
+              "transactions.$[purchase].amount":
+                amount,
+              "transactions.$[purchase].description":
+                `${matchingOrder.serviceName || matchingOrder.service} (${matchingOrder.countryName || matchingOrder.country}) - ${matchingOrder.server}`,
+              "transactions.$[purchase].orderId":
+                matchingOrder._id,
+            },
+          },
+          {
+            runValidators: true,
+            arrayFilters: [
+              {
+                "purchase.reference":
+                  reference,
+                "purchase.status":
+                  "pending",
+              },
+            ],
+          },
+        );
+
+        reconciled += 1;
+        continue;
+      }
+
+      latestWallet =
+        await refundReservedWallet({
+          userId,
+          amount:
+            Number(
+              reservation.amount,
+            ),
+          balanceField:
+            [
+              "balance",
+              "testBalance",
+            ].includes(
+              reservation.balanceField,
+            )
+              ? reservation.balanceField
+              : getWalletBalanceField(
+                  reservation.environment ||
+                    "live",
+                ),
+          environment:
+            reservation.environment ||
+            "live",
+          reservationReference:
+            reference,
+          service:
+            "Number purchase",
+          country:
+            "interrupted order",
+          server:
+            reservation.server ||
+            null,
+          reason:
+            "Automatic refund for interrupted number purchase",
+        });
+
+      recovered += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(
+        "Stale wallet reservation recovery failed:",
+        {
+          reference,
+          message:
+            error?.message,
+          code:
+            error?.code,
+        },
+      );
+    }
+  }
+
+  if (
+    pendingReservations.length > 0
+  ) {
+    latestWallet =
+      await Wallet.findOne({
+        user: userId,
+      });
+  }
+
+  return {
+    checked:
+      pendingReservations.length,
+    recovered,
+    reconciled,
+    failed,
+    wallet: latestWallet,
+  };
 }
 
 async function reconcileReservation({
@@ -903,6 +1193,20 @@ exports.createOrder =
       "";
 
     try {
+      /*
+       * Before starting a new purchase, repair any old interrupted reservation
+       * for this user. This is only the stale safety net; normal failures are
+       * refunded immediately in the catch block below.
+       */
+      await recoverStaleReservationsForUser(
+        req.user._id,
+      ).catch((recoveryError) => {
+        console.error(
+          "Pre-purchase stale reservation recovery failed:",
+          recoveryError,
+        );
+      });
+
       paymentEnvironment =
         getPaymentEnvironment();
 
@@ -3340,8 +3644,68 @@ exports.cancelOrder =
     }
   };
 
+exports.recoverStaleReservations =
+  async (req, res) => {
+    try {
+      const result =
+        await recoverStaleReservationsForUser(
+          req.user._id,
+        );
+
+      return res.json({
+        success: true,
+        checked: result.checked,
+        recovered: result.recovered,
+        reconciled: result.reconciled,
+        failed: result.failed,
+        walletBalance:
+          result.wallet
+            ? getWalletBalance(
+                result.wallet,
+                getWalletBalanceField(
+                  getPaymentEnvironment(),
+                ),
+              )
+            : undefined,
+      });
+    } catch (error) {
+      console.error(
+        "Recover stale reservations error:",
+        error,
+      );
+
+      return res
+        .status(
+          error.status || 500,
+        )
+        .json({
+          success: false,
+          code:
+            error.code ||
+            "RESERVATION_RECOVERY_FAILED",
+          message:
+            error.message ||
+            "Unable to recover pending wallet reservations",
+        });
+    }
+  };
+
 exports.getOrders = async (req, res) => {
   try {
+    /*
+     * Loading the customer's orders also runs the stale safety net. This means
+     * an interrupted reservation can repair itself even if the frontend does
+     * not explicitly call /orders/recover-pending.
+     */
+    await recoverStaleReservationsForUser(
+      req.user._id,
+    ).catch((recoveryError) => {
+      console.error(
+        "Order-list stale reservation recovery failed:",
+        recoveryError,
+      );
+    });
+
     const orders = await Order.find({ user: req.user._id }).sort({
       createdAt: -1,
     });
