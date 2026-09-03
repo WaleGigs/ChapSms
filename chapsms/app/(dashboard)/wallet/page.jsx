@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -820,10 +819,10 @@ export default function WalletPage() {
                     <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/20">
                       <Building2 size={28} />
                     </div>
-                    <h2 className="mt-5 text-2xl font-black text-[var(--foreground)]">
+                    <h2 className="mt-4 text-xl font-black text-[var(--foreground)] sm:text-2xl">
                       Transfer to complete
                     </h2>
-                    <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+                    <p className="mx-auto mt-2 max-w-2xl text-xs leading-5 text-[var(--muted-foreground)] sm:text-sm sm:leading-6">
                       Send the exact amount below. Your ChapsSms wallet is credited automatically after Flutterwave confirms the transfer.
                     </p>
                   </div>
@@ -840,13 +839,11 @@ export default function WalletPage() {
                         value: flutterwaveBankTransfer.accountNumber,
                         copy: true,
                       },
-                      flutterwaveBankTransfer.transferNote
-                        ? {
-                            label: "Transfer note",
-                            value: flutterwaveBankTransfer.transferNote,
-                            copy: true,
-                          }
-                        : null,
+                      {
+                        label: "Transfer note",
+                        value: "ChapsSms Wallet Funding FLW",
+                        copy: true,
+                      },
                       {
                         label: "Amount",
                         value: formatNaira(
@@ -860,16 +857,16 @@ export default function WalletPage() {
                       .map((item, index, items) => (
                         <div
                           key={item.label}
-                          className={`flex items-center gap-4 px-5 py-4 ${
+                          className={`flex items-center gap-3 px-4 py-3.5 sm:gap-4 sm:px-5 sm:py-4 ${
                             index < items.length - 1
                               ? "border-b border-[var(--border)]"
                               : ""
                           }`}
                         >
-                          <p className="w-28 shrink-0 text-sm font-semibold text-[var(--muted-foreground)]">
+                          <p className="w-24 shrink-0 text-xs font-semibold text-[var(--muted-foreground)] sm:w-28 sm:text-sm">
                             {item.label}
                           </p>
-                          <p className="min-w-0 flex-1 break-words text-right text-base font-black text-[var(--foreground)]">
+                          <p className="min-w-0 flex-1 break-words text-right text-sm font-black leading-5 text-[var(--foreground)] sm:text-base sm:leading-6">
                             {item.value || "—"}
                           </p>
                           {item.copy ? (
@@ -880,7 +877,7 @@ export default function WalletPage() {
                                   item.raw ?? item.value
                                 )
                               }
-                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)]"
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] sm:h-9 sm:w-9"
                               aria-label={`Copy ${item.label}`}
                             >
                               <Copy size={16} />
@@ -890,7 +887,7 @@ export default function WalletPage() {
                       ))}
                   </div>
 
-                  <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                  <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-xs leading-5 text-amber-700 dark:text-amber-300 sm:gap-3 sm:px-4 sm:text-sm sm:leading-6">
                     <Clock3 size={18} className="mt-0.5 shrink-0" />
                     <p>
                       This account is for this transaction only and expires in{" "}
@@ -900,7 +897,7 @@ export default function WalletPage() {
                     </p>
                   </div>
 
-                  <div className="mt-5 flex items-center justify-center gap-2 text-sm font-bold text-[var(--muted-foreground)]">
+                  <div className="mt-5 flex items-center justify-center gap-2 text-xs font-bold text-[var(--muted-foreground)] sm:text-sm">
                     <LoaderCircle
                       size={17}
                       className={
@@ -915,7 +912,7 @@ export default function WalletPage() {
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
                     <Button
                       type="button"
-                      className="h-14 w-full"
+                      className="h-12 w-full text-sm sm:h-14"
                       disabled={flutterwaveBankChecking}
                       onClick={() =>
                         checkFlutterwaveBankTransfer({
@@ -935,7 +932,7 @@ export default function WalletPage() {
                     <button
                       type="button"
                       onClick={handleCancelFlutterwaveBankTransfer}
-                      className="flex h-14 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-4 text-sm font-black text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]"
+                      className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-4 text-sm font-black text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] sm:h-14"
                     >
                       <XCircle size={18} />
                       Cancel

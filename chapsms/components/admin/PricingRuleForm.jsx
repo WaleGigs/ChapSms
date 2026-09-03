@@ -1203,7 +1203,7 @@ export default function PricingRuleForm({
             />
 
             <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
-              Finds the cheapest live cost, allows operators up to this percentage above it, then chooses the strongest available option inside the cheap band.
+              Finds the cheapest live cost, allows operators up to this percentage above it, then prefers the operator with the strongest proven OTP-delivery history inside that cheap band. If there is not enough history yet, live stock and cost are used as the fallback.
             </p>
           </div>
         )}
@@ -1513,6 +1513,35 @@ export default function PricingRuleForm({
                       )}
                     </strong>
                   </p>
+
+                  <p>
+                    <span className="text-[var(--muted-foreground)]">
+                      Selected operator cost:{" "}
+                    </span>
+                    <strong>
+                      {formatNaira(
+                        preview.providerCostNgn
+                      )}
+                    </strong>
+                  </p>
+
+                  {Number(preview.otpSampleSize || 0) > 0 ? (
+                    <p>
+                      <span className="text-[var(--muted-foreground)]">
+                        Recent OTP delivery:{" "}
+                      </span>
+                      <strong>
+                        {Number(preview.otpSuccessRate || 0).toFixed(1)}%
+                      </strong>{" "}
+                      <span className="text-xs text-[var(--muted-foreground)]">
+                        ({preview.otpSuccessCount || 0}/{preview.otpSampleSize || 0} completed samples)
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      No completed OTP history for this cheap band yet; selection is temporarily using live stock and cost.
+                    </p>
+                  )}
                 </>
               ) : (
                 <p>
@@ -1526,6 +1555,18 @@ export default function PricingRuleForm({
                   </strong>
                 </p>
               )}
+
+              {String(preview.providerCurrency || "").toUpperCase() === "USD" &&
+                Number(preview.exchangeRateNgnPerUsd) > 0 && (
+                  <p>
+                    <span className="text-[var(--muted-foreground)]">
+                      USD → NGN rate:{" "}
+                    </span>
+                    <strong>
+                      ₦{Number(preview.exchangeRateNgnPerUsd).toLocaleString("en-NG")} / $1
+                    </strong>
+                  </p>
+                )}
 
               <p>
                 <span className="text-[var(--muted-foreground)]">
@@ -1541,7 +1582,9 @@ export default function PricingRuleForm({
               <p className="pt-1 text-xs text-[var(--muted-foreground)]">
                 {form.pricingStyle ===
                 "cheapest_buffer"
-                  ? `Auto-selected operator ${preview.operator} from ${preview.eligibleCount || 1} cheap candidate(s).`
+                  ? Number(preview.otpSampleSize || 0) > 0
+                    ? `Auto-selected operator ${preview.operator} using recent OTP-delivery history from ${preview.eligibleCount || 1} cheap candidate(s).`
+                    : `Auto-selected operator ${preview.operator} from ${preview.eligibleCount || 1} cheap candidate(s); historical OTP data is still building.`
                   : `Fixed to operator ${preview.operator}.`}
               </p>
             </div>

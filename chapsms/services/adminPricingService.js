@@ -50,7 +50,18 @@ function normalizeRulePayload(input = {}) {
   const server = normalizeServer(input.server);
   const country = String(input.country || "").trim();
   const service = String(input.service || "").trim();
-  const operator = String(input.operator || "any").trim() || "any";
+  const pricingStyle = String(
+    input.pricingStyle ||
+      (String(input.operator || "any").trim().toLowerCase() === "any"
+        ? "cheapest_buffer"
+        : "fixed_operator")
+  )
+    .trim()
+    .toLowerCase();
+  const operator =
+    pricingStyle === "cheapest_buffer"
+      ? "any"
+      : String(input.operator || "").trim();
   const pricingMode = String(input.pricingMode || "fixed")
     .trim()
     .toLowerCase();
@@ -70,6 +81,8 @@ function normalizeRulePayload(input = {}) {
     service,
     serviceName: String(input.serviceName || "").trim(),
     operator,
+    pricingStyle,
+    maxPriceBufferPercent: Number(input.maxPriceBufferPercent ?? 50),
     pricingMode,
     fixedSellingPrice: Number(input.fixedSellingPrice || 0),
     markupPercent: Number(input.markupPercent || 0),
@@ -81,6 +94,23 @@ function normalizeRulePayload(input = {}) {
 }
 
 export const adminPricingService = {
+  async getExchangeRate() {
+    return api("/admin/pricing/exchange-rate");
+  },
+
+  async updateExchangeRate(rate) {
+    const numericRate = Number(rate);
+
+    if (!Number.isFinite(numericRate) || numericRate <= 0) {
+      throw new Error("Enter a valid USD to NGN exchange rate");
+    }
+
+    return api("/admin/pricing/exchange-rate", {
+      method: "PATCH",
+      body: JSON.stringify({ rate: numericRate }),
+    });
+  },
+
   async getRules({
     page = 1,
     limit = 25,
