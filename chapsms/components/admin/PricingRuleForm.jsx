@@ -847,7 +847,8 @@ export default function PricingRuleForm({
   ) {
     const target = Number(value);
     const basis = Number(
-      preview?.pricingBasisNgn
+      preview?.providerCostNgn ??
+        preview?.pricingBasisNgn
     );
 
     setForm((current) => {
@@ -1181,14 +1182,14 @@ export default function PricingRuleForm({
           "cheapest_buffer" && (
           <div>
             <label className="text-sm font-bold">
-              Max price buffer (%)
+              Cheapest operator pool (%)
             </label>
 
             <input
               type="number"
-              min="0"
-              max="500"
-              step="0.01"
+              min="10"
+              max="100"
+              step="10"
               value={
                 form.maxPriceBufferPercent
               }
@@ -1203,7 +1204,7 @@ export default function PricingRuleForm({
             />
 
             <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
-              Finds the cheapest live cost, allows operators up to this percentage above it, then prefers the operator with the strongest proven OTP-delivery history inside that cheap band. If there is not enough history yet, live stock and cost are used as the fallback.
+              This controls operator selection only — it does not change the customer price. 50 selects from the 5 cheapest live operators, 70 from the 7 cheapest, and 100 from the 10 cheapest. Inside that pool, Server 1 prefers SMSBower&apos;s own provider-side Gold/ranking statistics when available; otherwise live stock and then lower cost are used as the fallback.
             </p>
           </div>
         )}
@@ -1386,14 +1387,14 @@ export default function PricingRuleForm({
                 }
                 disabled={
                   !preview
-                    ?.pricingBasisNgn
+                    ?.providerCostNgn
                 }
                 className={`${fieldClass} mt-2`}
                 placeholder={
                   preview
-                    ?.pricingBasisNgn
+                    ?.providerCostNgn
                     ? "4100"
-                    : "Load live basis first"
+                    : "Load live cost first"
                 }
               />
             </div>
@@ -1491,7 +1492,7 @@ export default function PricingRuleForm({
                 <>
                   <p>
                     <span className="text-[var(--muted-foreground)]">
-                      Floor cost (live):{" "}
+                      Cheapest live cost:{" "}
                     </span>
                     <strong>
                       {formatNaira(
@@ -1502,16 +1503,14 @@ export default function PricingRuleForm({
 
                   <p>
                     <span className="text-[var(--muted-foreground)]">
-                      Basis (× 1+{Number(
-                        form.maxPriceBufferPercent ||
-                          0
-                      )}%):{" "}
+                      Operators considered:{" "}
                     </span>
                     <strong>
-                      {formatNaira(
-                        preview.pricingBasisNgn
-                      )}
-                    </strong>
+                      {preview.eligibleCount || 0}
+                    </strong>{" "}
+                    <span className="text-xs text-[var(--muted-foreground)]">
+                      (cheapest {preview.candidateLimit || Math.max(1, Math.ceil(Number(form.maxPriceBufferPercent || 50) / 10))})
+                    </span>
                   </p>
 
                   <p>
@@ -1525,21 +1524,29 @@ export default function PricingRuleForm({
                     </strong>
                   </p>
 
-                  {Number(preview.otpSampleSize || 0) > 0 ? (
+                  {preview.providerStatsAvailable ? (
                     <p>
                       <span className="text-[var(--muted-foreground)]">
-                        Recent OTP delivery:{" "}
+                        SMSBower provider statistics:{" "}
                       </span>
                       <strong>
-                        {Number(preview.otpSuccessRate || 0).toFixed(1)}%
-                      </strong>{" "}
-                      <span className="text-xs text-[var(--muted-foreground)]">
-                        ({preview.otpSuccessCount || 0}/{preview.otpSampleSize || 0} completed samples)
-                      </span>
+                        {preview.providerTier
+                          ? String(preview.providerTier).charAt(0).toUpperCase() +
+                            String(preview.providerTier).slice(1)
+                          : "Ranked"}
+                        {preview.providerRank
+                          ? ` · #${preview.providerRank}`
+                          : ""}
+                      </strong>
+                      {Number.isFinite(Number(preview.providerSalesCount)) ? (
+                        <span className="text-xs text-[var(--muted-foreground)]">
+                          {` · ${Number(preview.providerSalesCount).toLocaleString()} provider sales`}
+                        </span>
+                      ) : null}
                     </p>
                   ) : (
                     <p className="text-xs text-[var(--muted-foreground)]">
-                      No completed OTP history for this cheap band yet; selection is temporarily using live stock and cost.
+                      SMSBower did not expose a provider-side ranking for this country/service, so selection falls back to live stock and then lower cost inside the cheapest operator pool.
                     </p>
                   )}
                 </>
@@ -1582,15 +1589,15 @@ export default function PricingRuleForm({
               <p className="pt-1 text-xs text-[var(--muted-foreground)]">
                 {form.pricingStyle ===
                 "cheapest_buffer"
-                  ? Number(preview.otpSampleSize || 0) > 0
-                    ? `Auto-selected operator ${preview.operator} using recent OTP-delivery history from ${preview.eligibleCount || 1} cheap candidate(s).`
-                    : `Auto-selected operator ${preview.operator} from ${preview.eligibleCount || 1} cheap candidate(s); historical OTP data is still building.`
+                  ? preview.providerStatsAvailable
+                    ? `Auto-selected operator ${preview.operator} from the cheapest ${preview.eligibleCount || 1} candidate(s) using SMSBower provider-side ranking.`
+                    : `Auto-selected operator ${preview.operator} from the cheapest ${preview.eligibleCount || 1} candidate(s) using live stock/cost fallback.`
                   : `Fixed to operator ${preview.operator}.`}
               </p>
             </div>
           ) : (
             <p className="text-[var(--muted-foreground)]">
-              Select country/service and pricing settings to load the live floor, basis and customer price.
+              Select country/service and pricing settings to load the live operator pool, provider cost and customer price.
             </p>
           )}
         </div>
