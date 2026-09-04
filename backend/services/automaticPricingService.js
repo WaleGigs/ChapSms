@@ -1,4 +1,3 @@
-const Order = require("../models/Order");
 const providerManager = require("./providers/providerManager");
 const pricingService = require("./pricingService");
 
@@ -15,20 +14,19 @@ function finiteNonNegative(value, fallback = 0) {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
+function normalizePoolPercent(value, fallback = 50) {
+  const number = Number(value);
+  const safe = Number.isFinite(number) ? number : fallback;
+  const clamped = Math.min(100, Math.max(10, safe));
+  return Math.round(clamped / 10) * 10;
+}
+
+function getCandidateLimit(percent) {
+  return Math.min(10, Math.max(1, Math.ceil(normalizePoolPercent(percent) / 10)));
+}
+
 function getCacheTtlMs() {
   return positiveInteger(process.env.AUTO_OPERATOR_CACHE_TTL_MS, 15000, 120000);
-}
-
-function getHistoryLookbackDays() {
-  return positiveInteger(process.env.AUTO_RELIABILITY_LOOKBACK_DAYS, 90, 365);
-}
-
-function getHistoryLimit() {
-  return positiveInteger(process.env.AUTO_RELIABILITY_MAX_ORDERS, 1000, 5000);
-}
-
-function getMinimumReliableSamples() {
-  return positiveInteger(process.env.AUTO_RELIABILITY_MIN_SAMPLES, 3, 50);
 }
 
 function getOperatorId(operator) {
@@ -59,13 +57,16 @@ function getProviderReliability(operator) {
   ]) {
     const number = Number(value);
     if (!Number.isFinite(number) || number < 0) continue;
-
-    /* Accept either 0..1 or 0..100 provider metrics. */
     if (number <= 1) return number;
     if (number <= 100) return number / 100;
   }
 
   return null;
+}
+
+function normalizeProviderTier(value) {
+  const tier = String(value || "").trim().toLowerCase();
+  return ["gold", "silver", "bronze"].includes(tier) ? tier : "";
 }
 
 function normalizeCandidate(operator, fallbackCurrency) {
@@ -90,7 +91,6 @@ function normalizeCandidate(operator, fallbackCurrency) {
     .toUpperCase();
 
   let providerCostNgn;
-
   try {
     providerCostNgn = pricingService.convertProviderCostToNaira(
       providerPrice,
@@ -100,6 +100,11 @@ function normalizeCandidate(operator, fallbackCurrency) {
     return null;
   }
 
+  const rank = Number(operator?.providerRank ?? operator?.rank);
+  const salesCount = Number(
+    operator?.providerSalesCount ?? operator?.salesCount ?? operator?.sales_count
+  );
+
   return {
     operator: id,
     name: String(operator?.name || operator?.label || `Operator ${id}`).trim(),
@@ -108,231 +113,107 @@ function normalizeCandidate(operator, fallbackCurrency) {
     providerCostNgn,
     stock,
     providerReliability: getProviderReliability(operator),
+    providerTier: normalizeProviderTier(
+      operator?.providerTier ?? operator?.tier ?? operator?.level
+    ),
+    providerRank:
+      Number.isFinite(rank) && rank > 0 ? Math.floor(rank) : null,
+    providerSalesCount:
+      Number.isFinite(salesCount) && salesCount >= 0 ? salesCount : null,
+    providerStatsSource: String(
+      operator?.providerStatsSource ?? operator?.statsSource ?? ""
+    ).trim(),
   };
 }
 
-function wilsonLowerBound(successes, total, z = 1.96) {
-  if (!Number.isFinite(total) || total <= 0) return null;
-
-  const p = successes / total;
-  const zSquared = z * z;
-  const denominator = 1 + zSquared / total;
-  const center = p + zSquared / (2 * total);
-  const margin =
-    z *
-    Math.sqrt(
-      (p * (1 - p) + zSquared / (4 * total)) / total
-    );
-
-  return Math.max(0, (center - margin) / denominator);
+function tierWeight(tier) {
+  if (tier === "gold") return 3;
+  if (tier === "silver") return 2;
+  if (tier === "bronze") return 1;
+  return 0;
 }
 
-function hasDeliveredOtp(order) {
-  return Boolean(
-    order?.otpReceivedAt ||
-      String(order?.otpCode || "").trim() ||
-      String(order?.status || "").toLowerCase() === "received"
-  );
-}
+/*
+ * IMPORTANT:
+ * Price determines only WHICH operators are candidates.
+ * It does not determine the customer's selling price.
+ *
+ * Within that cheapest candidate pool, prefer SMSBower's own provider-side
+ * ranking/statistics when present. getTopCountriesByService exposes Gold
+ * partners in provider order. If SMSBower does not expose a ranking for the
+ * requested pair, live stock is the fallback and lower cost breaks ties.
+ */
+function rankCandidatePool(pool) {
+  return [...pool].sort((first, second) => {
+    const firstTier = tierWeight(first.providerTier);
+    const secondTier = tierWeight(second.providerTier);
 
-async function loadHistoricalReliability({
-  server,
-  country,
-  service,
-  operators,
-}) {
-  const normalizedOperators = [
-    ...new Set(
-      (operators || [])
-        .map((operator) => String(operator || "").trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ];
-
-  if (!normalizedOperators.length) return new Map();
-
-  const since = new Date(
-    Date.now() - getHistoryLookbackDays() * 24 * 60 * 60 * 1000
-  );
-
-  try {
-    const orders = await Order.find({
-      server: String(server || "").trim().toLowerCase(),
-      country: String(country || "").trim().toLowerCase(),
-      service: String(service || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ""),
-      operator: { $in: normalizedOperators },
-      createdAt: { $gte: since },
-      $or: [
-        { status: { $in: ["received", "expired"] } },
-        { otpReceivedAt: { $exists: true, $ne: null } },
-        { otpCode: { $exists: true, $nin: ["", null] } },
-      ],
-    })
-      .sort({ createdAt: -1 })
-      .limit(getHistoryLimit())
-      .select("operator status otpCode otpReceivedAt createdAt")
-      .lean();
-
-    const stats = new Map();
-
-    for (const operator of normalizedOperators) {
-      stats.set(operator, {
-        successCount: 0,
-        failureCount: 0,
-        sampleSize: 0,
-        successRate: null,
-        confidenceScore: null,
-        proven: false,
-      });
+    if (secondTier !== firstTier) {
+      return secondTier - firstTier;
     }
 
-    for (const order of orders) {
-      const operator = String(order?.operator || "").trim().toLowerCase();
-      const current = stats.get(operator);
-      if (!current) continue;
+    const firstRank = Number(first.providerRank);
+    const secondRank = Number(second.providerRank);
+    const firstHasRank = Number.isFinite(firstRank) && firstRank > 0;
+    const secondHasRank = Number.isFinite(secondRank) && secondRank > 0;
 
-      const success = hasDeliveredOtp(order);
-      const status = String(order?.status || "").trim().toLowerCase();
-      const failure = !success && status === "expired";
-
-      /* Waiting/cancelling/cancelled orders do not prove OTP failure. */
-      if (!success && !failure) continue;
-
-      current.sampleSize += 1;
-      if (success) current.successCount += 1;
-      if (failure) current.failureCount += 1;
+    if (firstHasRank !== secondHasRank) {
+      return firstHasRank ? -1 : 1;
     }
 
-    const minimumSamples = getMinimumReliableSamples();
-
-    for (const current of stats.values()) {
-      if (current.sampleSize > 0) {
-        current.successRate =
-          (current.successCount / current.sampleSize) * 100;
-        current.confidenceScore = wilsonLowerBound(
-          current.successCount,
-          current.sampleSize
-        );
-        current.proven = current.sampleSize >= minimumSamples;
-      }
+    if (firstHasRank && secondHasRank && firstRank !== secondRank) {
+      return firstRank - secondRank;
     }
 
-    return stats;
-  } catch (error) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn(
-        "[Automatic pricing] OTP reliability history unavailable; using live fallback:",
-        error.message
-      );
+    const firstReliability = Number(first.providerReliability);
+    const secondReliability = Number(second.providerReliability);
+    const firstHasReliability = Number.isFinite(firstReliability);
+    const secondHasReliability = Number.isFinite(secondReliability);
+
+    if (firstHasReliability !== secondHasReliability) {
+      return firstHasReliability ? -1 : 1;
     }
 
-    return new Map();
-  }
-}
+    if (
+      firstHasReliability &&
+      secondHasReliability &&
+      firstReliability !== secondReliability
+    ) {
+      return secondReliability - firstReliability;
+    }
 
-function selectionScore(candidate) {
-  const history = candidate?.history;
+    if (second.stock !== first.stock) {
+      return second.stock - first.stock;
+    }
 
-  if (history?.sampleSize > 0 && Number.isFinite(history.confidenceScore)) {
-    return history.confidenceScore;
-  }
-
-  if (Number.isFinite(candidate?.providerReliability)) {
-    return candidate.providerReliability;
-  }
-
-  /*
-   * Unknown operators get a neutral conservative baseline.
-   * This deliberately ranks a repeatedly failing operator below an untested one,
-   * while requiring more than a single lucky success to look "certain".
-   */
-  return 0.25;
-}
-
-function rankCheapPool(cheapPool) {
-  return [...cheapPool].sort((a, b) => {
-    const scoreDifference = selectionScore(b) - selectionScore(a);
-    if (scoreDifference !== 0) return scoreDifference;
-
-    const aSamples = Number(a?.history?.sampleSize || 0);
-    const bSamples = Number(b?.history?.sampleSize || 0);
-    if (bSamples !== aSamples) return bSamples - aSamples;
-
-    const aSuccessRate = Number(a?.history?.successRate ?? -1);
-    const bSuccessRate = Number(b?.history?.successRate ?? -1);
-    if (bSuccessRate !== aSuccessRate) return bSuccessRate - aSuccessRate;
-
-    if (b.stock !== a.stock) return b.stock - a.stock;
-    return a.providerCostNgn - b.providerCostNgn;
+    return first.providerCostNgn - second.providerCostNgn;
   });
 }
 
-async function buildCheapBand({
-  candidates,
-  maxPriceBufferPercent,
-  server,
-  country,
-  service,
-}) {
-  const sorted = [...candidates].sort((a, b) =>
-    a.providerCostNgn !== b.providerCostNgn
-      ? a.providerCostNgn - b.providerCostNgn
-      : b.stock - a.stock
-  );
+function buildSelectionPool(candidates, percent) {
+  const selectionPercent = normalizePoolPercent(percent, 50);
+  const candidateLimit = getCandidateLimit(selectionPercent);
 
-  const floorCostNgn = sorted[0]?.providerCostNgn || 0;
-  const buffer = finiteNonNegative(maxPriceBufferPercent, 50);
-  const pricingBasisNgn = Math.ceil(floorCostNgn * (1 + buffer / 100));
-
-  /*
-   * Price defines the eligible band. Reliability then decides which operator
-   * inside that cheap band should be preferred. Cap only for pathological lists.
-   */
-  const cheapPool = sorted
-    .filter((item) => item.providerCostNgn <= pricingBasisNgn)
-    .slice(0, 50);
-
-  const historyMap = await loadHistoricalReliability({
-    server,
-    country,
-    service,
-    operators: cheapPool.map((item) => item.operator),
+  const sortedByPrice = [...candidates].sort((first, second) => {
+    if (first.providerCostNgn !== second.providerCostNgn) {
+      return first.providerCostNgn - second.providerCostNgn;
+    }
+    return second.stock - first.stock;
   });
 
-  const withHistory = cheapPool.map((item) => ({
-    ...item,
-    history:
-      historyMap.get(item.operator) || {
-        successCount: 0,
-        failureCount: 0,
-        sampleSize: 0,
-        successRate: null,
-        confidenceScore: null,
-        proven: false,
-      },
-  }));
-
-  const ranked = rankCheapPool(withHistory);
+  const cheapestPool = sortedByPrice.slice(0, candidateLimit);
+  const ranked = rankCandidatePool(cheapestPool);
 
   return {
-    floorCostNgn,
-    pricingBasisNgn,
-    buffer,
+    selectionPercent,
+    candidateLimit,
+    floorCostNgn: sortedByPrice[0]?.providerCostNgn || 0,
     ranked,
   };
 }
 
-function cacheKey({
-  server,
-  country,
-  service,
-  maxPriceBufferPercent,
-  exchangeRate,
-}) {
-  return [server, country, service, maxPriceBufferPercent, exchangeRate]
+function cacheKey({ server, country, service, selectionPercent, exchangeRate }) {
+  return [server, country, service, selectionPercent, exchangeRate]
     .map((value) => String(value ?? "").trim().toLowerCase())
     .join("|");
 }
@@ -389,15 +270,14 @@ function summarizeCandidate(item) {
     operator: item.operator,
     providerCostNgn: item.providerCostNgn,
     stock: item.stock,
-    otpSuccessRate:
-      Number.isFinite(item?.history?.successRate)
-        ? Number(item.history.successRate.toFixed(1))
+    providerTier: item.providerTier || null,
+    providerRank: item.providerRank ?? null,
+    providerSalesCount: item.providerSalesCount ?? null,
+    providerReliability:
+      Number.isFinite(item.providerReliability)
+        ? item.providerReliability
         : null,
-    otpSuccessCount: Number(item?.history?.successCount || 0),
-    otpFailureCount: Number(item?.history?.failureCount || 0),
-    otpSampleSize: Number(item?.history?.sampleSize || 0),
-    reliabilityProven: item?.history?.proven === true,
-    reliabilityScore: Number(selectionScore(item).toFixed(4)),
+    providerStatsSource: item.providerStatsSource || null,
   };
 }
 
@@ -427,26 +307,18 @@ async function buildFreshSelection({
     throw error;
   }
 
-  const band = await buildCheapBand({
-    candidates,
-    maxPriceBufferPercent,
-    server,
-    country,
-    service,
-  });
+  const pool = buildSelectionPool(candidates, maxPriceBufferPercent);
 
-  if (!band.ranked.length) {
-    const error = new Error(
-      "No operator is inside the configured cheapest price buffer"
-    );
+  if (!pool.ranked.length) {
+    const error = new Error("No automatic operator candidate is currently available");
     error.status = 409;
-    error.code = "NO_NUMBERS_IN_PRICE_BUFFER";
+    error.code = "NO_NUMBERS";
     throw error;
   }
 
   let lastError = null;
 
-  for (const candidate of band.ranked) {
+  for (const candidate of pool.ranked) {
     try {
       const quote = await quoteOperator({
         server,
@@ -460,37 +332,50 @@ async function buildFreshSelection({
         quote.currency
       );
 
-      if (freshCostNgn > band.pricingBasisNgn) continue;
-
       const selected = {
         ...candidate,
         providerCostNgn: freshCostNgn,
       };
 
-      const historySamples = Number(selected?.history?.sampleSize || 0);
+      const providerStatsAvailable =
+        Boolean(selected.providerTier) ||
+        (selected.providerRank !== null &&
+          selected.providerRank !== undefined &&
+          Number.isFinite(Number(selected.providerRank))) ||
+        (selected.providerReliability !== null &&
+          selected.providerReliability !== undefined &&
+          Number.isFinite(Number(selected.providerReliability)));
 
       return {
         operator: candidate.operator,
         quote,
         selected,
         candidateCount: candidates.length,
-        eligibleCount: band.ranked.length,
-        floorCostNgn: band.floorCostNgn,
-        pricingBasisNgn: band.pricingBasisNgn,
-        maxPriceBufferPercent: band.buffer,
-        otpSuccessRate:
-          Number.isFinite(selected?.history?.successRate)
-            ? Number(selected.history.successRate.toFixed(1))
+        eligibleCount: pool.ranked.length,
+        candidateLimit: pool.candidateLimit,
+        selectionPercent: pool.selectionPercent,
+        maxPriceBufferPercent: pool.selectionPercent,
+        floorCostNgn: pool.floorCostNgn,
+
+        /*
+         * This must be the ACTUAL selected operator cost. The operator-pool
+         * percentage is selection-only and is never allowed to inflate price.
+         */
+        pricingBasisNgn: freshCostNgn,
+
+        providerTier: selected.providerTier || null,
+        providerRank: selected.providerRank ?? null,
+        providerSalesCount: selected.providerSalesCount ?? null,
+        providerReliability:
+          Number.isFinite(selected.providerReliability)
+            ? selected.providerReliability
             : null,
-        otpSuccessCount: Number(selected?.history?.successCount || 0),
-        otpFailureCount: Number(selected?.history?.failureCount || 0),
-        otpSampleSize: historySamples,
-        reliabilityProven: selected?.history?.proven === true,
-        cheapPool: band.ranked.map(summarizeCandidate),
-        strategy:
-          historySamples > 0
-            ? "cheapest_buffer_historical_otp_reliability"
-            : "cheapest_buffer_live_stock_fallback",
+        providerStatsSource: selected.providerStatsSource || null,
+        providerStatsAvailable,
+        cheapPool: pool.ranked.map(summarizeCandidate),
+        strategy: providerStatsAvailable
+          ? "cheapest_n_smsbower_provider_ranking"
+          : "cheapest_n_live_stock_fallback",
       };
     } catch (error) {
       lastError = error;
@@ -512,12 +397,12 @@ async function resolveAutomaticQuote({
   maxPriceBufferPercent = 50,
 }) {
   const exchangeRate = await pricingService.getExchangeRate();
-  const buffer = finiteNonNegative(maxPriceBufferPercent, 50);
+  const selectionPercent = normalizePoolPercent(maxPriceBufferPercent, 50);
   const key = cacheKey({
     server,
     country,
     service,
-    maxPriceBufferPercent: buffer,
+    selectionPercent,
     exchangeRate: exchangeRate.rate,
   });
 
@@ -537,18 +422,15 @@ async function resolveAutomaticQuote({
         quote.currency
       );
 
-      if (costNgn <= cached.pricingBasisNgn) {
-        return {
-          ...cached,
-          quote,
-          selected: cached.selected
-            ? { ...cached.selected, providerCostNgn: costNgn }
-            : null,
-          strategy: `${cached.strategy}_cached`,
-        };
-      }
-
-      selectionCache.delete(key);
+      return {
+        ...cached,
+        quote,
+        pricingBasisNgn: costNgn,
+        selected: cached.selected
+          ? { ...cached.selected, providerCostNgn: costNgn }
+          : null,
+        strategy: `${cached.strategy}_cached`,
+      };
     } catch {
       selectionCache.delete(key);
     }
@@ -559,7 +441,7 @@ async function resolveAutomaticQuote({
       server,
       country,
       service,
-      maxPriceBufferPercent: buffer,
+      maxPriceBufferPercent: selectionPercent,
     });
 
     putCached(key, {
@@ -567,20 +449,28 @@ async function resolveAutomaticQuote({
       selected: selection.selected,
       candidateCount: selection.candidateCount,
       eligibleCount: selection.eligibleCount,
+      candidateLimit: selection.candidateLimit,
+      selectionPercent: selection.selectionPercent,
+      maxPriceBufferPercent: selection.maxPriceBufferPercent,
       floorCostNgn: selection.floorCostNgn,
       pricingBasisNgn: selection.pricingBasisNgn,
-      maxPriceBufferPercent: selection.maxPriceBufferPercent,
-      otpSuccessRate: selection.otpSuccessRate,
-      otpSuccessCount: selection.otpSuccessCount,
-      otpFailureCount: selection.otpFailureCount,
-      otpSampleSize: selection.otpSampleSize,
-      reliabilityProven: selection.reliabilityProven,
+      providerTier: selection.providerTier,
+      providerRank: selection.providerRank,
+      providerSalesCount: selection.providerSalesCount,
+      providerReliability: selection.providerReliability,
+      providerStatsSource: selection.providerStatsSource,
+      providerStatsAvailable: selection.providerStatsAvailable,
       cheapPool: selection.cheapPool,
       strategy: selection.strategy,
     });
 
     return selection;
   } catch (operatorError) {
+    /*
+     * Read-only fallback only. If operator-list/statistics lookup is temporarily
+     * unavailable, keep pricing usable with the provider's normal quote. The
+     * selector percentage still never changes the selling-price basis.
+     */
     try {
       const quote = await providerManager.getPrice({
         server,
@@ -589,7 +479,7 @@ async function resolveAutomaticQuote({
         operator: "any",
       });
 
-      const floorCostNgn = pricingService.convertProviderCostToNaira(
+      const providerCostNgn = pricingService.convertProviderCostToNaira(
         quote.price,
         quote.currency
       );
@@ -601,16 +491,19 @@ async function resolveAutomaticQuote({
         selected: null,
         candidateCount: 0,
         eligibleCount: 0,
-        floorCostNgn,
-        pricingBasisNgn: Math.ceil(floorCostNgn * (1 + buffer / 100)),
-        maxPriceBufferPercent: buffer,
-        otpSuccessRate: null,
-        otpSuccessCount: 0,
-        otpFailureCount: 0,
-        otpSampleSize: 0,
-        reliabilityProven: false,
+        candidateLimit: getCandidateLimit(selectionPercent),
+        selectionPercent,
+        maxPriceBufferPercent: selectionPercent,
+        floorCostNgn: providerCostNgn,
+        pricingBasisNgn: providerCostNgn,
+        providerTier: null,
+        providerRank: null,
+        providerSalesCount: null,
+        providerReliability: null,
+        providerStatsSource: null,
+        providerStatsAvailable: false,
         cheapPool: [],
-        strategy: "provider_any_fallback_with_price_buffer",
+        strategy: "provider_any_fallback",
       };
     } catch {
       throw operatorError;
@@ -618,4 +511,8 @@ async function resolveAutomaticQuote({
   }
 }
 
-module.exports = { resolveAutomaticQuote };
+module.exports = {
+  resolveAutomaticQuote,
+  normalizePoolPercent,
+  getCandidateLimit,
+};

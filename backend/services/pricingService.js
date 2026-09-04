@@ -79,6 +79,13 @@ function finiteNonNegative(value, fallback = 0) {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
+function normalizeOperatorPoolPercent(value, fallback = 50) {
+  const number = Number(value);
+  const safe = Number.isFinite(number) ? number : fallback;
+  const clamped = Math.min(100, Math.max(10, safe));
+  return Math.round(clamped / 10) * 10;
+}
+
 function normalizePricingStyle(value, operator = "any") {
   const style = String(value || "").trim().toLowerCase();
   if (VALID_PRICING_STYLES.has(style)) return style;
@@ -304,7 +311,15 @@ function normalizeRuleInput(input = {}) {
     serviceName: String(input.serviceName || "").trim(),
     operator,
     pricingStyle,
-    maxPriceBufferPercent: finiteNonNegative(input.maxPriceBufferPercent, 50),
+    /*
+     * Legacy field name retained for Mongo/API compatibility.
+     * Semantics: percentage -> how many of the 10 cheapest operators are
+     * eligible (50 => 5, 70 => 7, 100 => 10). It never changes price.
+     */
+    maxPriceBufferPercent: normalizeOperatorPoolPercent(
+      input.maxPriceBufferPercent,
+      50
+    ),
     pricingMode,
     fixedSellingPrice: finiteNonNegative(input.fixedSellingPrice),
     markupPercent: finiteNonNegative(input.markupPercent),
@@ -313,12 +328,6 @@ function normalizeRuleInput(input = {}) {
     isActive: input.isActive !== false,
     notes: String(input.notes || "").trim(),
   };
-
-  if (normalized.maxPriceBufferPercent > 500) {
-    throw createPricingError("Max price buffer cannot be greater than 500%", {
-      code: "INVALID_PRICE_BUFFER",
-    });
-  }
 
   if (pricingMode === "fixed" && normalized.fixedSellingPrice <= 0) {
     throw createPricingError("Fixed selling price must be greater than zero", {
@@ -460,7 +469,10 @@ async function resolvePricingStrategy({
           ? normalizeOperator(rule.operator)
           : "any",
       pricingStyle,
-      maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
+      maxPriceBufferPercent: normalizeOperatorPoolPercent(
+        rule.maxPriceBufferPercent,
+        50
+      ),
       rule,
       source: "database",
     };
@@ -469,8 +481,9 @@ async function resolvePricingStrategy({
   return {
     operator: "any",
     pricingStyle: "cheapest_buffer",
-    maxPriceBufferPercent: finiteNonNegative(
-      process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
+    maxPriceBufferPercent: normalizeOperatorPoolPercent(
+      process.env.AUTO_PRICING_OPERATOR_POOL_PERCENT ??
+        process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
       50
     ),
     rule: null,
@@ -490,8 +503,9 @@ function createDefaultRule({ server, country, service, operator }) {
     service,
     operator,
     pricingStyle: "cheapest_buffer",
-    maxPriceBufferPercent: finiteNonNegative(
-      process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
+    maxPriceBufferPercent: normalizeOperatorPoolPercent(
+      process.env.AUTO_PRICING_OPERATOR_POOL_PERCENT ??
+        process.env.AUTO_PRICING_MAX_PRICE_BUFFER_PERCENT,
       50
     ),
     pricingMode: "cost_plus",
@@ -507,23 +521,22 @@ function createDefaultRule({ server, country, service, operator }) {
   };
 }
 
-function roundUpToHundred(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.ceil(number / 100) * 100 : number;
-}
-
-function calculateSellingPrice(pricingBasisNgn, rule) {
+function calculateSellingPrice(providerCostBasisNgn, rule) {
   let sellingPrice;
 
   if (rule.pricingMode === "fixed") {
     sellingPrice = Number(rule.fixedSellingPrice);
   } else if (rule.pricingMode === "cost_plus") {
     sellingPrice = Math.ceil(
-      pricingBasisNgn + finiteNonNegative(rule.fixedMarkup, 0)
+      providerCostBasisNgn + finiteNonNegative(rule.fixedMarkup, 0)
     );
   } else {
-    sellingPrice = roundUpToHundred(
-      pricingBasisNgn *
+    /*
+     * Percentage markup is applied to the ACTUAL selected provider cost only.
+     * Example: ₦2,000 + 50% = ₦3,000.
+     */
+    sellingPrice = Math.ceil(
+      providerCostBasisNgn *
         (1 + finiteNonNegative(rule.markupPercent, 0) / 100)
     );
   }
@@ -601,11 +614,20 @@ async function resolveCustomerPricing({
     });
   }
 
+  const pricingStyle = normalizePricingStyle(rule.pricingStyle, rule.operator);
+
+  /*
+   * Cheapest-operator pool percentage is selection-only. Never let an
+   * automatic-selection ceiling/band inflate the amount the customer pays.
+   * Fixed-operator legacy callers may still provide a higher explicit basis.
+   */
   const basisCandidate = Number(pricingBasisNgn);
   const effectiveBasisNgn =
-    Number.isFinite(basisCandidate) && basisCandidate > 0
-      ? Math.max(providerCostNgn, Math.ceil(basisCandidate))
-      : providerCostNgn;
+    pricingStyle === "cheapest_buffer"
+      ? providerCostNgn
+      : Number.isFinite(basisCandidate) && basisCandidate > 0
+        ? Math.max(providerCostNgn, Math.ceil(basisCandidate))
+        : providerCostNgn;
 
   const sellingPrice = calculateSellingPrice(effectiveBasisNgn, rule);
   if (sellingPrice < providerCostNgn) {
@@ -615,7 +637,6 @@ async function resolveCustomerPricing({
     );
   }
 
-  const pricingStyle = normalizePricingStyle(rule.pricingStyle, rule.operator);
   const profit = sellingPrice - providerCostNgn;
 
   return {
@@ -633,14 +654,20 @@ async function resolveCustomerPricing({
     pricingRuleId: rule._id || null,
     pricingMode: rule.pricingMode,
     pricingStyle,
-    maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
+    maxPriceBufferPercent: normalizeOperatorPoolPercent(
+      rule.maxPriceBufferPercent,
+      50
+    ),
     pricingSource: rule.source || "database",
     pricingRuleMatched: Boolean(rule._id),
     pricingSnapshot: {
       ruleId: rule._id ? String(rule._id) : null,
       pricingMode: rule.pricingMode,
       pricingStyle,
-      maxPriceBufferPercent: finiteNonNegative(rule.maxPriceBufferPercent, 50),
+      maxPriceBufferPercent: normalizeOperatorPoolPercent(
+        rule.maxPriceBufferPercent,
+        50
+      ),
       pricingBasisNgn: effectiveBasisNgn,
       exchangeRateNgnPerUsd: exchangeRate.rate,
       fixedSellingPrice: finiteNonNegative(rule.fixedSellingPrice),
@@ -665,6 +692,7 @@ module.exports = {
   normalizeServiceDisplayName,
   normalizeOperator,
   normalizePricingStyle,
+  normalizeOperatorPoolPercent,
   normalizeRuleInput,
   getExchangeRate,
   setExchangeRate,

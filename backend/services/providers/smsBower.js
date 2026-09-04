@@ -3,6 +3,18 @@ const https = require("https");
 
 const PROVIDER_NAME = "smsbower";
 
+/*
+ * SMSBower exposes its own Gold partner ranking through
+ * getTopCountriesByService. Cache it briefly so normal quote refreshes do not
+ * create unnecessary provider-side requests.
+ */
+const providerStatsCache = new Map();
+const PROVIDER_STATS_CACHE_TTL_MS = 60 * 1000;
+let countryAliasCache = {
+  aliasesById: null,
+  expiresAt: 0,
+};
+
 function getApiKey() {
   const apiKey = String(
     process.env.SMSBOWER_API_KEY || ""
@@ -904,6 +916,267 @@ function extractOperatorMap(
   return null;
 }
 
+
+function normalizeProviderStatsKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+async function getCountryAliases(normalizedCountry) {
+  const aliases = new Set([
+    String(normalizedCountry || "").trim().toLowerCase(),
+  ]);
+
+  /* Known aliases handled by normalizeSmsBowerCountry. */
+  for (const known of [
+    "usa",
+    "us",
+    "united states",
+    "united states of america",
+    "america",
+    "uk",
+    "gb",
+    "united kingdom",
+    "england",
+    "canada",
+    "ca",
+    "nigeria",
+    "ng",
+  ]) {
+    try {
+      if (normalizeSmsBowerCountry(known) === normalizedCountry) {
+        aliases.add(known);
+      }
+    } catch {
+      // Ignore malformed alias.
+    }
+  }
+
+  try {
+    if (
+      !countryAliasCache.aliasesById ||
+      Date.now() >= countryAliasCache.expiresAt
+    ) {
+      const countries = await getCountries();
+      const map = new Map();
+
+      const collect = (value) => {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+          value.forEach(collect);
+          return;
+        }
+
+        const id = String(
+          value.id ??
+            value.country_id ??
+            value.countryId ??
+            ""
+        ).trim().toLowerCase();
+
+        if (id) {
+          const set = map.get(id) || new Set([id]);
+          for (const field of [
+            value.eng,
+            value.name,
+            value.country,
+            value.code,
+          ]) {
+            const text = String(field || "").trim().toLowerCase();
+            if (text) set.add(text);
+          }
+          map.set(id, set);
+        }
+
+        for (const item of Object.values(value)) {
+          if (item && typeof item === "object") collect(item);
+        }
+      };
+
+      collect(countries);
+      countryAliasCache = {
+        aliasesById: map,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      };
+    }
+
+    const known = countryAliasCache.aliasesById.get(
+      String(normalizedCountry || "").trim().toLowerCase()
+    );
+    if (known) {
+      for (const alias of known) aliases.add(alias);
+    }
+  } catch {
+    /* Country aliases are optional; direct matching still works. */
+  }
+
+  return aliases;
+}
+
+function findTopCountryPartners(
+  responseData,
+  normalizedCountry,
+  aliases = new Set()
+) {
+  const desiredKeys = new Set(
+    [normalizedCountry, ...aliases]
+      .map(normalizeProviderStatsKey)
+      .filter(Boolean)
+  );
+
+  const containers = [
+    responseData,
+    responseData?.data,
+    responseData?.result,
+  ].filter(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item)
+  );
+
+  for (const container of containers) {
+    for (const [countryKey, partners] of Object.entries(container)) {
+      if (!partners || typeof partners !== "object" || Array.isArray(partners)) {
+        continue;
+      }
+
+      const rawKey = String(countryKey || "").trim().toLowerCase();
+      let mappedKey = rawKey;
+
+      try {
+        mappedKey = normalizeSmsBowerCountry(rawKey);
+      } catch {
+        // Keep the raw key if it is not recognized by the normalizer.
+      }
+
+      if (
+        rawKey === normalizedCountry ||
+        mappedKey === normalizedCountry ||
+        desiredKeys.has(normalizeProviderStatsKey(rawKey)) ||
+        desiredKeys.has(normalizeProviderStatsKey(mappedKey))
+      ) {
+        return partners;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function getProviderSideStatistics({
+  service,
+  country,
+}) {
+  const normalizedService =
+    normalizeSmsBowerService(service);
+
+  const normalizedCountry =
+    normalizeSmsBowerCountry(country);
+
+  const cacheKey =
+    `${normalizedService}|${normalizedCountry}`;
+
+  const cached = providerStatsCache.get(cacheKey);
+  if (
+    cached &&
+    Date.now() < cached.expiresAt
+  ) {
+    return cached.stats;
+  }
+
+  try {
+    const response = await request(
+      {
+        action: "getTopCountriesByService",
+        service: normalizedService,
+      },
+      {
+        retryable: true,
+      }
+    );
+
+    const topCountries = parseSmsBowerJson(
+      response.data,
+      response.text,
+      "provider statistics"
+    );
+
+    const aliases = await getCountryAliases(
+      normalizedCountry
+    );
+
+    const partners = findTopCountryPartners(
+      topCountries,
+      normalizedCountry,
+      aliases
+    );
+
+    const stats = new Map();
+
+    if (partners) {
+      Object.entries(partners).forEach(
+        ([partnerId, item], index) => {
+          const id = String(
+            item?.provider_id ??
+              item?.providerId ??
+              item?.id ??
+              partnerId
+          ).trim();
+
+          if (!id) return;
+
+          const salesCount = Number(
+            item?.count ??
+              item?.salesCount ??
+              item?.sales_count
+          );
+
+          stats.set(id.toLowerCase(), {
+            providerTier: "gold",
+            providerRank: index + 1,
+            providerSalesCount:
+              Number.isFinite(salesCount) && salesCount >= 0
+                ? salesCount
+                : null,
+            providerStatsSource:
+              "smsbower_getTopCountriesByService",
+          });
+        }
+      );
+    }
+
+    providerStatsCache.set(cacheKey, {
+      stats,
+      expiresAt:
+        Date.now() + PROVIDER_STATS_CACHE_TTL_MS,
+    });
+
+    return stats;
+  } catch (error) {
+    /*
+     * Provider statistics are an enhancement, not a reason to make pricing
+     * unavailable. getPricesV3 still supplies live price and stock, which the
+     * automatic selector can safely use as a fallback.
+     */
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        "[SMSBower] provider-side ranking unavailable; using live price/stock fallback:",
+        error.message
+      );
+    }
+
+    const stats = new Map();
+    providerStatsCache.set(cacheKey, {
+      stats,
+      expiresAt: Date.now() + 15000,
+    });
+    return stats;
+  }
+}
+
 function normalizeOperatorEntries(
   operatorMap,
   currency
@@ -1013,11 +1286,24 @@ async function getOperators({
     process.env.SMSBOWER_CURRENCY ||
     "USD";
 
-  const operators =
+  const baseOperators =
     normalizeOperatorEntries(
       operatorMap,
       currency
     );
+
+  const providerStats =
+    await getProviderSideStatistics({
+      service: normalizedService,
+      country: normalizedCountry,
+    });
+
+  const operators = baseOperators.map((operator) => ({
+    ...operator,
+    ...(providerStats.get(
+      String(operator.id || "").trim().toLowerCase()
+    ) || {}),
+  }));
 
   if (!operators.length) {
     throw createProviderError(

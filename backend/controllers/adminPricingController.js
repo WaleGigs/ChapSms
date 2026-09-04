@@ -717,14 +717,30 @@ exports.previewPricing = async (req, res) => {
         pricingMode: pricing.pricingMode,
         pricingStyle: pricing.pricingStyle,
         pricingSource: pricing.pricingSource,
+        candidateCount: automaticSelection?.candidateCount || 0,
         eligibleCount: automaticSelection?.eligibleCount || 0,
+        candidateLimit: automaticSelection?.candidateLimit || 0,
+        selectionPercent:
+          automaticSelection?.selectionPercent ??
+          draftRule.maxPriceBufferPercent,
         selectionStrategy: automaticSelection?.strategy || "fixed_operator",
-        otpSuccessRate: automaticSelection?.otpSuccessRate ?? null,
-        otpSuccessCount: automaticSelection?.otpSuccessCount || 0,
-        otpFailureCount: automaticSelection?.otpFailureCount || 0,
-        otpSampleSize: automaticSelection?.otpSampleSize || 0,
-        reliabilityProven:
-          automaticSelection?.reliabilityProven === true,
+        providerTier: automaticSelection?.providerTier ?? null,
+        providerRank: automaticSelection?.providerRank ?? null,
+        providerSalesCount:
+          automaticSelection?.providerSalesCount ?? null,
+        providerReliability:
+          automaticSelection?.providerReliability ?? null,
+        providerStatsSource:
+          automaticSelection?.providerStatsSource ?? null,
+        providerStatsAvailable:
+          automaticSelection?.providerStatsAvailable === true,
+
+        /* Legacy response keys retained as null/zero for older admin clients. */
+        otpSuccessRate: null,
+        otpSuccessCount: 0,
+        otpFailureCount: 0,
+        otpSampleSize: 0,
+        reliabilityProven: false,
         pricingRuleId: pricing.pricingRuleId
           ? String(pricing.pricingRuleId)
           : null,

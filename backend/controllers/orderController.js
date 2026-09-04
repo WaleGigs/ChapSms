@@ -1367,7 +1367,8 @@ exports.createOrder =
       /*
        * Manual/fixed-operator choices still override automation.
        * Cheapest + buffer is used only when the resolved pricing style
-       * is automatic, and it now uses the rule's saved price buffer.
+       * is automatic. The saved percentage controls how many of the 10
+       * cheapest live operators are considered; it never inflates price.
        */
       if (
         pricingStrategy.pricingStyle ===
@@ -1437,14 +1438,26 @@ exports.createOrder =
               automaticSelection
                 ?.candidateCount ||
               0,
-            otpSuccessRate:
+            selectionPercent:
               automaticSelection
-                ?.otpSuccessRate ??
+                ?.selectionPercent ??
               null,
-            otpSampleSize:
+            eligibleCount:
               automaticSelection
-                ?.otpSampleSize ||
+                ?.eligibleCount ||
               0,
+            providerTier:
+              automaticSelection
+                ?.providerTier ??
+              null,
+            providerRank:
+              automaticSelection
+                ?.providerRank ??
+              null,
+            providerStatsSource:
+              automaticSelection
+                ?.providerStatsSource ??
+              null,
           }
         );
       }
@@ -1650,7 +1663,7 @@ exports.createOrder =
         reservedAmount;
 
       /*
-       * Automatic Cheapest + buffer purchases get availability failover.
+       * Automatic Cheapest-operator-pool purchases get availability failover.
        *
        * Important safety rule:
        * - A different candidate is tried ONLY after the provider explicitly
