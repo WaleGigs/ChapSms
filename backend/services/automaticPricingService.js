@@ -46,6 +46,16 @@ function getOperatorStock(operator) {
   return Number.isFinite(stock) ? Math.max(0, stock) : 0;
 }
 
+function normalizeExcludedOperators(values = []) {
+  const items = Array.isArray(values) ? values : [values];
+
+  return new Set(
+    items
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter((value) => value && value !== "any")
+  );
+}
+
 function getProviderReliability(operator) {
   for (const value of [
     operator?.successRate,
@@ -286,6 +296,7 @@ async function buildFreshSelection({
   country,
   service,
   maxPriceBufferPercent = 50,
+  excludeOperators = [],
 }) {
   const response = await providerManager.getOperators({
     server,
@@ -294,14 +305,21 @@ async function buildFreshSelection({
   });
 
   const currency = response?.currency || "NGN";
+  const excludedOperators = normalizeExcludedOperators(excludeOperators);
+
   const candidates = (
     Array.isArray(response?.operators) ? response.operators : []
   )
     .map((item) => normalizeCandidate(item, currency))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((item) => !excludedOperators.has(item.operator));
 
   if (!candidates.length) {
-    const error = new Error("No operator with live stock is currently available");
+    const error = new Error(
+      excludedOperators.size
+        ? "No fallback operator with live stock is currently available"
+        : "No operator with live stock is currently available"
+    );
     error.status = 409;
     error.code = "NO_NUMBERS";
     throw error;
@@ -511,8 +529,43 @@ async function resolveAutomaticQuote({
   }
 }
 
+
+async function resolveFixedOperatorFallbackQuote({
+  server,
+  country,
+  service,
+  excludeOperators = [],
+  maxPriceBufferPercent = 100,
+}) {
+  /*
+   * Fixed-operator failover deliberately bypasses the normal selection cache.
+   * We need a fresh provider list after the preferred fixed operator reports
+   * NO_NUMBERS/NO_STOCK so we do not immediately select that same operator
+   * from stale cached data.
+   *
+   * The fallback still follows the normal selector:
+   *   1. Keep only live-stock operators with valid prices.
+   *   2. Consider the cheapest N candidates.
+   *   3. Prefer SMSBower provider-side ranking/statistics when available.
+   *   4. Otherwise prefer live stock, then lower cost.
+   */
+  const selection = await buildFreshSelection({
+    server,
+    country,
+    service,
+    maxPriceBufferPercent,
+    excludeOperators,
+  });
+
+  return {
+    ...selection,
+    strategy: `fixed_operator_failover_${selection.strategy}`,
+  };
+}
+
 module.exports = {
   resolveAutomaticQuote,
+  resolveFixedOperatorFallbackQuote,
   normalizePoolPercent,
   getCandidateLimit,
 };

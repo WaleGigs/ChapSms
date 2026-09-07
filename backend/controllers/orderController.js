@@ -1361,14 +1361,64 @@ exports.createOrder =
       let preliminaryQuote;
       let automaticSelection =
         null;
+      let fixedOperatorFallbackSelection =
+        null;
       let pricingBasisNgn =
         null;
 
       /*
-       * Manual/fixed-operator choices still override automation.
-       * Cheapest + buffer is used only when the resolved pricing style
-       * is automatic. The saved percentage controls how many of the 10
-       * cheapest live operators are considered; it never inflates price.
+       * Only an ADMIN/DATABASE fixed-operator rule gets automatic operator
+       * fallback. If a customer explicitly requested an operator, keep that
+       * request exact and never silently switch it.
+       *
+       * The saved fixed operator always remains the preferred operator.
+       * Every new order checks it first, so the system automatically returns
+       * to it as soon as SMSBower reports live stock again.
+       */
+      const fixedOperatorFallbackEnabled =
+        pricingStrategy.pricingStyle ===
+          "fixed_operator" &&
+        pricingStrategy.source ===
+          "database";
+
+      const preferredFixedOperator =
+        fixedOperatorFallbackEnabled
+          ? normalizeOperator(
+              pricingStrategy.operator
+            )
+          : null;
+
+      const fixedFallbackPoolPercent =
+        Number(
+          process.env
+            .FIXED_OPERATOR_FALLBACK_POOL_PERCENT ||
+            100
+        );
+
+      const resolveFixedOperatorFallback =
+        async (excludeOperators = []) =>
+          automaticPricingService
+            .resolveFixedOperatorFallbackQuote({
+              server:
+                normalizedServer,
+              country:
+                normalizedCountry,
+              service:
+                normalizedService,
+              excludeOperators,
+              maxPriceBufferPercent:
+                fixedFallbackPoolPercent,
+            });
+
+      /*
+       * Cheapest + buffer continues to use the normal automatic selector.
+       *
+       * Fixed operator now means:
+       *   1. Try the saved preferred operator first.
+       *   2. If it definitively has no number/stock, select a fallback from
+       *      the cheapest live operators.
+       *   3. Inside that cheap pool, prefer SMSBower's provider-side
+       *      ranking/statistics when available; otherwise use stock/cost.
        */
       if (
         pricingStrategy.pricingStyle ===
@@ -1398,29 +1448,93 @@ exports.createOrder =
           automaticSelection
             .pricingBasisNgn;
       } else {
-        preliminaryQuote =
-          await providerManager
-            .getPrice({
-              server:
-                normalizedServer,
+        try {
+          preliminaryQuote =
+            await providerManager
+              .getPrice({
+                server:
+                  normalizedServer,
 
-              country:
-                normalizedCountry,
+                country:
+                  normalizedCountry,
 
-              service:
-                normalizedService,
+                service:
+                  normalizedService,
 
-              operator:
-                normalizedOperator,
-            });
+                operator:
+                  normalizedOperator,
+              });
+        } catch (quoteError) {
+          if (
+            !fixedOperatorFallbackEnabled ||
+            !isDefinitiveAvailabilityFailure(
+              quoteError
+            )
+          ) {
+            throw quoteError;
+          }
+
+          fixedOperatorFallbackSelection =
+            await resolveFixedOperatorFallback(
+              [
+                preferredFixedOperator,
+              ]
+            );
+
+          normalizedOperator =
+            fixedOperatorFallbackSelection
+              .operator;
+
+          preliminaryQuote =
+            fixedOperatorFallbackSelection
+              .quote;
+        }
+
+        /*
+         * Some provider price endpoints return a valid quote with stock=0
+         * instead of throwing NO_NUMBERS. Treat that as a definitive
+         * availability failure and move to the ranked fallback pool.
+         */
+        const fixedQuoteStock =
+          Number(
+            preliminaryQuote?.stock
+          );
+
+        if (
+          fixedOperatorFallbackEnabled &&
+          !fixedOperatorFallbackSelection &&
+          Number.isFinite(
+            fixedQuoteStock
+          ) &&
+          fixedQuoteStock <= 0
+        ) {
+          fixedOperatorFallbackSelection =
+            await resolveFixedOperatorFallback(
+              [
+                preferredFixedOperator,
+              ]
+            );
+
+          normalizedOperator =
+            fixedOperatorFallbackSelection
+              .operator;
+
+          preliminaryQuote =
+            fixedOperatorFallbackSelection
+              .quote;
+        }
       }
 
       if (
         process.env.NODE_ENV !==
         "production"
       ) {
+        const selectionDebug =
+          automaticSelection ||
+          fixedOperatorFallbackSelection;
+
         console.log(
-          "[Automatic pricing] purchase selection:",
+          "[Operator selection] purchase selection:",
           {
             server:
               normalizedServer,
@@ -1430,32 +1544,35 @@ exports.createOrder =
               normalizedService,
             operator:
               normalizedOperator,
+            preferredFixedOperator:
+              preferredFixedOperator ||
+              null,
             strategy:
-              automaticSelection
+              selectionDebug
                 ?.strategy ||
-              "manual_or_rule",
+              "exact_operator",
             candidateCount:
-              automaticSelection
+              selectionDebug
                 ?.candidateCount ||
               0,
             selectionPercent:
-              automaticSelection
+              selectionDebug
                 ?.selectionPercent ??
               null,
             eligibleCount:
-              automaticSelection
+              selectionDebug
                 ?.eligibleCount ||
               0,
             providerTier:
-              automaticSelection
+              selectionDebug
                 ?.providerTier ??
               null,
             providerRank:
-              automaticSelection
+              selectionDebug
                 ?.providerRank ??
               null,
             providerStatsSource:
-              automaticSelection
+              selectionDebug
                 ?.providerStatsSource ??
               null,
           }
@@ -1663,40 +1780,200 @@ exports.createOrder =
         reservedAmount;
 
       /*
-       * Automatic Cheapest-operator-pool purchases get availability failover.
+       * Availability failover safety:
        *
-       * Important safety rule:
-       * - A different candidate is tried ONLY after the provider explicitly
-       *   says the previous operator/pool had no number.
-       * - Network timeouts / connection errors / malformed responses are NOT
-       *   retried because the provider could already have created an activation.
-       * - Manual fixed-operator rules never fall back to another operator.
-       * - A fallback candidate is used only if its calculated customer price
-       *   is <= the amount already shown/reserved for the customer.
+       * - A different operator is tried ONLY after a definitive availability
+       *   response such as NO_NUMBERS / NO_STOCK.
+       * - Network timeouts, connection resets, malformed responses, and other
+       *   uncertain purchase results are NEVER retried on another operator,
+       *   because the first provider request may already have created an
+       *   activation.
+       * - The fallback candidate must not make the customer pay more than the
+       *   amount that was already calculated/reserved for this order.
        */
-      if (automaticSelection) {
-        const purchaseCandidates =
-          buildAutomaticPurchaseCandidates(
-            automaticSelection,
-            normalizedOperator,
-          );
+      const purchaseFromRankedSelection =
+        async ({
+          selection,
+          customerPricingBasisNgn =
+            null,
+          logLabel =
+            "automatic",
+        }) => {
+          const purchaseCandidates =
+            buildAutomaticPurchaseCandidates(
+              selection,
+              selection?.operator ||
+                normalizedOperator,
+            );
 
-        let lastAvailabilityError =
-          null;
+          let lastAvailabilityError =
+            null;
 
-        for (
-          const candidateOperator of
-          purchaseCandidates
-        ) {
-          let candidateQuote;
+          for (
+            const candidateOperator of
+            purchaseCandidates
+          ) {
+            let candidateQuote;
 
-          try {
-            candidateQuote =
-              candidateOperator ===
-                normalizedOperator
-                ? preliminaryQuote
-                : await providerManager
-                    .getPrice({
+            try {
+              candidateQuote =
+                candidateOperator ===
+                  normalizedOperator
+                  ? preliminaryQuote
+                  : await providerManager
+                      .getPrice({
+                        server:
+                          normalizedServer,
+                        country:
+                          normalizedCountry,
+                        service:
+                          normalizedService,
+                        operator:
+                          candidateOperator,
+                      });
+            } catch (quoteError) {
+              /*
+               * Quoting is read-only, so an unavailable candidate can be
+               * skipped without creating a double-purchase risk.
+               */
+              if (
+                isDefinitiveAvailabilityFailure(
+                  quoteError
+                )
+              ) {
+                lastAvailabilityError =
+                  quoteError;
+                continue;
+              }
+
+              throw quoteError;
+            }
+
+            const candidateStock =
+              Number(
+                candidateQuote?.stock
+              );
+
+            if (
+              Number.isFinite(
+                candidateStock
+              ) &&
+              candidateStock <= 0
+            ) {
+              const stockError =
+                new Error(
+                  "Fallback operator has no live stock"
+                );
+
+              stockError.status =
+                409;
+              stockError.code =
+                "NO_NUMBERS";
+
+              lastAvailabilityError =
+                stockError;
+              continue;
+            }
+
+            const candidatePricing =
+              await pricingService
+                .resolveCustomerPricing({
+                  server:
+                    normalizedServer,
+                  country:
+                    normalizedCountry,
+                  service:
+                    normalizedService,
+                  countryName:
+                    displayCountryName,
+                  serviceName:
+                    displayServiceName,
+                  operator:
+                    candidateOperator,
+                  providerPrice:
+                    candidateQuote.price,
+                  providerCurrency:
+                    candidateQuote.currency,
+                  pricingBasisNgn:
+                    customerPricingBasisNgn,
+                });
+
+            const candidateSellingPrice =
+              Number(
+                candidatePricing
+                  .sellingPrice
+              );
+
+            /*
+             * Do not silently increase the customer's charge after they
+             * already initiated the order.
+             */
+            if (
+              !Number.isFinite(
+                candidateSellingPrice
+              ) ||
+              candidateSellingPrice >
+                reservedAmount
+            ) {
+              continue;
+            }
+
+            try {
+              purchasedProviderOrder =
+                await providerManager
+                  .buyNumber({
+                    server:
+                      normalizedServer,
+                    country:
+                      normalizedCountry,
+                    service:
+                      normalizedService,
+                    operator:
+                      candidateOperator,
+                  });
+
+              normalizedOperator =
+                candidateOperator;
+
+              preliminaryQuote =
+                candidateQuote;
+
+              if (
+                process.env.NODE_ENV !==
+                "production"
+              ) {
+                console.log(
+                  `[${logLabel}] purchase candidate succeeded:`,
+                  {
+                    server:
+                      normalizedServer,
+                    country:
+                      normalizedCountry,
+                    service:
+                      normalizedService,
+                    operator:
+                      candidateOperator,
+                  }
+                );
+              }
+
+              break;
+            } catch (purchaseError) {
+              if (
+                isDefinitiveAvailabilityFailure(
+                  purchaseError
+                )
+              ) {
+                lastAvailabilityError =
+                  purchaseError;
+
+                if (
+                  process.env.NODE_ENV !==
+                  "production"
+                ) {
+                  console.log(
+                    `[${logLabel}] candidate unavailable, checking next ranked operator:`,
+                    {
                       server:
                         normalizedServer,
                       country:
@@ -1705,93 +1982,75 @@ exports.createOrder =
                         normalizedService,
                       operator:
                         candidateOperator,
-                    });
-          } catch (quoteError) {
-            /*
-             * Quoting is read-only, so an unavailable candidate may simply
-             * be skipped without any double-purchase risk.
-             */
-            if (
-              isDefinitiveAvailabilityFailure(
-                quoteError
-              )
-            ) {
-              lastAvailabilityError =
-                quoteError;
-              continue;
+                      code:
+                        purchaseError?.code,
+                    }
+                  );
+                }
+
+                continue;
+              }
+
+              /*
+               * Uncertain mutation result: stop immediately. The outer error
+               * path may restore the ChapsSms reservation, but we must not send
+               * another provider purchase request.
+               */
+              throw purchaseError;
+            }
+          }
+
+          if (!purchasedProviderOrder) {
+            if (lastAvailabilityError) {
+              throw lastAvailabilityError;
             }
 
-            throw quoteError;
-          }
-
-          const candidateStock =
-            Number(
-              candidateQuote?.stock
-            );
-
-          if (
-            Number.isFinite(
-              candidateStock
-            ) &&
-            candidateStock <= 0
-          ) {
-            const stockError =
+            const noCandidateError =
               new Error(
-                "Automatic operator has no live stock"
+                "No eligible fallback operator can currently provide this number at the displayed ChapsSms price"
               );
 
-            stockError.status = 409;
-            stockError.code =
+            noCandidateError.status =
+              409;
+            noCandidateError.code =
               "NO_NUMBERS";
 
-            lastAvailabilityError =
-              stockError;
-            continue;
+            throw noCandidateError;
           }
+        };
 
-          const candidatePricing =
-            await pricingService
-              .resolveCustomerPricing({
-                server:
-                  normalizedServer,
-                country:
-                  normalizedCountry,
-                service:
-                  normalizedService,
-                countryName:
-                  displayCountryName,
-                serviceName:
-                  displayServiceName,
-                operator:
-                  candidateOperator,
-                providerPrice:
-                  candidateQuote.price,
-                providerCurrency:
-                  candidateQuote.currency,
-
-                pricingBasisNgn,
-              });
-
-          const candidateSellingPrice =
-            Number(
-              candidatePricing
-                .sellingPrice
-            );
-
-          /*
-           * The user must never be silently charged more than the live price
-           * that was displayed/reserved before they pressed Buy Number.
-           */
-          if (
-            !Number.isFinite(
-              candidateSellingPrice
-            ) ||
-            candidateSellingPrice >
-              reservedAmount
-          ) {
-            continue;
-          }
-
+      if (automaticSelection) {
+        /*
+         * Existing Cheapest + buffer behaviour.
+         */
+        await purchaseFromRankedSelection({
+          selection:
+            automaticSelection,
+          customerPricingBasisNgn:
+            pricingBasisNgn,
+          logLabel:
+            "Automatic pricing",
+        });
+      } else if (
+        fixedOperatorFallbackEnabled
+      ) {
+        /*
+         * ADMIN FIXED OPERATOR:
+         *
+         * The configured operator remains the permanent preference.
+         *
+         * If it was healthy during the quote, try it first. If the provider
+         * definitively reports that stock disappeared before the purchase
+         * completed, build a FRESH fallback pool excluding that operator and
+         * continue with the best cheap/ranked candidate.
+         *
+         * If the preferred operator was already unavailable during the quote,
+         * fixedOperatorFallbackSelection is already populated and we can go
+         * directly to the ranked fallback candidates.
+         */
+        if (
+          !fixedOperatorFallbackSelection
+        ) {
           try {
             purchasedProviderOrder =
               await providerManager
@@ -1803,97 +2062,61 @@ exports.createOrder =
                   service:
                     normalizedService,
                   operator:
-                    candidateOperator,
+                    preferredFixedOperator,
                 });
 
             normalizedOperator =
-              candidateOperator;
-
-            preliminaryQuote =
-              candidateQuote;
-
-            if (
-              process.env.NODE_ENV !==
-              "production"
-            ) {
-              console.log(
-                "[Automatic pricing] purchase candidate succeeded:",
-                {
-                  server:
-                    normalizedServer,
-                  country:
-                    normalizedCountry,
-                  service:
-                    normalizedService,
-                  operator:
-                    candidateOperator,
-                }
-              );
-            }
-
-            break;
+              preferredFixedOperator;
           } catch (purchaseError) {
             if (
-              isDefinitiveAvailabilityFailure(
+              !isDefinitiveAvailabilityFailure(
                 purchaseError
               )
             ) {
-              lastAvailabilityError =
-                purchaseError;
-
-              if (
-                process.env.NODE_ENV !==
-                "production"
-              ) {
-                console.log(
-                  "[Automatic pricing] candidate unavailable, checking next Cheapest + buffer candidate:",
-                  {
-                    server:
-                      normalizedServer,
-                    country:
-                      normalizedCountry,
-                    service:
-                      normalizedService,
-                    operator:
-                      candidateOperator,
-                    code:
-                      purchaseError?.code,
-                  }
-                );
-              }
-
-              continue;
+              throw purchaseError;
             }
 
-            /*
-             * Uncertain mutation result: stop immediately.
-             * The outer rollback path will restore the ChapsSms reservation,
-             * but we DO NOT send another provider purchase request.
-             */
-            throw purchaseError;
+            fixedOperatorFallbackSelection =
+              await resolveFixedOperatorFallback(
+                [
+                  preferredFixedOperator,
+                ]
+              );
+
+            normalizedOperator =
+              fixedOperatorFallbackSelection
+                .operator;
+
+            preliminaryQuote =
+              fixedOperatorFallbackSelection
+                .quote;
           }
         }
 
-        if (!purchasedProviderOrder) {
-          if (lastAvailabilityError) {
-            throw lastAvailabilityError;
-          }
+        if (
+          !purchasedProviderOrder &&
+          fixedOperatorFallbackSelection
+        ) {
+          await purchaseFromRankedSelection({
+            selection:
+              fixedOperatorFallbackSelection,
 
-          const noCandidateError =
-            new Error(
-              "No eligible Cheapest + buffer operator can currently provide this number at the displayed ChapsSms price"
-            );
+            /*
+             * Fixed-operator pricing should be recalculated from each actual
+             * fallback operator's provider cost/rule. Do not carry a previous
+             * operator's cost basis into the fallback.
+             */
+            customerPricingBasisNgn:
+              null,
 
-          noCandidateError.status =
-            409;
-          noCandidateError.code =
-            "NO_NUMBERS";
-          throw noCandidateError;
+            logLabel:
+              "Fixed operator fallback",
+          });
         }
       } else {
         /*
-         * Fixed/manual operator means exact operator only.
-         * Never silently switch an admin-configured fixed operator.
+         * Customer-selected/manual operator remains exact. Only an admin
+         * database fixed-operator rule receives automatic fallback.
          */
         purchasedProviderOrder =
           await providerManager
