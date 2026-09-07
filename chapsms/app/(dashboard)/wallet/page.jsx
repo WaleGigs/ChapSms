@@ -62,6 +62,18 @@ function formatCountdown(seconds) {
   ).padStart(2, "0")}`;
 }
 
+function getBankAccountName(details) {
+  return String(
+    details?.accountName ??
+      details?.account_name ??
+      details?.accountHolderName ??
+      details?.account_holder_name ??
+      details?.beneficiaryName ??
+      details?.beneficiary_name ??
+      ""
+  ).trim();
+}
+
 async function copyText(value) {
   const text = String(value || "");
   if (!text) throw new Error("Nothing to copy");
@@ -840,8 +852,12 @@ export default function WalletPage() {
                         copy: true,
                       },
                       {
-                        label: "Transfer note",
-                        value: "ChapsSms Wallet Funding FLW",
+                        label: "Account Name",
+                        value:
+                          getBankAccountName(
+                            flutterwaveBankTransfer
+                          ) ||
+                          "ChapsSms Wallet Funding FLW",
                         copy: true,
                       },
                       {

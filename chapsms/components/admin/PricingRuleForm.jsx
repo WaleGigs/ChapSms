@@ -1217,8 +1217,10 @@ export default function PricingRuleForm({
                 <label className="text-sm font-bold">
                   Choose operator
                 </label>
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Customer purchases stay locked to this operator.
+                <p className="mt-1 text-xs leading-5 text-[var(--muted-foreground)]">
+                  This remains the preferred fixed operator. If it definitively runs out of numbers,
+                  ChapsSms automatically uses the best cheap live fallback based on provider ranking/statistics,
+                  stock and cost, then returns to this operator as soon as it is restocked.
                 </p>
               </div>
 

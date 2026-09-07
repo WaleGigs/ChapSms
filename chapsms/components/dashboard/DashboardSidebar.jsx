@@ -22,7 +22,7 @@ import { useAuth } from "@/context/AuthContext";
 const primaryLinks = [
   {
     href: "/buy-number",
-    label: "Receive SMS",
+    label: "Buy Number",
     icon: MessageSquareText,
   },
   {
