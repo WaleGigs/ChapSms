@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
-
+const socialRoutes = require("./routes/socialRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const adminPricingRoutes = require("./routes/adminPricingRoutes");
 const walletRoutes = require("./routes/walletRoutes");
@@ -75,7 +75,7 @@ app.use("/api/wallet", walletRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/catalog", catalogRoutes);
-
+app.use("/api/social", socialRoutes);
 app.use((req, res) => {
   res.status(404).json({
     success: false,

@@ -754,10 +754,10 @@ exports.previewPricing = async (req, res) => {
     });
   }
 };
-
 exports.getDashboardSummary = async (req, res) => {
   try {
     const match = {};
+
     const effectiveDateRange =
       getEffectiveDashboardDateRange(
         req.query
@@ -788,12 +788,44 @@ exports.getDashboardSummary = async (req, res) => {
       orderResults,
       totalUsers,
       walletBalanceResults,
+      providerBalanceResults,
     ] = await Promise.all([
       Order.aggregate([
-        { $match: match },
+        {
+          $match: match,
+        },
+
         {
           $facet: {
-            totals: [
+            /*
+             * TOTAL ORDERS
+             *
+             * Count EVERY order attempt.
+             *
+             * This intentionally includes:
+             * - waiting
+             * - cancelling
+             * - cancelled
+             * - expired
+             * - received
+             * - refunded orders
+             *
+             * This is the correct denominator for
+             * delivery/success-rate metrics.
+             */
+            orderCount: [
+              {
+                $count: "count",
+              },
+            ],
+
+            /*
+             * MONEY METRICS
+             *
+             * Refunded orders must NOT inflate
+             * revenue/cost/profit.
+             */
+            financialTotals: [
               {
                 $match: {
                   refunded: {
@@ -801,12 +833,11 @@ exports.getDashboardSummary = async (req, res) => {
                   },
                 },
               },
+
               {
                 $group: {
                   _id: null,
-                  totalOrders: {
-                    $sum: 1,
-                  },
+
                   totalRevenue: {
                     $sum: {
                       $ifNull: [
@@ -815,6 +846,7 @@ exports.getDashboardSummary = async (req, res) => {
                       ],
                     },
                   },
+
                   totalProviderCost: {
                     $sum: {
                       $ifNull: [
@@ -823,6 +855,7 @@ exports.getDashboardSummary = async (req, res) => {
                       ],
                     },
                   },
+
                   totalProfit: {
                     $sum: {
                       $ifNull: [
@@ -834,22 +867,35 @@ exports.getDashboardSummary = async (req, res) => {
                 },
               },
             ],
+
+            /*
+             * Count every order by status.
+             */
             statuses: [
               {
                 $group: {
                   _id: "$status",
+
                   count: {
                     $sum: 1,
                   },
                 },
               },
             ],
+
+            /*
+             * RECEIVED OTP
+             *
+             * An order is successful when an OTP
+             * was actually received.
+             *
+             * Do NOT remove it from this metric
+             * merely because its financial state
+             * was later changed.
+             */
             receivedOtps: [
               {
                 $match: {
-                  refunded: {
-                    $ne: true,
-                  },
                   $or: [
                     {
                       otpReceivedAt: {
@@ -857,6 +903,7 @@ exports.getDashboardSummary = async (req, res) => {
                         $ne: null,
                       },
                     },
+
                     {
                       status:
                         "received",
@@ -864,10 +911,18 @@ exports.getDashboardSummary = async (req, res) => {
                   ],
                 },
               },
+
               {
                 $count: "count",
               },
             ],
+
+            /*
+             * Existing server financial breakdown.
+             *
+             * Keep refunded orders out of these
+             * financial figures.
+             */
             servers: [
               {
                 $match: {
@@ -876,12 +931,15 @@ exports.getDashboardSummary = async (req, res) => {
                   },
                 },
               },
+
               {
                 $group: {
                   _id: "$server",
+
                   orders: {
                     $sum: 1,
                   },
+
                   revenue: {
                     $sum: {
                       $ifNull: [
@@ -890,6 +948,7 @@ exports.getDashboardSummary = async (req, res) => {
                       ],
                     },
                   },
+
                   providerCost: {
                     $sum: {
                       $ifNull: [
@@ -898,6 +957,7 @@ exports.getDashboardSummary = async (req, res) => {
                       ],
                     },
                   },
+
                   profit: {
                     $sum: {
                       $ifNull: [
@@ -926,6 +986,7 @@ exports.getDashboardSummary = async (req, res) => {
             as: "customer",
           },
         },
+
         {
           $unwind: {
             path: "$customer",
@@ -933,10 +994,12 @@ exports.getDashboardSummary = async (req, res) => {
               false,
           },
         },
+
         {
           $match: {
             "customer.role":
               "user",
+
             ...(effectiveDateRange
               ? {
                   "customer.createdAt":
@@ -945,9 +1008,11 @@ exports.getDashboardSummary = async (req, res) => {
               : {}),
           },
         },
+
         {
           $group: {
             _id: null,
+
             usersBalance: {
               $sum: {
                 $ifNull: [
@@ -959,18 +1024,48 @@ exports.getDashboardSummary = async (req, res) => {
           },
         },
       ]),
+
+      /*
+       * Fetch SMSBower + BenOTP balances.
+       *
+       * providerManager already uses
+       * Promise.allSettled internally, so one
+       * unavailable provider does not have to
+       * destroy the whole dashboard.
+       */
+      providerManager
+        .getProviderBalances()
+        .catch((error) => {
+          console.error(
+            "Unable to load provider balances:",
+            error
+          );
+
+          return [];
+        }),
     ]);
 
     const result =
       orderResults?.[0] || {};
 
-    const totals =
-      result?.totals?.[0] || {
-        totalOrders: 0,
+    const financialTotals =
+      result?.financialTotals?.[0] || {
         totalRevenue: 0,
         totalProviderCost: 0,
         totalProfit: 0,
       };
+
+    /*
+     * IMPORTANT:
+     * This is now EVERY order matching the
+     * dashboard period, including cancelled/
+     * refunded/expired orders.
+     */
+    const totalOrders =
+      Number(
+        result?.orderCount?.[0]
+          ?.count || 0
+      );
 
     const statuses =
       Object.fromEntries(
@@ -978,7 +1073,9 @@ exports.getDashboardSummary = async (req, res) => {
           result?.statuses || []
         ).map((item) => [
           item._id,
-          item.count,
+          Number(
+            item.count || 0
+          ),
         ])
       );
 
@@ -988,15 +1085,28 @@ exports.getDashboardSummary = async (req, res) => {
           result?.servers || []
         ).map((item) => [
           item._id,
+
           {
             orders:
-              item.orders,
+              Number(
+                item.orders || 0
+              ),
+
             revenue:
-              item.revenue,
+              Number(
+                item.revenue || 0
+              ),
+
             providerCost:
-              item.providerCost,
+              Number(
+                item.providerCost ||
+                  0
+              ),
+
             profit:
-              item.profit,
+              Number(
+                item.profit || 0
+              ),
           },
         ])
       );
@@ -1013,37 +1123,217 @@ exports.getDashboardSummary = async (req, res) => {
           ?.usersBalance || 0
       );
 
+    /*
+     * Useful metric for later:
+     *
+     * Received OTPs / Every Order × 100
+     */
+    const otpSuccessRate =
+      totalOrders > 0
+        ? Number(
+            (
+              (
+                receivedOtps /
+                totalOrders
+              ) *
+              100
+            ).toFixed(2)
+          )
+        : 0;
+
+    /*
+     * Admin-safe provider balance representation.
+     *
+     * Provider identities remain private from
+     * CUSTOMER endpoints, but this is the
+     * authenticated ADMIN dashboard.
+     */
+    const providerNames = {
+      server1: "SMSBower",
+      server2: "BenOTP",
+    };
+
+    const defaultCurrencies = {
+      server1: "USD",
+      server2: "NGN",
+    };
+
+    const providerBalances =
+      Array.isArray(
+        providerBalanceResults
+      )
+        ? providerBalanceResults.map(
+            (item) => {
+              const numericBalance =
+                Number(
+                  item?.balance
+                );
+
+              return {
+                server:
+                  item?.server || "",
+
+                name:
+                  providerNames[
+                    item?.server
+                  ] ||
+                  item?.server ||
+                  "Provider",
+
+                enabled:
+                  item?.enabled !==
+                  false,
+
+                healthy:
+                  Boolean(
+                    item?.healthy
+                  ),
+
+                balance:
+                  Number.isFinite(
+                    numericBalance
+                  )
+                    ? numericBalance
+                    : null,
+
+                currency:
+                  String(
+                    item?.currency ||
+                      defaultCurrencies[
+                        item?.server
+                      ] ||
+                      ""
+                  )
+                    .trim()
+                    .toUpperCase(),
+
+                message:
+                  String(
+                    item?.message ||
+                      ""
+                  ),
+              };
+            }
+          )
+        : [];
+
+    /*
+     * Guarantee both cards exist even if one
+     * provider's balance request fails.
+     */
+    const balanceByServer =
+      Object.fromEntries(
+        providerBalances.map(
+          (item) => [
+            item.server,
+            item,
+          ]
+        )
+      );
+
+    const safeProviderBalances = [
+      balanceByServer.server1 || {
+        server: "server1",
+        name: "SMSBower",
+        enabled: true,
+        healthy: false,
+        balance: null,
+        currency: "USD",
+        message:
+          "Balance unavailable",
+      },
+
+      balanceByServer.server2 || {
+        server: "server2",
+        name: "BenOTP",
+        enabled: true,
+        healthy: false,
+        balance: null,
+        currency: "NGN",
+        message:
+          "Balance unavailable",
+      },
+    ];
+
     const trackingStartAt =
       getDashboardTrackingStartAt();
 
     return res.json({
       success: true,
-      summary: {
-        ...totals,
 
-        // Old dashboard naming restored.
-        totalCost:
+      summary: {
+        /*
+         * Financial metrics.
+         */
+        totalRevenue:
           Number(
-            totals.totalProviderCost ||
+            financialTotals
+              .totalRevenue || 0
+          ),
+
+        totalProviderCost:
+          Number(
+            financialTotals
+              .totalProviderCost ||
               0
           ),
+
+        totalCost:
+          Number(
+            financialTotals
+              .totalProviderCost ||
+              0
+          ),
+
+        totalProfit:
+          Number(
+            financialTotals
+              .totalProfit || 0
+          ),
+
+        /*
+         * Order metrics.
+         */
+        totalOrders,
         receivedOtps,
+        otpSuccessRate,
+
+        waitingOrders:
+          statuses.waiting || 0,
+
+        cancellingOrders:
+          statuses.cancelling ||
+          0,
+
+        receivedOrders:
+          statuses.received || 0,
+
+        cancelledOrders:
+          statuses.cancelled ||
+          0,
+
+        expiredOrders:
+          statuses.expired || 0,
+
+        /*
+         * User metrics.
+         */
         totalUsers:
           Number(
             totalUsers || 0
           ),
+
         usersBalance,
 
-        // Existing fields kept so other admin pages do not break.
-        waitingOrders:
-          statuses.waiting || 0,
-        receivedOrders:
-          statuses.received || 0,
-        cancelledOrders:
-          statuses.cancelled || 0,
-        expiredOrders:
-          statuses.expired || 0,
+        /*
+         * SMS provider balances.
+         */
+        providerBalances:
+          safeProviderBalances,
 
+        /*
+         * Existing server breakdown.
+         */
         server1:
           servers.server1 || {
             orders: 0,
@@ -1051,6 +1341,7 @@ exports.getDashboardSummary = async (req, res) => {
             providerCost: 0,
             profit: 0,
           },
+
         server2:
           servers.server2 || {
             orders: 0,
@@ -1066,12 +1357,18 @@ exports.getDashboardSummary = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error(
+      "Admin dashboard summary failed:",
+      error
+    );
+
     return res
       .status(
         error.status || 500
       )
       .json({
         success: false,
+
         message:
           error.message ||
           "Unable to load dashboard summary",

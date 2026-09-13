@@ -8,7 +8,7 @@ const mongoose =
 
 const app =
   require("./app");
-
+const socialRoutes = require("./routes/socialRoutes");
 const {
   validateEmailConfiguration,
 } =
@@ -36,7 +36,7 @@ const HOST =
 const isProduction =
   process.env.NODE_ENV ===
   "production";
-
+app.use("/api/social", socialRoutes);
 async function startServer() {
   const startedAt =
     Date.now();
