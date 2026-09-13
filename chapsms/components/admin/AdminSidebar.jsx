@@ -7,6 +7,7 @@ import {
   BadgeDollarSign,
   CreditCard,
   LayoutDashboard,
+  Package,
   ReceiptText,
   Settings,
   ShieldCheck,
@@ -48,6 +49,11 @@ const links = [
     icon: BadgeDollarSign,
   },
   {
+    href: "/admin/socials",
+    label: "Buy Socials",
+    icon: Package,
+  },
+  {
     href: "/admin/settings",
     label: "Settings",
     icon: Settings,
@@ -73,7 +79,6 @@ export default function AdminSidebar({
 
   const content = (
     <div className="flex min-h-full flex-col">
-      {/* Classic ChapsSmS Admin Console header */}
       <div className="sticky top-0 z-20 -mx-4 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 pb-5 pt-1 min-[375px]:-mx-5 min-[375px]:px-5">
         <Link
           href="/admin"
@@ -104,7 +109,6 @@ export default function AdminSidebar({
         </button>
       </div>
 
-      {/* Restore the original full admin navigation. */}
       <nav
         className="mt-5 space-y-1.5"
         aria-label="Admin navigation"

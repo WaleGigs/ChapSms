@@ -5,6 +5,7 @@ import {
   CreditCard,
   MessageSquareText,
   ReceiptText,
+  Server,
   TrendingUp,
   Users,
   WalletCards,
@@ -14,13 +15,98 @@ import AdminSummaryCard from "@/components/admin/AdminSummaryCard";
 import { useAdminSummary } from "@/hooks/useAdminPricing";
 
 function formatNaira(value) {
-  return `₦${Number(value || 0).toLocaleString("en-NG", {
-    maximumFractionDigits: 2,
-  })}`;
+  return `₦${Number(
+    value || 0
+  ).toLocaleString(
+    "en-NG",
+    {
+      maximumFractionDigits: 2,
+    }
+  )}`;
 }
 
 function formatCount(value) {
-  return Number(value || 0).toLocaleString("en-NG");
+  return Number(
+    value || 0
+  ).toLocaleString(
+    "en-NG"
+  );
+}
+
+function getProviderBalance(
+  summary,
+  server
+) {
+  const balances =
+    Array.isArray(
+      summary?.providerBalances
+    )
+      ? summary.providerBalances
+      : [];
+
+  return (
+    balances.find(
+      (item) =>
+        item?.server === server
+    ) || null
+  );
+}
+
+function formatProviderBalance(
+  provider
+) {
+  if (
+    !provider ||
+    provider.balance === null ||
+    provider.balance === undefined
+  ) {
+    return "—";
+  }
+
+  const value =
+    Number(
+      provider.balance
+    );
+
+  if (
+    !Number.isFinite(value)
+  ) {
+    return "—";
+  }
+
+  const currency =
+    String(
+      provider.currency || ""
+    )
+      .trim()
+      .toUpperCase();
+
+  if (currency === "USD") {
+    return `$${value.toLocaleString(
+      "en-US",
+      {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }
+    )}`;
+  }
+
+  if (currency === "NGN") {
+    return `₦${value.toLocaleString(
+      "en-NG",
+      {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }
+    )}`;
+  }
+
+  return `${currency || ""} ${value.toLocaleString(
+    "en-NG",
+    {
+      maximumFractionDigits: 2,
+    }
+  )}`.trim();
 }
 
 export default function AdminOverviewPage() {
@@ -29,6 +115,18 @@ export default function AdminOverviewPage() {
     loading,
     error,
   } = useAdminSummary();
+
+  const smsBower =
+    getProviderBalance(
+      summary,
+      "server1"
+    );
+
+  const benOtp =
+    getProviderBalance(
+      summary,
+      "server2"
+    );
 
   return (
     <div className="space-y-5">
@@ -40,11 +138,14 @@ export default function AdminOverviewPage() {
 
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
         <AdminSummaryCard
-          label="Revenue"
+          label="Total revenue"
           value={formatNaira(
             summary?.totalRevenue
           )}
-          icon={CircleDollarSign}
+          description="Customer selling price collected"
+          icon={
+            CircleDollarSign
+          }
           loading={loading}
         />
 
@@ -54,6 +155,7 @@ export default function AdminOverviewPage() {
             summary?.totalCost ??
               summary?.totalProviderCost
           )}
+          description="Actual provider cost"
           icon={CreditCard}
           loading={loading}
         />
@@ -63,6 +165,7 @@ export default function AdminOverviewPage() {
           value={formatNaira(
             summary?.totalProfit
           )}
+          description="Revenue minus provider cost"
           icon={TrendingUp}
           loading={loading}
         />
@@ -72,6 +175,7 @@ export default function AdminOverviewPage() {
           value={formatCount(
             summary?.totalOrders
           )}
+          description="All number order attempts"
           icon={ReceiptText}
           loading={loading}
         />
@@ -82,7 +186,19 @@ export default function AdminOverviewPage() {
             summary?.receivedOtps ??
               summary?.receivedOrders
           )}
-          icon={MessageSquareText}
+          description={
+            summary?.totalOrders
+              ? `${Number(
+                  summary?.otpSuccessRate ||
+                    0
+                ).toFixed(
+                  2
+                )}% success rate`
+              : "Successful OTP orders"
+          }
+          icon={
+            MessageSquareText
+          }
           loading={loading}
         />
 
@@ -96,11 +212,45 @@ export default function AdminOverviewPage() {
         />
 
         <AdminSummaryCard
-          label="User's balance"
+          label="Users' balance"
           value={formatNaira(
             summary?.usersBalance
           )}
           icon={WalletCards}
+          loading={loading}
+        />
+
+        <AdminSummaryCard
+          label="SMSBower balance"
+          value={
+            formatProviderBalance(
+              smsBower
+            )
+          }
+          description={
+            smsBower?.healthy
+              ? "Live provider balance"
+              : smsBower?.message ||
+                "Balance unavailable"
+          }
+          icon={Server}
+          loading={loading}
+        />
+
+        <AdminSummaryCard
+          label="BenOTP balance"
+          value={
+            formatProviderBalance(
+              benOtp
+            )
+          }
+          description={
+            benOtp?.healthy
+              ? "Live provider balance"
+              : benOtp?.message ||
+                "Balance unavailable"
+          }
+          icon={Server}
           loading={loading}
         />
       </div>
