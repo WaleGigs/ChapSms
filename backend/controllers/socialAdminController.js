@@ -12,6 +12,18 @@ const HouseStockItem = require(
   "../models/HouseStockItem"
 );
 
+const SocialOrder = require(
+  "../models/SocialOrder"
+);
+
+const SocialPricingRule = require(
+  "../models/SocialPricingRule"
+);
+
+const socialPricingService = require(
+  "../services/socialPricingService"
+);
+
 const PROVIDERS = new Set([
   "sameeha",
   "loggsplug",
@@ -1412,3 +1424,484 @@ exports.addHouseStock =
         });
     }
   };
+
+
+/* =========================================================
+   SOCIAL PRICING RULES
+========================================================= */
+
+function serializeSocialPricingRule(rule) {
+  if (!rule) return null;
+
+  return {
+    id: String(rule._id || rule.id || ""),
+    scope: rule.scope,
+    provider: rule.provider,
+    providerProductId: rule.providerProductId || "",
+    productName: rule.productName || "",
+    category: rule.category || "",
+    pricingEnabled: Boolean(rule.pricingEnabled),
+    pricingMode: rule.pricingMode || "markup",
+    markupPercent: Number(rule.markupPercent || 0),
+    fixedSellingPrice: Number(rule.fixedSellingPrice || 0),
+    minimumSellingPrice: Number(rule.minimumSellingPrice || 0),
+    note: rule.note || "",
+    logoUrl: rule.logoUrl || "",
+    updatedAt: rule.updatedAt || null,
+  };
+}
+
+exports.getSocialPricing = async (req, res) => {
+  try {
+    const rules = await SocialPricingRule.find({})
+      .sort({ provider: 1, scope: 1, category: 1, productName: 1 })
+      .lean();
+
+    const globals = {};
+    const productRules = [];
+
+    for (const rule of rules) {
+      if (rule.scope === "global") {
+        globals[rule.provider] = serializeSocialPricingRule(rule);
+      } else {
+        productRules.push(serializeSocialPricingRule(rule));
+      }
+    }
+
+    for (const provider of ["loggsplug", "sameeha"]) {
+      if (!globals[provider]) {
+        globals[provider] = {
+          id: "",
+          scope: "global",
+          provider,
+          providerProductId: "",
+          productName: "",
+          category: "",
+          pricingEnabled: true,
+          pricingMode: "markup",
+          markupPercent: Number(process.env.SOCIAL_MARKUP_PERCENT || 0),
+          fixedSellingPrice: 0,
+          minimumSellingPrice: Number(
+            process.env.SOCIAL_MINIMUM_SELLING_PRICE_NGN || 0
+          ),
+          note: "",
+          logoUrl: "",
+          updatedAt: null,
+        };
+      }
+    }
+
+    return res.json({
+      success: true,
+      globals,
+      productRules,
+    });
+  } catch (error) {
+    console.error("Load social pricing failed:", error);
+    return res.status(500).json({
+      success: false,
+      code: "SOCIAL_PRICING_LOAD_FAILED",
+      message: "Unable to load social pricing rules.",
+    });
+  }
+};
+
+exports.saveSocialGlobalPricing = async (req, res) => {
+  try {
+    const provider = normalizeProvider(req.body?.provider);
+    const markupPercent = positiveNumber(req.body?.markupPercent, {
+      field: "markup percentage",
+      allowZero: true,
+    });
+    const minimumSellingPrice = positiveNumber(
+      req.body?.minimumSellingPrice ?? 0,
+      { field: "minimum selling price", allowZero: true }
+    );
+
+    const rule = await SocialPricingRule.findOneAndUpdate(
+      { ruleKey: socialPricingService.globalRuleKey(provider) },
+      {
+        $set: {
+          scope: "global",
+          provider,
+          providerProductId: "",
+          pricingEnabled: true,
+          pricingMode: "markup",
+          markupPercent,
+          fixedSellingPrice: 0,
+          minimumSellingPrice,
+          updatedBy: req.user?._id || null,
+        },
+      },
+      {
+        upsert: true,
+        returnDocument: "after",
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      }
+    );
+
+    return res.json({
+      success: true,
+      rule: serializeSocialPricingRule(rule),
+      message: "Social markup saved.",
+    });
+  } catch (error) {
+    return res.status(error.status || 400).json({
+      success: false,
+      code: error.code || "SOCIAL_GLOBAL_PRICING_SAVE_FAILED",
+      message: error.message || "Unable to save social markup.",
+    });
+  }
+};
+
+exports.saveSocialProductRule = async (req, res) => {
+  try {
+    const provider = normalizeProvider(req.body?.provider);
+    const providerProductId = String(req.body?.providerProductId || "").trim();
+
+    if (!providerProductId) {
+      return res.status(400).json({
+        success: false,
+        code: "SOCIAL_PRODUCT_ID_REQUIRED",
+        message: "Choose a social product.",
+      });
+    }
+
+    const pricingMode =
+      String(req.body?.pricingMode || "markup").trim().toLowerCase() === "fixed"
+        ? "fixed"
+        : "markup";
+
+    const pricingEnabled = req.body?.pricingEnabled !== false;
+    const markupPercent = positiveNumber(req.body?.markupPercent ?? 0, {
+      field: "markup percentage",
+      allowZero: true,
+    });
+    const fixedSellingPrice = positiveNumber(
+      req.body?.fixedSellingPrice ?? 0,
+      { field: "selling price", allowZero: true }
+    );
+
+    if (pricingEnabled && pricingMode === "fixed" && fixedSellingPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        code: "SOCIAL_FIXED_PRICE_REQUIRED",
+        message: "Enter a fixed selling price greater than zero.",
+      });
+    }
+
+    const rule = await SocialPricingRule.findOneAndUpdate(
+      {
+        ruleKey: socialPricingService.productRuleKey(
+          provider,
+          providerProductId
+        ),
+      },
+      {
+        $set: {
+          scope: "product",
+          provider,
+          providerProductId,
+          productName: normalizeText(req.body?.productName),
+          category: normalizeText(req.body?.category),
+          pricingEnabled,
+          pricingMode,
+          markupPercent,
+          fixedSellingPrice,
+          note: String(req.body?.note || "").trim(),
+          logoUrl: String(req.body?.logoUrl || "").trim(),
+          updatedBy: req.user?._id || null,
+        },
+      },
+      {
+        upsert: true,
+        returnDocument: "after",
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      }
+    );
+
+    return res.json({
+      success: true,
+      rule: serializeSocialPricingRule(rule),
+      message: "Social product rule saved.",
+    });
+  } catch (error) {
+    return res.status(error.status || 400).json({
+      success: false,
+      code: error.code || "SOCIAL_PRODUCT_RULE_SAVE_FAILED",
+      message: error.message || "Unable to save social product rule.",
+    });
+  }
+};
+
+exports.deleteSocialProductRule = async (req, res) => {
+  try {
+    const provider = normalizeProvider(req.params?.provider);
+    const providerProductId = String(req.params?.providerProductId || "").trim();
+
+    await SocialPricingRule.deleteOne({
+      ruleKey: socialPricingService.productRuleKey(
+        provider,
+        providerProductId
+      ),
+    });
+
+    return res.json({
+      success: true,
+      message: "Product override removed. Global pricing now applies.",
+    });
+  } catch (error) {
+    return res.status(error.status || 400).json({
+      success: false,
+      code: error.code || "SOCIAL_PRODUCT_RULE_DELETE_FAILED",
+      message: error.message || "Unable to remove social product rule.",
+    });
+  }
+};
+
+/* =========================================================
+   SOCIAL PROVIDER BALANCES + DASHBOARD METRICS
+========================================================= */
+
+async function fetchJson(url, { headers = {}, timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json", ...headers },
+      signal: controller.signal,
+    });
+
+    const raw = await response.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { raw };
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data?.detail || data?.message || data?.error || `HTTP ${response.status}`
+      );
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getSameehaBalance() {
+  const baseUrl = String(
+    process.env.SAMEEHA_API_BASE_URL || "https://sameehasocialhub.com/api/v1"
+  ).replace(/\/+$/, "");
+  const apiKey = String(process.env.SAMEEHA_API_KEY || "").trim();
+
+  if (!apiKey) throw new Error("SAMEEHA_API_KEY is missing");
+
+  const data = await fetchJson(`${baseUrl}/balance`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+
+  const balance = Number(data?.balance ?? data?.data?.balance);
+  return {
+    provider: "sameeha",
+    name: "SameehaSocialHub Reseller",
+    healthy: Number.isFinite(balance),
+    balance: Number.isFinite(balance) ? balance : null,
+    currency: String(data?.currency || data?.data?.currency || "NGN").toUpperCase(),
+  };
+}
+
+async function getLoggsplugBalance() {
+  const baseUrl = String(
+    process.env.LOGGSPLUG_API_BASE_URL || "https://loggsplug.online/api/reseller"
+  ).replace(/\/+$/, "");
+  const apiKey = String(process.env.LOGGSPLUG_API_KEY || "").trim();
+
+  if (!apiKey) throw new Error("LOGGSPLUG_API_KEY is missing");
+
+  const data = await fetchJson(`${baseUrl}/me`, {
+    headers: { "X-Api-Key": apiKey, Authorization: `Bearer ${apiKey}` },
+  });
+
+  const balance = Number(data?.data?.balance ?? data?.balance);
+  return {
+    provider: "loggsplug",
+    name: "LoggsPlug Reseller",
+    healthy: Number.isFinite(balance),
+    balance: Number.isFinite(balance) ? balance : null,
+    currency: "NGN",
+  };
+}
+
+exports.getSocialAdminSummary = async (req, res) => {
+  try {
+    const [metrics, balanceResults] = await Promise.all([
+      SocialOrder.aggregate([
+        {
+          $facet: {
+            orderCount: [{ $count: "count" }],
+            completedFinancials: [
+              {
+                $match: {
+                  status: "completed",
+                  refunded: { $ne: true },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  revenue: { $sum: { $ifNull: ["$sellingPrice", 0] } },
+                  cost: { $sum: { $ifNull: ["$providerCostNgn", 0] } },
+                  profit: { $sum: { $ifNull: ["$profit", 0] } },
+                  completedOrders: { $sum: 1 },
+                },
+              },
+            ],
+            statuses: [
+              { $group: { _id: "$status", count: { $sum: 1 } } },
+            ],
+          },
+        },
+      ]),
+      Promise.allSettled([getLoggsplugBalance(), getSameehaBalance()]),
+    ]);
+
+    const result = metrics?.[0] || {};
+    const financials = result?.completedFinancials?.[0] || {};
+    const statuses = Object.fromEntries(
+      (result?.statuses || []).map((item) => [item._id, Number(item.count || 0)])
+    );
+
+    const balances = balanceResults.map((result, index) => {
+      const provider = index === 0 ? "loggsplug" : "sameeha";
+      const name =
+        provider === "loggsplug"
+          ? "LoggsPlug Reseller"
+          : "SameehaSocialHub Reseller";
+
+      if (result.status === "fulfilled") return result.value;
+
+      return {
+        provider,
+        name,
+        healthy: false,
+        balance: null,
+        currency: "NGN",
+        message: result.reason?.message || "Balance unavailable",
+      };
+    });
+
+    return res.json({
+      success: true,
+      summary: {
+        totalOrders: Number(result?.orderCount?.[0]?.count || 0),
+        completedOrders: Number(financials.completedOrders || 0),
+        totalRevenue: Number(financials.revenue || 0),
+        totalCost: Number(financials.cost || 0),
+        totalProfit: Number(financials.profit || 0),
+        processingOrders: statuses.processing || 0,
+        failedOrders: statuses.failed || 0,
+        refundedOrders: statuses.refunded || 0,
+        reviewRequiredOrders: statuses.review_required || 0,
+        providerBalances: balances,
+      },
+    });
+  } catch (error) {
+    console.error("Social admin summary failed:", error);
+    return res.status(500).json({
+      success: false,
+      code: "SOCIAL_ADMIN_SUMMARY_FAILED",
+      message: "Unable to load social dashboard metrics.",
+    });
+  }
+};
+
+/* =========================================================
+   ADMIN SOCIAL ORDERS
+========================================================= */
+
+exports.getAdminSocialOrders = async (req, res) => {
+  try {
+    const page = Math.max(1, Number.parseInt(req.query?.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query?.limit, 10) || 25));
+    const status = String(req.query?.status || "").trim().toLowerCase();
+    const search = String(req.query?.search || "").trim();
+
+    const filter = {};
+    if (status && status !== "all") filter.status = status;
+
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(escaped, "i");
+      filter.$or = [
+        { productName: regex },
+        { category: regex },
+        { providerOrderId: regex },
+      ];
+    }
+
+    const [orders, total] = await Promise.all([
+      SocialOrder.find(filter)
+        .populate("user", "email username firstName lastName")
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      SocialOrder.countDocuments(filter),
+    ]);
+
+    const rows = orders.map((order) => ({
+      id: String(order._id),
+      customer: order.user
+        ? {
+            id: String(order.user._id || ""),
+            email: order.user.email || "",
+            name:
+              order.user.username ||
+              [order.user.firstName, order.user.lastName].filter(Boolean).join(" ") ||
+              "",
+          }
+        : null,
+      productName: order.productName,
+      category: order.category,
+      quantity: Number(order.quantity || 0),
+      unitSellingPrice: Number(order.unitSellingPrice || 0),
+      sellingPrice: Number(order.sellingPrice || 0),
+      providerCostNgn: Number(order.providerCostNgn || 0),
+      profit: Number(order.profit || 0),
+      provider: order.provider,
+      providerOrderId: order.providerOrderId || "",
+      deliveredItems: Array.isArray(order.deliveredItems) ? order.deliveredItems : [],
+      status: order.status,
+      refunded: Boolean(order.refunded),
+      failureReason: order.failureReason || "",
+      createdAt: order.createdAt,
+      completedAt: order.completedAt,
+    }));
+
+    return res.json({
+      success: true,
+      orders: rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  } catch (error) {
+    console.error("Load admin social orders failed:", error);
+    return res.status(500).json({
+      success: false,
+      code: "ADMIN_SOCIAL_ORDERS_FAILED",
+      message: "Unable to load social orders.",
+    });
+  }
+};

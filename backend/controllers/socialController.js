@@ -20,6 +20,10 @@ const HouseStockItem = require(
   "../models/HouseStockItem"
 );
 
+const socialPricingService = require(
+  "../services/socialPricingService"
+);
+
 const PROVIDERS = {
   SAMEEHA: "sameeha",
   LOGGSPLUG: "loggsplug",
@@ -1092,6 +1096,9 @@ async function refreshCatalog() {
 
   const now = new Date();
 
+  const pricingIndex =
+    await socialPricingService.loadPricingIndex();
+
   const seenKeys = [];
 
   for (
@@ -1122,9 +1129,14 @@ async function refreshCatalog() {
     }
 
     const sellingPrice =
-      calculateSellingPrice(
-        primary.providerCostNgn
-      );
+      socialPricingService.resolveFromIndex({
+        provider: primary.provider,
+        providerProductId:
+          primary.providerProductId,
+        providerCostNgn:
+          primary.providerCostNgn,
+        index: pricingIndex,
+      }).sellingPrice;
 
     seenKeys.push(
       group.catalogKey
@@ -1302,6 +1314,12 @@ function sanitizeProduct(
         ) > 0
       ),
 
+    description:
+      String(data?.description || ""),
+
+    logoUrl:
+      String(data?.logoUrl || ""),
+
     lastSyncedAt:
       data?.lastSyncedAt,
   };
@@ -1431,7 +1449,8 @@ function getCachedProviderCandidates(
 
 function sanitizeProductForCustomer(
   product,
-  hiddenRuleKeys
+  hiddenRuleKeys,
+  pricingIndex
 ) {
   const sourceType =
     String(
@@ -1448,106 +1467,68 @@ function sanitizeProductForCustomer(
 
   if (
     sourceType === "house" ||
-    product?.provider ===
-      PROVIDERS.HOUSE
+    product?.provider === PROVIDERS.HOUSE
   ) {
-    if (
-      !product?.isActive
-    ) {
-      return null;
-    }
-
-    return sanitizeProduct(
-      product
-    );
+    if (!product?.isActive) return null;
+    return sanitizeProduct(product);
   }
 
-  const enabled =
-    getCachedProviderCandidates(
-      product
-    ).filter(
+  const enabled = getCachedProviderCandidates(product)
+    .filter(
       (candidate) =>
         !isProviderCandidateHidden(
           candidate,
           product?.category,
           hiddenRuleKeys
         )
-    );
+    )
+    .map((candidate) => {
+      const pricing = socialPricingService.resolveFromIndex({
+        provider: candidate.provider,
+        providerProductId: candidate.providerProductId,
+        providerCostNgn: candidate.providerCostNgn,
+        index: pricingIndex,
+      });
 
-  if (
-    enabled.length === 0
-  ) {
-    return null;
-  }
+      return {
+        ...candidate,
+        sellingUnitPrice: pricing.sellingPrice,
+        description: pricing.note,
+        logoUrl: pricing.logoUrl,
+      };
+    });
 
-  const inStock =
-    enabled
-      .filter(
-        (candidate) =>
-          candidate.inStock &&
-          candidate.stock > 0
-      )
-      .sort(
-        (a, b) =>
-          a.providerCostNgn -
-          b.providerCostNgn
-      );
+  if (enabled.length === 0) return null;
+
+  const inStock = enabled
+    .filter((candidate) => candidate.inStock && candidate.stock > 0)
+    .sort((a, b) => a.sellingUnitPrice - b.sellingUnitPrice);
 
   const selected =
     inStock[0] ||
-    [
-      ...enabled,
-    ].sort(
-      (a, b) =>
-        a.providerCostNgn -
-        b.providerCostNgn
+    [...enabled].sort(
+      (a, b) => a.sellingUnitPrice - b.sellingUnitPrice
     )[0];
 
-  if (!selected) {
-    return null;
-  }
+  if (!selected) return null;
 
   return {
-    id:
-      String(
-        product?._id ||
-          product?.id ||
-          ""
-      ),
-
-    name:
-      product?.name || "",
-
-    category:
-      product?.category ||
-      "Other",
-
-    price:
-      calculateSellingPrice(
-        selected.providerCostNgn
-      ),
-
-    stock:
-      Number(
-        selected.stock || 0
-      ),
-
-    inStock:
-      Boolean(
-        selected.inStock &&
-        Number(
-          selected.stock || 0
-        ) > 0
-      ),
-
-    lastSyncedAt:
-      product?.lastSyncedAt,
+    id: String(product?._id || product?.id || ""),
+    name: product?.name || "",
+    category: product?.category || "Other",
+    price: Number(selected.sellingUnitPrice || 0),
+    stock: Number(selected.stock || 0),
+    inStock: Boolean(selected.inStock && Number(selected.stock || 0) > 0),
+    description: selected.description || "",
+    logoUrl: selected.logoUrl || "",
+    lastSyncedAt: product?.lastSyncedAt,
   };
 }
 
 function buildCustomerCatalog(
   products,
-  hiddenRuleKeys
+  hiddenRuleKeys,
+  pricingIndex
 ) {
   return (
     Array.isArray(products)
@@ -1562,7 +1543,8 @@ function buildCustomerCatalog(
       (product) =>
         sanitizeProductForCustomer(
           product,
-          hiddenRuleKeys
+          hiddenRuleKeys,
+          pricingIndex
         )
     )
     .filter(Boolean);
@@ -2605,10 +2587,12 @@ async function getLiveCandidates(
     sameeha,
     loggsplug,
     hiddenRuleKeys,
+    pricingIndex,
   ] = await Promise.all([
     getSameehaProducts(),
     getLoggsplugProducts(),
     loadHiddenSocialRuleKeys(),
+    socialPricingService.loadPricingIndex(),
   ]);
 
   const liveProducts = [
@@ -2662,9 +2646,14 @@ async function getLiveCandidates(
         ...item,
 
         sellingUnitPrice:
-          calculateSellingPrice(
-            item.providerCostNgn
-          ),
+          socialPricingService.resolveFromIndex({
+            provider: item.provider,
+            providerProductId:
+              item.providerProductId,
+            providerCostNgn:
+              item.providerCostNgn,
+            index: pricingIndex,
+          }).sellingPrice,
       })
     )
     .sort(
@@ -2782,13 +2771,19 @@ exports.getCatalog =
         stale = false;
       }
 
-      const hiddenRuleKeys =
-        await loadHiddenSocialRuleKeys();
+      const [
+        hiddenRuleKeys,
+        pricingIndex,
+      ] = await Promise.all([
+        loadHiddenSocialRuleKeys(),
+        socialPricingService.loadPricingIndex(),
+      ]);
 
       const customerProducts =
         buildCustomerCatalog(
           products,
-          hiddenRuleKeys
+          hiddenRuleKeys,
+          pricingIndex
         );
 
       const categories =
