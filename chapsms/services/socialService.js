@@ -274,4 +274,64 @@ export const socialService = {
       }
     );
   },
+
+  /* =========================
+     ADMIN — SOCIAL PRICING
+  ========================= */
+
+  async getAdminPricing() {
+    return api("/social/admin/pricing");
+  },
+
+  async saveGlobalPricing({
+    provider,
+    markupPercent,
+    minimumSellingPrice = 0,
+  }) {
+    return api("/social/admin/pricing/global", {
+      method: "PUT",
+      body: JSON.stringify({
+        provider,
+        markupPercent: Number(markupPercent || 0),
+        minimumSellingPrice: Number(minimumSellingPrice || 0),
+      }),
+    });
+  },
+
+  async saveProductRule(payload) {
+    return api("/social/admin/pricing/product", {
+      method: "PUT",
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  async deleteProductRule(provider, providerProductId) {
+    const safeProvider = normalizeId(provider, "Provider is required");
+    const safeProductId = normalizeId(providerProductId, "Product is required");
+
+    return api(
+      `/social/admin/pricing/product/${encodeURIComponent(safeProvider)}/${encodeURIComponent(safeProductId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  async getAdminSummary() {
+    const response = await api("/social/admin/summary");
+    return response?.summary || null;
+  },
+
+  async getAdminOrders({
+    page = 1,
+    limit = 25,
+    status = "",
+    search = "",
+  } = {}) {
+    const query = new URLSearchParams();
+    query.set("page", String(page));
+    query.set("limit", String(limit));
+    if (status && status !== "all") query.set("status", status);
+    if (search) query.set("search", search);
+    return api(`/social/admin/orders?${query.toString()}`);
+  },
+
 };

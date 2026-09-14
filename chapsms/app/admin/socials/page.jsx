@@ -65,7 +65,7 @@ function VisibilityButton({
       disabled={
         disabled || loading
       }
-      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 min-[390px]:text-[11px] sm:min-h-9 sm:gap-2 sm:px-3 sm:text-xs ${
         visible
           ? "bg-green-50 text-green-700 ring-1 ring-green-200 hover:bg-green-100 dark:bg-green-950/30 dark:text-green-300 dark:ring-green-900"
           : "bg-red-50 text-red-600 ring-1 ring-red-200 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:ring-red-900"
@@ -77,9 +77,9 @@ function VisibilityButton({
           className="animate-spin"
         />
       ) : visible ? (
-        <Eye size={14} />
+        <Eye size={13} className="sm:h-3.5 sm:w-3.5" />
       ) : (
-        <EyeOff size={14} />
+        <EyeOff size={13} className="sm:h-3.5 sm:w-3.5" />
       )}
 
       {visible
@@ -803,18 +803,18 @@ export default function AdminSocialsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="min-w-0 space-y-4 overflow-x-hidden sm:space-y-6">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
+          <p className="text-[10px] font-black uppercase tracking-[0.14em] text-blue-600 min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.18em]">
             Buy Socials
           </p>
 
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-[var(--foreground)] sm:text-4xl">
+          <h1 className="mt-1.5 text-[23px] font-black leading-tight tracking-tight text-[var(--foreground)] min-[390px]:text-[25px] sm:mt-2 sm:text-4xl">
             Social catalog control
           </h1>
 
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)] sm:text-base">
+          <p className="mt-1.5 max-w-3xl text-[12px] leading-5 text-[var(--muted-foreground)] min-[390px]:text-[13px] sm:mt-2 sm:text-base sm:leading-6">
             Control Sameeha and LoggsPlug independently, or sell your own uploaded inventory as House Stock.
           </p>
         </div>
@@ -827,7 +827,7 @@ export default function AdminSocialsPage() {
           disabled={
             refreshing
           }
-          className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 text-sm font-black text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 text-[12px] font-black text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50 min-[390px]:text-[13px] sm:min-h-11 sm:w-auto sm:px-4 sm:text-sm"
         >
           <RefreshCw
             size={17}
@@ -842,7 +842,7 @@ export default function AdminSocialsPage() {
         </button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--card)] p-2">
+      <div className="flex min-w-0 gap-1.5 overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden min-[390px]:gap-2 sm:rounded-2xl sm:p-2">
         <button
           type="button"
           onClick={() =>
@@ -850,7 +850,7 @@ export default function AdminSocialsPage() {
               "catalog"
             )
           }
-          className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-black transition ${
+          className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[12px] font-black transition min-[390px]:text-[13px] sm:min-h-11 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-sm ${
             activeTab ===
             "catalog"
               ? "bg-blue-600 text-white"
@@ -868,7 +868,7 @@ export default function AdminSocialsPage() {
               "house"
             )
           }
-          className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-black transition ${
+          className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[12px] font-black transition min-[390px]:text-[13px] sm:min-h-11 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-sm ${
             activeTab ===
             "house"
               ? "bg-blue-600 text-white"
@@ -892,7 +892,7 @@ export default function AdminSocialsPage() {
       ) : activeTab ===
         "catalog" ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
             {[
               [
                 "Provider products",
@@ -913,13 +913,13 @@ export default function AdminSocialsPage() {
               ]) => (
                 <div
                   key={label}
-                  className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm"
+                  className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-sm min-[390px]:p-3.5 sm:rounded-2xl sm:p-5"
                 >
-                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                  <p className="break-words text-[8px] font-bold uppercase leading-3 tracking-[0.08em] text-[var(--muted-foreground)] min-[390px]:text-[9px] sm:text-xs sm:leading-normal sm:tracking-[0.14em]">
                     {label}
                   </p>
 
-                  <p className="mt-2 text-3xl font-black text-[var(--foreground)]">
+                  <p className="mt-1.5 text-[20px] font-black leading-none text-[var(--foreground)] min-[390px]:text-[22px] sm:mt-2 sm:text-3xl">
                     {Number(
                       value || 0
                     ).toLocaleString()}
@@ -929,18 +929,18 @@ export default function AdminSocialsPage() {
             )}
           </div>
 
-          <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6">
-            <div className="mb-5">
-              <h2 className="text-xl font-black text-[var(--foreground)]">
+          <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6">
+            <div className="mb-4 sm:mb-5">
+              <h2 className="text-[17px] font-black leading-tight text-[var(--foreground)] min-[390px]:text-[18px] sm:text-xl">
                 Category visibility
               </h2>
 
-              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+              <p className="mt-1 text-[11px] leading-[18px] text-[var(--muted-foreground)] min-[390px]:text-[12px] sm:text-sm sm:leading-normal">
                 A category switch affects only that provider. Hiding a LoggsPlug category does not hide the Sameeha category.
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid min-w-0 gap-2.5 sm:grid-cols-2 sm:gap-3 xl:grid-cols-3">
               {catalog.categories.map(
                 (category) => {
                   const key =
@@ -951,14 +951,14 @@ export default function AdminSocialsPage() {
                       key={
                         category.id
                       }
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4"
+                      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 min-[390px]:gap-3 sm:rounded-2xl sm:p-4"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-[var(--foreground)]">
+                        <p className="break-words text-[12px] font-black leading-4 text-[var(--foreground)] min-[390px]:text-[13px] sm:text-sm">
                           {category.category}
                         </p>
 
-                        <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                        <p className="mt-1 text-[10px] leading-4 text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs">
                           {providerLabel(
                             category.provider
                           )}{" "}
@@ -996,17 +996,17 @@ export default function AdminSocialsPage() {
             </div>
           </section>
 
-          <section className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
-            <div className="border-b border-[var(--border)] p-5 sm:p-6">
-              <h2 className="text-xl font-black text-[var(--foreground)]">
+          <section className="min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-sm sm:rounded-3xl">
+            <div className="border-b border-[var(--border)] p-4 sm:p-6">
+              <h2 className="text-[17px] font-black leading-tight text-[var(--foreground)] min-[390px]:text-[18px] sm:text-xl">
                 Product visibility
               </h2>
 
-              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+              <p className="mt-1 text-[11px] leading-[18px] text-[var(--muted-foreground)] min-[390px]:text-[12px] sm:text-sm sm:leading-normal">
                 Each provider product has its own switch. This is where you can hide LoggsPlug TextNow and keep Sameeha TextNow available.
               </p>
 
-              <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="mt-4 grid min-w-0 gap-2.5 min-[390px]:gap-3 md:mt-5 md:grid-cols-3">
                 <div className="relative md:col-span-1">
                   <Search
                     size={17}
@@ -1027,7 +1027,7 @@ export default function AdminSocialsPage() {
                       )
                     }
                     placeholder="Search product..."
-                    className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] pl-10 pr-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                    className="h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] pl-9 pr-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                   />
                 </div>
 
@@ -1044,7 +1044,7 @@ export default function AdminSocialsPage() {
                         .value
                     )
                   }
-                  className="h-11 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="h-10 min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                 >
                   <option value="all">
                     All providers
@@ -1070,7 +1070,7 @@ export default function AdminSocialsPage() {
                         .value
                     )
                   }
-                  className="h-11 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="h-10 min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                 >
                   <option value="all">
                     All categories
@@ -1096,12 +1096,12 @@ export default function AdminSocialsPage() {
 
             {filteredProducts.length ===
             0 ? (
-              <div className="p-10 text-center text-sm font-semibold text-[var(--muted-foreground)]">
+              <div className="p-6 text-center text-[12px] font-semibold text-[var(--muted-foreground)] min-[390px]:text-[13px] sm:p-10 sm:text-sm">
                 No products match your filters.
               </div>
             ) : (
               <>
-                <div className="grid gap-3 p-4 md:hidden">
+                <div className="grid min-w-0 gap-2.5 p-3 md:hidden min-[390px]:p-4">
                   {filteredProducts.map(
                     (product) => {
                       const key =
@@ -1112,11 +1112,11 @@ export default function AdminSocialsPage() {
                           key={
                             product.id
                           }
-                          className="rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4"
+                          className="min-w-0 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 min-[390px]:p-3.5 sm:rounded-2xl sm:p-4"
                         >
-                          <div className="flex items-start justify-between gap-3">
+                          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 min-[390px]:gap-3">
                             <div className="min-w-0">
-                              <p className="text-[10px] font-black uppercase tracking-[0.14em] text-blue-600">
+                              <p className="break-words text-[9px] font-black uppercase leading-3 tracking-[0.1em] text-blue-600 min-[390px]:text-[10px] sm:tracking-[0.14em]">
                                 {providerLabel(
                                   product.provider
                                 )}{" "}
@@ -1124,11 +1124,11 @@ export default function AdminSocialsPage() {
                                 {product.category}
                               </p>
 
-                              <h3 className="mt-1 text-sm font-black text-[var(--foreground)]">
+                              <h3 className="mt-1 break-words text-[12px] font-black leading-4 text-[var(--foreground)] min-[390px]:text-[13px] sm:text-sm">
                                 {product.name}
                               </h3>
 
-                              <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                              <p className="mt-1.5 text-[10px] leading-4 text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:mt-2 sm:text-xs">
                                 Cost{" "}
                                 {formatNaira(
                                   product.providerCostNgn
@@ -1166,7 +1166,7 @@ export default function AdminSocialsPage() {
                           </div>
 
                           {product.hiddenByCategory && (
-                            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                            <p className="mt-2.5 rounded-lg bg-amber-50 px-2.5 py-2 text-[10px] font-bold leading-4 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300 min-[390px]:text-[11px] sm:mt-3 sm:px-3 sm:text-xs">
                               Hidden by its category switch.
                             </p>
                           )}
@@ -1179,7 +1179,7 @@ export default function AdminSocialsPage() {
                 <div className="hidden overflow-x-auto md:block">
                   <table className="w-full min-w-[900px] text-left">
                     <thead className="bg-[var(--muted)]">
-                      <tr className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                      <tr className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                         <th className="px-5 py-4">
                           Product
                         </th>
@@ -1215,7 +1215,7 @@ export default function AdminSocialsPage() {
                                   {product.name}
                                 </p>
 
-                                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                                <p className="mt-1 text-[10px] leading-4 text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs">
                                   {product.category}{" "}
                                   • ID{" "}
                                   {product.providerProductId}
@@ -1290,7 +1290,7 @@ export default function AdminSocialsPage() {
         </>
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
             {[
               [
                 "House products",
@@ -1311,13 +1311,13 @@ export default function AdminSocialsPage() {
               ]) => (
                 <div
                   key={label}
-                  className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm"
+                  className="min-w-0 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-sm min-[390px]:p-3.5 sm:rounded-2xl sm:p-5"
                 >
-                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                  <p className="break-words text-[8px] font-bold uppercase leading-3 tracking-[0.08em] text-[var(--muted-foreground)] min-[390px]:text-[9px] sm:text-xs sm:leading-normal sm:tracking-[0.14em]">
                     {label}
                   </p>
 
-                  <p className="mt-2 text-3xl font-black text-[var(--foreground)]">
+                  <p className="mt-1.5 text-[20px] font-black leading-none text-[var(--foreground)] min-[390px]:text-[22px] sm:mt-2 sm:text-3xl">
                     {Number(
                       value || 0
                     ).toLocaleString()}
@@ -1331,29 +1331,29 @@ export default function AdminSocialsPage() {
             onSubmit={
               createHouseProduct
             }
-            className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6"
+            className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6"
           >
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300">
+            <div className="flex min-w-0 items-start gap-2.5 min-[390px]:gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300 min-[390px]:h-10 min-[390px]:w-10 sm:h-11 sm:w-11 sm:rounded-2xl">
                 <PackagePlus
                   size={21}
                 />
               </div>
 
               <div>
-                <h2 className="text-xl font-black text-[var(--foreground)]">
+                <h2 className="text-[17px] font-black leading-tight text-[var(--foreground)] min-[390px]:text-[18px] sm:text-xl">
                   Create House Stock product
                 </h2>
 
-                <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+                <p className="mt-1 text-[11px] leading-[18px] text-[var(--muted-foreground)] min-[390px]:text-[12px] sm:text-sm sm:leading-normal">
                   Use this when you buy accounts/logs elsewhere in bulk and want ChapSms to deliver them automatically.
                 </p>
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div className="mt-4 grid min-w-0 gap-3 min-[390px]:mt-5 md:mt-6 md:grid-cols-2 md:gap-4">
               <div>
-                <label className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                <label className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                   Product name
                 </label>
 
@@ -1371,12 +1371,12 @@ export default function AdminSocialsPage() {
                     )
                   }
                   placeholder="e.g. TextNow aged account"
-                  className="mt-2 h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="mt-1.5 h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:mt-2 sm:h-11 sm:rounded-xl sm:text-sm"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                <label className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                   Category
                 </label>
 
@@ -1394,12 +1394,12 @@ export default function AdminSocialsPage() {
                     )
                   }
                   placeholder="e.g. TextNow"
-                  className="mt-2 h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="mt-1.5 h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:mt-2 sm:h-11 sm:rounded-xl sm:text-sm"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                <label className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                   Your cost per item
                 </label>
 
@@ -1420,12 +1420,12 @@ export default function AdminSocialsPage() {
                     )
                   }
                   placeholder="0"
-                  className="mt-2 h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="mt-1.5 h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:mt-2 sm:h-11 sm:rounded-xl sm:text-sm"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                <label className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                   Customer selling price
                 </label>
 
@@ -1446,17 +1446,17 @@ export default function AdminSocialsPage() {
                     )
                   }
                   placeholder="0"
-                  className="mt-2 h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="mt-1.5 h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:mt-2 sm:h-11 sm:rounded-xl sm:text-sm"
                 />
               </div>
 
               <div className="md:col-span-2">
                 <div className="flex items-center justify-between gap-3">
-                  <label className="text-xs font-black uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                  <label className="text-[10px] font-black uppercase tracking-[0.1em] text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.12em]">
                     Initial stock
                   </label>
 
-                  <span className="text-xs font-bold text-[var(--muted-foreground)]">
+                  <span className="text-[10px] font-bold text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs">
                     {splitStockCount(
                       createForm.stockText
                     )}{" "}
@@ -1479,7 +1479,7 @@ export default function AdminSocialsPage() {
                   }
                   rows={8}
                   placeholder={"Paste one deliverable account/log per line.\nExample:\nemail@example.com|password|extra details\nanother@example.com|password|extra details"}
-                  className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 font-mono text-xs font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                  className="mt-2 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3 font-mono text-[11px] font-semibold leading-5 text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[12px] sm:rounded-xl sm:text-xs"
                 />
               </div>
             </div>
@@ -1489,7 +1489,7 @@ export default function AdminSocialsPage() {
               disabled={
                 creating
               }
-              className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-50"
+              className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-[12px] font-black text-white transition hover:bg-blue-700 disabled:opacity-50 min-[390px]:text-[13px] sm:mt-5 sm:min-h-11 sm:w-auto sm:px-5 sm:text-sm"
             >
               {creating ? (
                 <LoaderCircle
@@ -1508,29 +1508,29 @@ export default function AdminSocialsPage() {
 
           <section>
             <div className="mb-4">
-              <h2 className="text-xl font-black text-[var(--foreground)]">
+              <h2 className="text-[17px] font-black leading-tight text-[var(--foreground)] min-[390px]:text-[18px] sm:text-xl">
                 House Stock inventory
               </h2>
 
-              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+              <p className="mt-1 text-[11px] leading-[18px] text-[var(--muted-foreground)] min-[390px]:text-[12px] sm:text-sm sm:leading-normal">
                 Stock lines are private. Customers only receive the exact items allocated to their completed order.
               </p>
             </div>
 
             {houseProducts.length ===
             0 ? (
-              <div className="rounded-3xl border border-dashed border-[var(--border)] bg-[var(--card)] p-10 text-center">
+              <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--card)] p-6 text-center sm:rounded-3xl sm:p-10">
                 <Boxes
                   size={32}
                   className="mx-auto text-[var(--muted-foreground)]"
                 />
 
-                <p className="mt-3 font-black text-[var(--foreground)]">
+                <p className="mt-3 text-[13px] font-black text-[var(--foreground)] min-[390px]:text-sm sm:text-base">
                   No House Stock products yet
                 </p>
               </div>
             ) : (
-              <div className="grid gap-5 xl:grid-cols-2">
+              <div className="grid min-w-0 gap-3.5 min-[390px]:gap-4 sm:gap-5 xl:grid-cols-2">
                 {houseProducts.map(
                   (product) => {
                     const form =
@@ -1570,19 +1570,19 @@ export default function AdminSocialsPage() {
                         key={
                           product.id
                         }
-                        className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6"
+                        className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:rounded-3xl sm:p-6"
                       >
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                           <div>
                             <p className="text-[10px] font-black uppercase tracking-[0.15em] text-blue-600">
                               House Stock
                             </p>
 
-                            <h3 className="mt-1 text-lg font-black text-[var(--foreground)]">
+                            <h3 className="mt-1 break-words text-[15px] font-black leading-5 text-[var(--foreground)] min-[390px]:text-base sm:text-lg">
                               {product.name}
                             </h3>
 
-                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                            <p className="mt-1 text-[10px] leading-4 text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs">
                               {product.category}
                             </p>
                           </div>
@@ -1608,13 +1608,13 @@ export default function AdminSocialsPage() {
                           />
                         </div>
 
-                        <div className="mt-5 grid grid-cols-3 gap-3">
-                          <div className="rounded-xl bg-[var(--muted)] p-3">
+                        <div className="mt-4 grid grid-cols-3 gap-2 min-[390px]:gap-2.5 sm:mt-5 sm:gap-3">
+                          <div className="min-w-0 rounded-lg bg-[var(--muted)] p-2 min-[390px]:p-2.5 sm:rounded-xl sm:p-3">
                             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
                               Available
                             </p>
 
-                            <p className="mt-1 text-xl font-black text-green-600">
+                            <p className="mt-1 text-[17px] font-black leading-none text-green-600 min-[390px]:text-[18px] sm:text-xl">
                               {Number(
                                 product.stock ||
                                   0
@@ -1622,12 +1622,12 @@ export default function AdminSocialsPage() {
                             </p>
                           </div>
 
-                          <div className="rounded-xl bg-[var(--muted)] p-3">
+                          <div className="min-w-0 rounded-lg bg-[var(--muted)] p-2 min-[390px]:p-2.5 sm:rounded-xl sm:p-3">
                             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
                               Sold
                             </p>
 
-                            <p className="mt-1 text-xl font-black text-[var(--foreground)]">
+                            <p className="mt-1 text-[17px] font-black leading-none text-[var(--foreground)] min-[390px]:text-[18px] sm:text-xl">
                               {Number(
                                 product.sold ||
                                   0
@@ -1635,12 +1635,12 @@ export default function AdminSocialsPage() {
                             </p>
                           </div>
 
-                          <div className="rounded-xl bg-[var(--muted)] p-3">
+                          <div className="min-w-0 rounded-lg bg-[var(--muted)] p-2 min-[390px]:p-2.5 sm:rounded-xl sm:p-3">
                             <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
                               Reserved
                             </p>
 
-                            <p className="mt-1 text-xl font-black text-amber-600">
+                            <p className="mt-1 text-[17px] font-black leading-none text-amber-600 min-[390px]:text-[18px] sm:text-xl">
                               {Number(
                                 product.reserved ||
                                   0
@@ -1649,7 +1649,7 @@ export default function AdminSocialsPage() {
                           </div>
                         </div>
 
-                        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        <div className="mt-4 grid min-w-0 gap-2.5 min-[390px]:gap-3 sm:mt-5 sm:grid-cols-2">
                           <input
                             value={
                               form.name
@@ -1665,7 +1665,7 @@ export default function AdminSocialsPage() {
                               )
                             }
                             placeholder="Product name"
-                            className="h-10 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                            className="h-10 min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                           />
 
                           <input
@@ -1683,7 +1683,7 @@ export default function AdminSocialsPage() {
                               )
                             }
                             placeholder="Category"
-                            className="h-10 rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                            className="h-10 min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                           />
 
                           <div>
@@ -1708,7 +1708,7 @@ export default function AdminSocialsPage() {
                                     .value
                                 )
                               }
-                              className="h-10 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                              className="h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                             />
                           </div>
 
@@ -1734,12 +1734,12 @@ export default function AdminSocialsPage() {
                                     .value
                                 )
                               }
-                              className="h-10 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                              className="h-10 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 text-[12px] font-semibold text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[13px] sm:rounded-xl sm:text-sm"
                             />
                           </div>
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between rounded-xl bg-[var(--muted)] px-3 py-2 text-xs">
+                        <div className="mt-3 flex min-w-0 items-center justify-between gap-2 rounded-lg bg-[var(--muted)] px-2.5 py-2 text-[10px] min-[390px]:text-[11px] sm:rounded-xl sm:px-3 sm:text-xs">
                           <span className="font-semibold text-[var(--muted-foreground)]">
                             Current margin
                           </span>
@@ -1770,7 +1770,7 @@ export default function AdminSocialsPage() {
                               houseBusy
                             )
                           }
-                          className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-xs font-black text-white transition hover:bg-blue-700 disabled:opacity-50"
+                          className="mt-3 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 text-[10px] font-black text-white transition hover:bg-blue-700 disabled:opacity-50 min-[390px]:text-[11px] sm:mt-4 sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-xs"
                         >
                           {saving && (
                             <LoaderCircle
@@ -1781,13 +1781,13 @@ export default function AdminSocialsPage() {
                           Save details
                         </button>
 
-                        <div className="mt-5 border-t border-[var(--border)] pt-5">
+                        <div className="mt-4 border-t border-[var(--border)] pt-4 sm:mt-5 sm:pt-5">
                           <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-black text-[var(--foreground)]">
+                            <p className="text-[12px] font-black text-[var(--foreground)] min-[390px]:text-[13px] sm:text-sm">
                               Add more stock
                             </p>
 
-                            <p className="text-xs font-bold text-[var(--muted-foreground)]">
+                            <p className="text-[10px] font-bold text-[var(--muted-foreground)] min-[390px]:text-[11px] sm:text-xs">
                               {splitStockCount(
                                 restockText[
                                   product.id
@@ -1820,7 +1820,7 @@ export default function AdminSocialsPage() {
                             }
                             rows={5}
                             placeholder="Paste one new account/log per line..."
-                            className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] p-3 font-mono text-xs font-semibold text-[var(--foreground)] outline-none focus:border-blue-500"
+                            className="mt-2 w-full min-w-0 rounded-lg border border-[var(--border)] bg-[var(--background)] p-3 font-mono text-[11px] font-semibold leading-5 text-[var(--foreground)] outline-none focus:border-blue-500 min-[390px]:text-[12px] sm:rounded-xl sm:text-xs"
                           />
 
                           <button
