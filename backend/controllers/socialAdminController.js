@@ -1740,16 +1740,58 @@ async function getLoggsplugBalance() {
   };
 }
 
+function getLagosDayStart(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => ["year", "month", "day"].includes(part.type))
+      .map((part) => [part.type, part.value])
+  );
+
+  return new Date(
+    `${values.year}-${values.month}-${values.day}T00:00:00+01:00`
+  );
+}
+
 exports.getSocialAdminSummary = async (req, res) => {
   try {
+    const todayStart = getLagosDayStart();
     const [metrics, balanceResults] = await Promise.all([
       SocialOrder.aggregate([
         {
           $facet: {
             orderCount: [{ $count: "count" }],
+            todayOrderCount: [
+              { $match: { createdAt: { $gte: todayStart } } },
+              { $count: "count" },
+            ],
             completedFinancials: [
               {
                 $match: {
+                  status: "completed",
+                  refunded: { $ne: true },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  revenue: { $sum: { $ifNull: ["$sellingPrice", 0] } },
+                  cost: { $sum: { $ifNull: ["$providerCostNgn", 0] } },
+                  profit: { $sum: { $ifNull: ["$profit", 0] } },
+                  completedOrders: { $sum: 1 },
+                },
+              },
+            ],
+            todayCompletedFinancials: [
+              {
+                $match: {
+                  createdAt: { $gte: todayStart },
                   status: "completed",
                   refunded: { $ne: true },
                 },
@@ -1775,6 +1817,7 @@ exports.getSocialAdminSummary = async (req, res) => {
 
     const result = metrics?.[0] || {};
     const financials = result?.completedFinancials?.[0] || {};
+    const todayFinancials = result?.todayCompletedFinancials?.[0] || {};
     const statuses = Object.fromEntries(
       (result?.statuses || []).map((item) => [item._id, Number(item.count || 0)])
     );
@@ -1806,6 +1849,10 @@ exports.getSocialAdminSummary = async (req, res) => {
         totalRevenue: Number(financials.revenue || 0),
         totalCost: Number(financials.cost || 0),
         totalProfit: Number(financials.profit || 0),
+        todayOrders: Number(result?.todayOrderCount?.[0]?.count || 0),
+        todayRevenue: Number(todayFinancials.revenue || 0),
+        todayCost: Number(todayFinancials.cost || 0),
+        todayProfit: Number(todayFinancials.profit || 0),
         processingOrders: statuses.processing || 0,
         failedOrders: statuses.failed || 0,
         refundedOrders: statuses.refunded || 0,

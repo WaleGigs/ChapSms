@@ -95,6 +95,25 @@ function getEffectiveDashboardDateRange(query = {}) {
     : null;
 }
 
+function getLagosDayStart(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => ["year", "month", "day"].includes(part.type))
+      .map((part) => [part.type, part.value])
+  );
+
+  return new Date(
+    `${values.year}-${values.month}-${values.day}T00:00:00+01:00`
+  );
+}
+
 
 function normalizeLookupKey(value) {
   return String(value ?? "")
@@ -757,6 +776,7 @@ exports.previewPricing = async (req, res) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     const match = {};
+    const todayStart = getLagosDayStart();
 
     const effectiveDateRange =
       getEffectiveDashboardDateRange(
@@ -819,6 +839,17 @@ exports.getDashboardSummary = async (req, res) => {
               },
             ],
 
+            todayOrderCount: [
+              {
+                $match: {
+                  createdAt: { $gte: todayStart },
+                },
+              },
+              {
+                $count: "count",
+              },
+            ],
+
             /*
              * MONEY METRICS
              *
@@ -863,6 +894,29 @@ exports.getDashboardSummary = async (req, res) => {
                         0,
                       ],
                     },
+                  },
+                },
+              },
+            ],
+
+            todayFinancialTotals: [
+              {
+                $match: {
+                  createdAt: { $gte: todayStart },
+                  refunded: { $ne: true },
+                },
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalRevenue: {
+                    $sum: { $ifNull: ["$sellingPrice", "$price"] },
+                  },
+                  totalProviderCost: {
+                    $sum: { $ifNull: ["$providerCostNgn", 0] },
+                  },
+                  totalProfit: {
+                    $sum: { $ifNull: ["$profit", 0] },
                   },
                 },
               },
@@ -915,6 +969,21 @@ exports.getDashboardSummary = async (req, res) => {
               {
                 $count: "count",
               },
+            ],
+
+            todayReceivedOtps: [
+              {
+                $match: {
+                  createdAt: { $gte: todayStart },
+                  $or: [
+                    {
+                      otpReceivedAt: { $exists: true, $ne: null },
+                    },
+                    { status: "received" },
+                  ],
+                },
+              },
+              { $count: "count" },
             ],
 
             /*
@@ -1055,6 +1124,13 @@ exports.getDashboardSummary = async (req, res) => {
         totalProfit: 0,
       };
 
+    const todayFinancialTotals =
+      result?.todayFinancialTotals?.[0] || {
+        totalRevenue: 0,
+        totalProviderCost: 0,
+        totalProfit: 0,
+      };
+
     /*
      * IMPORTANT:
      * This is now EVERY order matching the
@@ -1064,6 +1140,12 @@ exports.getDashboardSummary = async (req, res) => {
     const totalOrders =
       Number(
         result?.orderCount?.[0]
+          ?.count || 0
+      );
+
+    const todayOrders =
+      Number(
+        result?.todayOrderCount?.[0]
           ?.count || 0
       );
 
@@ -1114,6 +1196,12 @@ exports.getDashboardSummary = async (req, res) => {
     const receivedOtps =
       Number(
         result?.receivedOtps?.[0]
+          ?.count || 0
+      );
+
+    const todayReceivedOtps =
+      Number(
+        result?.todayReceivedOtps?.[0]
           ?.count || 0
       );
 
@@ -1291,11 +1379,25 @@ exports.getDashboardSummary = async (req, res) => {
               .totalProfit || 0
           ),
 
+        todayRevenue:
+          Number(todayFinancialTotals.totalRevenue || 0),
+
+        todayProviderCost:
+          Number(todayFinancialTotals.totalProviderCost || 0),
+
+        todayCost:
+          Number(todayFinancialTotals.totalProviderCost || 0),
+
+        todayProfit:
+          Number(todayFinancialTotals.totalProfit || 0),
+
         /*
          * Order metrics.
          */
         totalOrders,
+        todayOrders,
         receivedOtps,
+        todayReceivedOtps,
         otpSuccessRate,
 
         waitingOrders:
