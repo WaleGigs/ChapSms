@@ -2,6 +2,7 @@ import Navbar from "@/components/public/Navbar";
 import Hero from "@/components/public/Hero";
 import Stats from "@/components/home/Stats";
 import PopularServices from "@/components/home/PopularServices";
+import AccountsAndVpns from "@/components/home/AccountsAndVpns";
 import SupportedCountries from "@/components/home/SupportedCountries";
 import AppPurpose from "@/components/home/AppPurpose";
 import ApiPreview from "@/components/home/ApiPreview";
@@ -21,6 +22,7 @@ export default function Home() {
       <Hero />
       <Stats />
       <PopularServices />
+      <AccountsAndVpns />
       <SupportedCountries />
       <AppPurpose />
       <ApiPreview />

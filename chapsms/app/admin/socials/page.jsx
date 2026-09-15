@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import {
   useCallback,
   useEffect,
@@ -8,6 +10,7 @@ import {
 } from "react";
 
 import {
+  BadgeDollarSign,
   Boxes,
   Eye,
   EyeOff,
@@ -242,7 +245,7 @@ export default function AdminSocialsPage() {
           if (!silent) {
             toast.error(
               error?.message ||
-                "Unable to load Buy Socials admin controls"
+                "Unable to load Account & VPN admin controls"
             );
           }
         } finally {
@@ -807,11 +810,11 @@ export default function AdminSocialsPage() {
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <p className="text-[10px] font-black uppercase tracking-[0.14em] text-blue-600 min-[390px]:text-[11px] sm:text-xs sm:tracking-[0.18em]">
-            Buy Socials
+            Accounts & VPNs
           </p>
 
           <h1 className="mt-1.5 text-[23px] font-black leading-tight tracking-tight text-[var(--foreground)] min-[390px]:text-[25px] sm:mt-2 sm:text-4xl">
-            Social catalog control
+            Account & VPN catalog control
           </h1>
 
           <p className="mt-1.5 max-w-3xl text-[12px] leading-5 text-[var(--muted-foreground)] min-[390px]:text-[13px] sm:mt-2 sm:text-base sm:leading-6">
@@ -819,27 +822,28 @@ export default function AdminSocialsPage() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={
-            refreshProviders
-          }
-          disabled={
-            refreshing
-          }
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 text-[12px] font-black text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50 min-[390px]:text-[13px] sm:min-h-11 sm:w-auto sm:px-4 sm:text-sm"
-        >
-          <RefreshCw
-            size={17}
-            className={
-              refreshing
-                ? "animate-spin"
-                : ""
-            }
-          />
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
+          <Link
+            href="/admin/pricing?section=socials"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 text-[11px] font-black text-white transition hover:bg-blue-700 min-[390px]:text-[12px] sm:min-h-11 sm:px-4 sm:text-sm"
+          >
+            <BadgeDollarSign size={16} />
+            Pricing
+          </Link>
 
-          Refresh providers
-        </button>
+          <button
+            type="button"
+            onClick={refreshProviders}
+            disabled={refreshing}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 text-[11px] font-black text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50 min-[390px]:text-[12px] sm:min-h-11 sm:px-4 sm:text-sm"
+          >
+            <RefreshCw
+              size={17}
+              className={refreshing ? "animate-spin" : ""}
+            />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="flex min-w-0 gap-1.5 overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden min-[390px]:gap-2 sm:rounded-2xl sm:p-2">

@@ -2,7 +2,8 @@ import Link from "next/link";
 
 const footerLinks = {
   Product: [
-    { href: "#services", label: "Services" },
+    { href: "#services", label: "Buy Numbers" },
+    { href: "#accounts-vpns", label: "Accounts & VPNs" },
     { href: "#countries", label: "Countries" },
     { href: "#api", label: "Developer API" },
     { href: "/signup", label: "Create Account" },
@@ -26,13 +27,16 @@ export default function Footer() {
     <footer className="max-w-full overflow-x-clip border-t border-[var(--border)] bg-[var(--background)] px-4 py-10 min-[390px]:px-5 sm:px-6 sm:py-14">
       <div className="mx-auto grid w-full max-w-7xl min-w-0 gap-8 sm:gap-10 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
         <div className="min-w-0">
-          <Link href="/" className="text-xl font-black text-[var(--foreground)] sm:text-2xl">
+          <Link
+            href="/"
+            className="text-xl font-black text-[var(--foreground)] sm:text-2xl"
+          >
             Chaps<span className="text-blue-600">SmS</span>
           </Link>
 
           <p className="mt-3 max-w-sm text-sm leading-6 text-[var(--muted-foreground)] sm:mt-4 sm:leading-7">
-            A modern SMS verification platform for virtual numbers, OTP delivery,
-            wallet management, and developer API access.
+            One platform for international virtual numbers, OTP delivery,
+            accounts, VPN products, digital tools, wallet management and API access.
           </p>
 
           <div className="mt-5 space-y-2 text-sm text-[var(--muted-foreground)] sm:mt-6">
@@ -54,7 +58,10 @@ export default function Footer() {
         </div>
 
         {Object.entries(footerLinks).map(([title, links]) => (
-          <div key={title} className="min-w-0">
+          <div
+            key={title}
+            className="min-w-0"
+          >
             <h3 className="text-sm font-black text-[var(--foreground)] sm:text-base">
               {title}
             </h3>

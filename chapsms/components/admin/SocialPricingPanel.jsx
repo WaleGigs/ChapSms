@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { LoaderCircle, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Edit3, LoaderCircle, RefreshCw, Save, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { socialService } from "@/services/socialService";
@@ -55,7 +55,7 @@ export default function SocialPricingPanel() {
           : [],
       });
     } catch (error) {
-      toast.error(error?.message || "Unable to load social pricing");
+      toast.error(error?.message || "Unable to load account & VPN pricing");
     } finally {
       setLoading(false);
     }
@@ -168,7 +168,7 @@ export default function SocialPricingPanel() {
         markupPercent: Number(globalMarkup || 0),
         minimumSellingPrice: Number(minimumSellingPrice || 0),
       });
-      toast.success("Global social markup saved");
+      toast.success("Global account & VPN markup saved");
       await load();
     } catch (error) {
       toast.error(error?.message || "Unable to save markup");
@@ -197,13 +197,27 @@ export default function SocialPricingPanel() {
         note,
         logoUrl,
       });
-      toast.success("Social product rule saved");
+      toast.success("Account & VPN product rule saved");
       await load();
     } catch (error) {
       toast.error(error?.message || "Unable to save product rule");
     } finally {
       setSavingProduct(false);
     }
+  }
+
+  function editRule(rule) {
+    setCategory(rule.category || "");
+    setProviderProductId(String(rule.providerProductId || ""));
+
+    window.setTimeout(() => {
+      document
+        .getElementById("account-vpn-product-editor")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    }, 0);
   }
 
   async function deleteRule(rule) {
@@ -227,9 +241,9 @@ export default function SocialPricingPanel() {
       setRefreshing(true);
       await socialService.refreshCatalog();
       await load();
-      toast.success("Social catalog refreshed");
+      toast.success("Account & VPN catalog refreshed");
     } catch (error) {
-      toast.error(error?.message || "Unable to refresh social catalog");
+      toast.error(error?.message || "Unable to refresh account & VPN catalog");
     } finally {
       setRefreshing(false);
     }
@@ -250,7 +264,7 @@ export default function SocialPricingPanel() {
   return (
     <div className="space-y-6">
       <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6">
-        <h2 className="text-xl font-black">Pricing Socials</h2>
+        <h2 className="text-xl font-black">Pricing Accounts & VPNs</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
           One global markup per source. Customer price is reseller cost plus your markup, rounded up to the next ₦100 and floored at your minimum price. Pick a product below to override it.
         </p>
@@ -318,7 +332,7 @@ export default function SocialPricingPanel() {
         </div>
       </section>
 
-      <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6">
+      <section id="account-vpn-product-editor" className="scroll-mt-24 rounded-3xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm sm:p-6">
         <h2 className="text-xl font-black">Per-product override ({PROVIDERS.find((item) => item.id === provider)?.label})</h2>
         <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
           Category → product → your price. This beats the global markup for that product only. Delete the saved row to fall back to global pricing.
@@ -424,12 +438,12 @@ export default function SocialPricingPanel() {
           rows={5}
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder="How to access the account, login rules, warranty notes..."
-          className="mt-5 w-full rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4 text-sm leading-6 outline-none focus:border-blue-500"
+          placeholder={"How to access the account, login rules, warranty notes...\n\nPaste links on their own line if needed."}
+          className="mt-5 min-h-40 w-full resize-y whitespace-pre-wrap rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4 text-sm leading-6 outline-none focus:border-blue-500"
         />
 
         <label className="mt-4 block text-sm font-bold">
-          Logo image URL (optional, overrides the auto icon)
+          Logo image URL (optional — leave blank to auto-pick known service logos)
           <input
             value={logoUrl}
             onChange={(event) => setLogoUrl(event.target.value)}
@@ -451,11 +465,11 @@ export default function SocialPricingPanel() {
 
       <section className="rounded-3xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
         <div className="border-b border-[var(--border)] p-5 sm:p-6">
-          <h2 className="text-xl font-black">Saved Socials rows ({savedRows.length})</h2>
+          <h2 className="text-xl font-black">Saved Account & VPN rows ({savedRows.length})</h2>
         </div>
 
         {savedRows.length === 0 ? (
-          <div className="p-8 text-center text-sm text-[var(--muted-foreground)]">No product overrides or notes saved for this provider.</div>
+          <div className="p-8 text-center text-sm text-[var(--muted-foreground)]">No account/VPN overrides or notes saved for this provider.</div>
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {savedRows.map((rule) => (
@@ -473,14 +487,25 @@ export default function SocialPricingPanel() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => deleteRule(rule)}
-                  className="flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500/30 px-4 text-xs font-black text-red-500"
-                >
-                  <Trash2 size={15} />
-                  Delete row
-                </button>
+                <div className="grid w-full grid-cols-2 gap-2 sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => editRule(rule)}
+                    className="flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-4 text-xs font-black text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+                  >
+                    <Edit3 size={15} />
+                    Edit
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => deleteRule(rule)}
+                    className="flex h-10 items-center justify-center gap-2 rounded-xl border border-red-500/30 px-4 text-xs font-black text-red-500 transition hover:bg-red-500/5"
+                  >
+                    <Trash2 size={15} />
+                    Delete row
+                  </button>
+                </div>
               </div>
             ))}
           </div>

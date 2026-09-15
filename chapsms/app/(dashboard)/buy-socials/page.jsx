@@ -31,7 +31,7 @@ function getErrorMessage(error) {
     SOCIAL_PRODUCT_NOT_FOUND:
       "This product is no longer available.",
     SOCIAL_PURCHASE_REQUIRES_LIVE_MODE:
-      "Buy Socials is temporarily unavailable while payment testing is enabled.",
+      "Buy Account & VPNs is temporarily unavailable while payment testing is enabled.",
     SOCIAL_PURCHASE_REVIEW_REQUIRED:
       "Your order is being verified. Please do not purchase the same product again.",
   };
@@ -47,6 +47,13 @@ function getErrorMessage(error) {
 function networkType(product) {
   const text = `${product?.name || ""} ${product?.category || ""}`.toLowerCase();
 
+  if (text.includes("ipvanish") || text.includes("ip vanish")) return "ipvanish";
+  if (text.includes("nord vpn") || text.includes("nordvpn")) return "nordvpn";
+  if (text.includes("expressvpn") || text.includes("express vpn")) return "expressvpn";
+  if (text.includes("surfshark")) return "surfshark";
+  if (text.includes("proton vpn") || text.includes("protonvpn")) return "protonvpn";
+  if (text.includes("cyberghost")) return "cyberghost";
+  if (text.includes("windscribe")) return "windscribe";
   if (text.includes("facebook")) return "facebook";
   if (text.includes("twitter") || /(^|\s)x(\s|$)/.test(text)) return "x";
   if (text.includes("instagram")) return "instagram";
@@ -59,141 +66,193 @@ function networkType(product) {
   return "generic";
 }
 
+const AUTO_BRAND_ASSETS = {
+  facebook: {
+    src: "https://cdn.simpleicons.org/facebook/ffffff",
+    className: "bg-[#1877F2]",
+    alt: "Facebook",
+  },
+  x: {
+    src: "https://cdn.simpleicons.org/x/ffffff",
+    className: "bg-black",
+    alt: "X",
+  },
+  instagram: {
+    src: "https://cdn.simpleicons.org/instagram/ffffff",
+    className: "bg-fuchsia-600",
+    alt: "Instagram",
+  },
+  tiktok: {
+    src: "https://cdn.simpleicons.org/tiktok/ffffff",
+    className: "bg-black",
+    alt: "TikTok",
+  },
+  telegram: {
+    src: "https://cdn.simpleicons.org/telegram/ffffff",
+    className: "bg-sky-500",
+    alt: "Telegram",
+  },
+  discord: {
+    src: "https://cdn.simpleicons.org/discord/ffffff",
+    className: "bg-indigo-600",
+    alt: "Discord",
+  },
+  reddit: {
+    src: "https://cdn.simpleicons.org/reddit/ffffff",
+    className: "bg-orange-600",
+    alt: "Reddit",
+  },
+  google: {
+    src: "https://cdn.simpleicons.org/google/4285F4",
+    className: "bg-white",
+    alt: "Google",
+  },
+  ipvanish: {
+    src: "https://www.google.com/s2/favicons?domain=ipvanish.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "IPVanish",
+  },
+  nordvpn: {
+    src: "https://www.google.com/s2/favicons?domain=nordvpn.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "NordVPN",
+  },
+  expressvpn: {
+    src: "https://www.google.com/s2/favicons?domain=expressvpn.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "ExpressVPN",
+  },
+  surfshark: {
+    src: "https://www.google.com/s2/favicons?domain=surfshark.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "Surfshark",
+  },
+  protonvpn: {
+    src: "https://www.google.com/s2/favicons?domain=protonvpn.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "Proton VPN",
+  },
+  cyberghost: {
+    src: "https://www.google.com/s2/favicons?domain=cyberghostvpn.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "CyberGhost",
+  },
+  windscribe: {
+    src: "https://www.google.com/s2/favicons?domain=windscribe.com&sz=128",
+    className: "bg-[#0b1729]",
+    alt: "Windscribe",
+  },
+};
+
 function ProductLogo({ product }) {
   const [customFailed, setCustomFailed] = useState(false);
   const [brandFailed, setBrandFailed] = useState(false);
   const type = networkType(product);
-
-  const brandAssets = {
-    facebook: {
-      src: "https://cdn.simpleicons.org/facebook/ffffff",
-      className: "bg-[#1877F2]",
-      alt: "Facebook",
-    },
-    x: {
-      src: "https://cdn.simpleicons.org/x/ffffff",
-      className: "bg-black",
-      alt: "X",
-    },
-    instagram: {
-      src: "https://cdn.simpleicons.org/instagram/ffffff",
-      className: "bg-fuchsia-600",
-      alt: "Instagram",
-    },
-    tiktok: {
-      src: "https://cdn.simpleicons.org/tiktok/ffffff",
-      className: "bg-black",
-      alt: "TikTok",
-    },
-    telegram: {
-      src: "https://cdn.simpleicons.org/telegram/ffffff",
-      className: "bg-sky-500",
-      alt: "Telegram",
-    },
-    discord: {
-      src: "https://cdn.simpleicons.org/discord/ffffff",
-      className: "bg-indigo-600",
-      alt: "Discord",
-    },
-    reddit: {
-      src: "https://cdn.simpleicons.org/reddit/ffffff",
-      className: "bg-orange-600",
-      alt: "Reddit",
-    },
-    google: {
-      src: "https://cdn.simpleicons.org/google/4285F4",
-      className: "bg-white ring-1 ring-slate-200",
-      alt: "Google",
-    },
-  };
+  const brand = AUTO_BRAND_ASSETS[type];
 
   if (product?.logoUrl && !customFailed) {
     return (
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white ring-1 ring-white/10 min-[390px]:h-14 min-[390px]:w-14 min-[390px]:rounded-2xl sm:h-16 sm:w-16">
+      <div className="flex h-[50px] w-[50px] shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[#283a59] bg-[#0d1a30] p-1.5 min-[390px]:h-[54px] min-[390px]:w-[54px] sm:h-14 sm:w-14">
         <img
           src={product.logoUrl}
           alt={`${product.name || "Product"} logo`}
-          className="h-full w-full object-contain p-1 sm:p-1.5"
+          className="max-h-full max-w-full rounded-lg object-contain"
           onError={() => setCustomFailed(true)}
         />
       </div>
     );
   }
 
-  const brand = brandAssets[type];
-
   if (brand && !brandFailed) {
     return (
-      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl min-[390px]:h-14 min-[390px]:w-14 min-[390px]:rounded-2xl sm:h-16 sm:w-16 ${brand.className}`}>
+      <div className={`flex h-[50px] w-[50px] shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/5 p-2 min-[390px]:h-[54px] min-[390px]:w-[54px] sm:h-14 sm:w-14 ${brand.className}`}>
         <img
           src={brand.src}
           alt={brand.alt}
-          className="h-7 w-7 object-contain min-[390px]:h-8 min-[390px]:w-8 sm:h-9 sm:w-9"
+          className="h-full w-full object-contain"
           onError={() => setBrandFailed(true)}
         />
       </div>
     );
   }
 
-  const base = "flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white shadow-sm min-[390px]:h-14 min-[390px]:w-14 min-[390px]:rounded-2xl sm:h-16 sm:w-16";
+  const base = "flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-xl text-white shadow-sm min-[390px]:h-[54px] min-[390px]:w-[54px] sm:h-14 sm:w-14";
 
-  if (type === "facebook") return <div className={`${base} bg-[#1877F2] text-2xl font-black min-[390px]:text-3xl sm:text-4xl`}>f</div>;
-  if (type === "x") return <div className={`${base} bg-black text-xl font-medium min-[390px]:text-2xl sm:text-3xl`}>𝕏</div>;
-  if (type === "instagram") return <div className={`${base} bg-fuchsia-600 text-xl font-black min-[390px]:text-2xl sm:text-3xl`}>◎</div>;
-  if (type === "tiktok") return <div className={`${base} bg-black text-xl font-black min-[390px]:text-2xl sm:text-3xl`}>♪</div>;
-  if (type === "telegram") return <div className={`${base} bg-sky-500 text-lg font-black min-[390px]:text-xl sm:text-2xl`}>➤</div>;
-  if (type === "discord") return <div className={`${base} bg-indigo-600 text-base font-black min-[390px]:text-lg sm:text-xl`}>DC</div>;
-  if (type === "reddit") return <div className={`${base} bg-orange-600 text-lg font-black min-[390px]:text-xl sm:text-2xl`}>r/</div>;
-  if (type === "google") return <div className={`${base} bg-white text-xl font-black text-blue-600 min-[390px]:text-2xl sm:text-3xl ring-1 ring-slate-200`}>G</div>;
-  if (type === "proxy") return <div className={`${base} bg-violet-600 text-base font-black min-[390px]:text-lg sm:text-xl`}>IP</div>;
+  if (type === "proxy") return <div className={`${base} bg-violet-600 text-base font-black`}>IP</div>;
 
   const initial = String(product?.name || "P").trim().slice(0, 1).toUpperCase();
-  return <div className={`${base} bg-blue-600 text-lg font-black min-[390px]:text-xl sm:text-2xl`}>{initial}</div>;
+  return <div className={`${base} bg-blue-600 text-lg font-black`}>{initial}</div>;
+}
+
+function DescriptionContent({ value }) {
+  const text = String(value || "").replace(/\r\n/g, "\n");
+
+  if (!text.trim()) {
+    return <>No extra usage note has been added for this product yet.</>;
+  }
+
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+
+  return parts.map((part, index) => {
+    if (/^https?:\/\/[^\s]+$/.test(part)) {
+      return (
+        <a
+          key={`${part}-${index}`}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-400 underline decoration-blue-400/60 underline-offset-2 hover:text-blue-300"
+        >
+          {part}
+        </a>
+      );
+    }
+
+    return <span key={index}>{part}</span>;
+  });
 }
 
 function ProductCard({ product, onBuy }) {
   const [descriptionOpen, setDescriptionOpen] = useState(false);
 
   return (
-    <article className="min-w-0 rounded-[18px] border border-[#22314f] bg-[#111f39] p-4 shadow-sm min-[390px]:rounded-[20px] min-[390px]:p-[18px] sm:rounded-[22px] sm:p-6">
-      <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:gap-4">
-        <ProductLogo product={product} />
+    <article className="min-w-0 rounded-[18px] border border-[#22314f] bg-[#111f39] p-4 shadow-sm min-[390px]:rounded-[20px] min-[390px]:p-[18px] sm:rounded-[22px] sm:p-5">
+      <ProductLogo product={product} />
 
-        <div className="min-w-0 flex-1">
-          <h3 className="break-words text-[14px] font-black uppercase leading-[1.25] text-white min-[390px]:text-[15px] sm:text-xl">
-            {product.name}
-          </h3>
-          <p className="mt-1.5 break-words text-[10px] font-semibold uppercase leading-4 tracking-[0.04em] text-[#8997b3] min-[390px]:text-[11px] sm:mt-2 sm:text-xs">
-            {product.category}
-          </p>
-        </div>
+      <div className="mt-3 min-w-0 sm:mt-4">
+        <h3 className="break-words text-[14px] font-black uppercase leading-[1.3] text-white min-[390px]:text-[15px] sm:text-lg">
+          {product.name}
+        </h3>
+        <p className="mt-1.5 break-words text-[10px] font-semibold uppercase leading-4 tracking-[0.04em] text-[#8997b3] min-[390px]:text-[11px] sm:text-xs">
+          {product.category}
+        </p>
       </div>
 
       <button
         type="button"
         onClick={() => setDescriptionOpen((value) => !value)}
-        className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-[#a7b3ca] min-[390px]:text-[13px] sm:mt-5 sm:gap-2 sm:text-sm"
+        className="mt-4 flex items-center gap-1.5 text-[12px] font-medium text-[#a7b3ca] min-[390px]:text-[13px] sm:text-sm"
       >
         <ChevronDown
           size={15}
           className={`transition ${descriptionOpen ? "rotate-180" : ""}`}
         />
-        View description
+        {descriptionOpen ? "Hide description" : "View description"}
       </button>
 
       {descriptionOpen ? (
-        <div className="mt-3 rounded-xl border border-[#253653] bg-[#0c172b] p-3 text-[12px] leading-5 text-[#aab6cc] min-[390px]:text-[13px] sm:text-sm sm:leading-6">
-          {product.description || "No extra usage note has been added for this product yet."}
+        <div className="mt-3 max-h-[220px] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words rounded-xl border border-[#253653] bg-[#0c172b] p-3 text-[12px] leading-[1.6] text-[#c0cadb] [overflow-wrap:anywhere] min-[390px]:text-[13px] sm:max-h-[250px] sm:p-4 sm:text-sm sm:leading-6">
+          <DescriptionContent value={product.description} />
         </div>
       ) : null}
 
-      <p className={`mt-4 text-[13px] font-medium min-[390px]:text-[14px] sm:mt-5 sm:text-base ${product.inStock ? "text-emerald-400" : "text-rose-400"}`}>
+      <p className={`mt-4 text-[13px] font-medium min-[390px]:text-[14px] sm:text-base ${product.inStock ? "text-emerald-400" : "text-rose-400"}`}>
         {product.inStock
           ? `${Number(product.stock || 0).toLocaleString("en-NG")} in stock`
           : "Out of Stock"}
       </p>
 
-      <p className="mt-3 text-[24px] font-black leading-none text-[#2f78ff] min-[390px]:text-[26px] sm:mt-4 sm:text-3xl">
+      <p className="mt-3 text-[24px] font-black leading-none text-[#2f78ff] min-[390px]:text-[26px] sm:text-[28px]">
         {formatNaira(product.price)}
       </p>
 
@@ -201,9 +260,9 @@ function ProductCard({ product, onBuy }) {
         type="button"
         onClick={() => onBuy(product)}
         disabled={!product.inStock}
-        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#30425f] bg-[#12213b] text-[13px] font-black text-white transition hover:border-[#4c6590] hover:bg-[#172944] disabled:cursor-not-allowed disabled:opacity-50 min-[390px]:text-sm sm:mt-5 sm:h-14 sm:rounded-2xl sm:text-base"
+        className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-[#30425f] bg-[#12213b] text-[13px] font-black text-white transition hover:border-[#4c6590] hover:bg-[#172944] disabled:cursor-not-allowed disabled:opacity-50 min-[390px]:text-sm sm:h-14 sm:text-[15px]"
       >
-        <ShoppingCart size={17} className="sm:h-[19px] sm:w-[19px]" />
+        <ShoppingCart size={17} />
         {product.inStock ? "Buy Now" : "Out of Stock"}
       </button>
     </article>
@@ -401,7 +460,7 @@ export default function BuySocialsPage() {
       if (response?.reviewRequired) {
         toast("Purchase is being verified. Do not order the same item again.");
       } else {
-        toast.success("Purchase completed. Check Logs History for your credentials.");
+        toast.success("Purchase completed. Check Account & VPN History for your credentials.");
       }
 
       setSelectedProduct(null);
@@ -420,7 +479,7 @@ export default function BuySocialsPage() {
     <div className="mx-auto min-w-0 w-full max-w-[1080px] overflow-x-hidden text-[var(--foreground)]">
       <div className="mb-6 sm:mb-8">
         <h1 className="text-[26px] font-black leading-tight tracking-tight min-[390px]:text-[28px] sm:text-4xl">
-          Buy Socials
+          Buy Account & VPNs
         </h1>
         <p className="mt-2.5 max-w-xl text-[13px] leading-[22px] text-[var(--muted-foreground)] min-[390px]:text-sm min-[390px]:leading-6 sm:mt-3 sm:text-base sm:leading-7">
           Instant delivery. Credentials appear right after payment from your NGN wallet.
@@ -443,7 +502,7 @@ export default function BuySocialsPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search accounts..."
+            placeholder="Search accounts, VPNs & tools..."
             className="h-12 w-full rounded-xl border border-[var(--border)] bg-[var(--card)] pl-10 pr-3.5 text-[14px] font-medium outline-none focus:border-blue-500 min-[390px]:rounded-2xl sm:h-14 sm:pl-12 sm:pr-4 sm:text-base"
           />
         </div>

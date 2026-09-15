@@ -27,17 +27,28 @@ function formatCount(value) {
   return Number(value || 0).toLocaleString("en-NG");
 }
 
+function formatDeltaNaira(value) {
+  const number = Number(value || 0);
+  return `+₦${number.toLocaleString("en-NG", { maximumFractionDigits: 2 })}`;
+}
+
+function formatDeltaCount(value) {
+  return `+${Number(value || 0).toLocaleString("en-NG")}`;
+}
+
 function formatBalance(item) {
   if (!item || item.balance === null || item.balance === undefined) return "—";
   const value = Number(item.balance);
   if (!Number.isFinite(value)) return "—";
   const currency = String(item.currency || "NGN").toUpperCase();
+
   if (currency === "USD") {
     return `$${value.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
   }
+
   return `₦${value.toLocaleString("en-NG", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -55,7 +66,7 @@ function findSocialBalance(summary, provider) {
 function Section({ title, children }) {
   return (
     <section>
-      <h2 className="mb-3 text-sm font-black uppercase tracking-[0.16em] text-[var(--muted-foreground)]">
+      <h2 className="mb-3 text-sm font-black text-[var(--foreground)] sm:text-base">
         {title}
       </h2>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{children}</div>
@@ -69,9 +80,9 @@ export default function AdminOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError("");
 
       const [numberResult, socialResult] = await Promise.allSettled([
@@ -93,12 +104,18 @@ export default function AdminOverviewPage() {
     } catch (requestError) {
       setError(requestError?.message || "Unable to load admin dashboard");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     load();
+
+    const timer = window.setInterval(() => {
+      load({ silent: true });
+    }, 15000);
+
+    return () => window.clearInterval(timer);
   }, [load]);
 
   const numberRevenue = Number(numbers?.totalRevenue || 0);
@@ -107,6 +124,17 @@ export default function AdminOverviewPage() {
   const socialRevenue = Number(socials?.totalRevenue || 0);
   const socialCost = Number(socials?.totalCost || 0);
   const socialProfit = Number(socials?.totalProfit || 0);
+
+  const todayNumberRevenue = Number(numbers?.todayRevenue || 0);
+  const todayNumberCost = Number(numbers?.todayCost ?? numbers?.todayProviderCost ?? 0);
+  const todayNumberProfit = Number(numbers?.todayProfit || 0);
+  const todayNumberOrders = Number(numbers?.todayOrders || 0);
+  const todayReceivedOtps = Number(numbers?.todayReceivedOtps || 0);
+
+  const todaySocialRevenue = Number(socials?.todayRevenue || 0);
+  const todaySocialCost = Number(socials?.todayCost || 0);
+  const todaySocialProfit = Number(socials?.todayProfit || 0);
+  const todaySocialOrders = Number(socials?.todayOrders || 0);
 
   const smsBower = findNumberBalance(numbers, "server1");
   const benOtp = findNumberBalance(numbers, "server2");
@@ -121,46 +149,50 @@ export default function AdminOverviewPage() {
         </div>
       ) : null}
 
-      <Section title="Overview · Numbers + Socials">
+      <Section title="Overview">
         <AdminSummaryCard
           label="Total revenue"
           value={formatNaira(numberRevenue + socialRevenue)}
+          delta={formatDeltaNaira(todayNumberRevenue + todaySocialRevenue)}
           icon={CircleDollarSign}
           loading={loading}
         />
         <AdminSummaryCard
           label="Total profit"
           value={formatNaira(numberProfit + socialProfit)}
+          delta={formatDeltaNaira(todayNumberProfit + todaySocialProfit)}
           icon={TrendingUp}
           loading={loading}
         />
         <AdminSummaryCard
           label="Total cost"
           value={formatNaira(numberCost + socialCost)}
+          delta={formatDeltaNaira(todayNumberCost + todaySocialCost)}
           icon={CreditCard}
           loading={loading}
         />
         <AdminSummaryCard
           label="Total orders"
           value={formatCount(Number(numbers?.totalOrders || 0) + Number(socials?.totalOrders || 0))}
+          delta={formatDeltaCount(todayNumberOrders + todaySocialOrders)}
           icon={ReceiptText}
           loading={loading}
         />
       </Section>
 
       <Section title="Numbers">
-        <AdminSummaryCard label="Numbers revenue" value={formatNaira(numberRevenue)} icon={CircleDollarSign} loading={loading} />
-        <AdminSummaryCard label="Numbers profit" value={formatNaira(numberProfit)} icon={TrendingUp} loading={loading} />
-        <AdminSummaryCard label="Numbers cost" value={formatNaira(numberCost)} icon={CreditCard} loading={loading} />
-        <AdminSummaryCard label="Number orders" value={formatCount(numbers?.totalOrders)} icon={ReceiptText} loading={loading} />
-        <AdminSummaryCard label="Received OTP" value={formatCount(numbers?.receivedOtps ?? numbers?.receivedOrders)} icon={MessageSquareText} loading={loading} />
+        <AdminSummaryCard label="Numbers revenue" value={formatNaira(numberRevenue)} delta={formatDeltaNaira(todayNumberRevenue)} icon={CircleDollarSign} loading={loading} />
+        <AdminSummaryCard label="Numbers profit" value={formatNaira(numberProfit)} delta={formatDeltaNaira(todayNumberProfit)} icon={TrendingUp} loading={loading} />
+        <AdminSummaryCard label="Numbers cost" value={formatNaira(numberCost)} delta={formatDeltaNaira(todayNumberCost)} icon={CreditCard} loading={loading} />
+        <AdminSummaryCard label="Number orders" value={formatCount(numbers?.totalOrders)} delta={formatDeltaCount(todayNumberOrders)} icon={ReceiptText} loading={loading} />
+        <AdminSummaryCard label="Received OTP" value={formatCount(numbers?.receivedOtps ?? numbers?.receivedOrders)} delta={formatDeltaCount(todayReceivedOtps)} icon={MessageSquareText} loading={loading} />
       </Section>
 
-      <Section title="Socials">
-        <AdminSummaryCard label="Socials revenue" value={formatNaira(socialRevenue)} icon={CircleDollarSign} loading={loading} />
-        <AdminSummaryCard label="Socials profit" value={formatNaira(socialProfit)} icon={TrendingUp} loading={loading} />
-        <AdminSummaryCard label="Socials cost" value={formatNaira(socialCost)} icon={CreditCard} loading={loading} />
-        <AdminSummaryCard label="Social orders" value={formatCount(socials?.totalOrders)} icon={PackageCheck} loading={loading} />
+      <Section title="Accounts & VPNs">
+        <AdminSummaryCard label="Account & VPN revenue" value={formatNaira(socialRevenue)} delta={formatDeltaNaira(todaySocialRevenue)} icon={CircleDollarSign} loading={loading} />
+        <AdminSummaryCard label="Account & VPN profit" value={formatNaira(socialProfit)} delta={formatDeltaNaira(todaySocialProfit)} icon={TrendingUp} loading={loading} />
+        <AdminSummaryCard label="Account & VPN cost" value={formatNaira(socialCost)} delta={formatDeltaNaira(todaySocialCost)} icon={CreditCard} loading={loading} />
+        <AdminSummaryCard label="Account & VPN orders" value={formatCount(socials?.totalOrders)} delta={formatDeltaCount(todaySocialOrders)} icon={PackageCheck} loading={loading} />
       </Section>
 
       <Section title="Platform">

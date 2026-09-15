@@ -312,14 +312,14 @@ export default function TransactionsPage() {
           Usage <span className="text-blue-600">History</span>
         </h1>
         <p className="mt-2 text-sm text-[var(--muted-foreground)] sm:text-base">
-          Numbers, delivered logs/social accounts, and wallet payments are kept separately.
+          Numbers, account/VPN purchases, and wallet payments are kept separately.
         </p>
       </div>
 
       <div className="mt-6 grid grid-cols-3 gap-1 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-1 shadow-sm">
         {[
           ["numbers", "Number History", History],
-          ["socials", "Logs History", PackageCheck],
+          ["socials", "Account & VPN History", PackageCheck],
           ["payments", "Payment History", CreditCard],
         ].map(([id, label, Icon]) => (
           <button
@@ -341,7 +341,7 @@ export default function TransactionsPage() {
       <section className="mt-6 rounded-3xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-sm sm:p-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-xl font-black">
-            {activeTab === "numbers" ? `Number history (${filteredNumbers.length})` : activeTab === "socials" ? `Logs history (${filteredSocials.length})` : `Payment history (${filteredPayments.length})`}
+            {activeTab === "numbers" ? `Number history (${filteredNumbers.length})` : activeTab === "socials" ? `Account & VPN history (${filteredSocials.length})` : `Payment history (${filteredPayments.length})`}
           </h2>
 
           <div className="flex gap-2">
@@ -350,7 +350,7 @@ export default function TransactionsPage() {
               <input
                 value={activeSearch}
                 onChange={(event) => setActiveSearch(event.target.value)}
-                placeholder={activeTab === "numbers" ? "Search numbers..." : activeTab === "socials" ? "Search logs..." : "Search payments..."}
+                placeholder={activeTab === "numbers" ? "Search numbers..." : activeTab === "socials" ? "Search accounts & VPNs..." : "Search payments..."}
                 className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] pl-10 pr-3 text-sm outline-none focus:border-blue-500"
               />
             </div>
@@ -393,7 +393,7 @@ export default function TransactionsPage() {
         ) : activeTab === "socials" ? (
           <div className="mt-5 space-y-3">
             {filteredSocials.length === 0 ? (
-              <p className="py-12 text-center text-sm text-[var(--muted-foreground)]">No logs/social purchases yet.</p>
+              <p className="py-12 text-center text-sm text-[var(--muted-foreground)]">No account or VPN purchases yet.</p>
             ) : filteredSocials.map((order) => (
               <article key={order.id || order._id} className="rounded-2xl border border-[var(--border)] bg-[var(--muted)]/40 p-4">
                 <div className="flex items-start justify-between gap-3">

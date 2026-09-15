@@ -50,7 +50,7 @@ const links = [
   },
   {
     href: "/admin/socials",
-    label: "Buy Socials",
+    label: "Accounts & VPNs",
     icon: Package,
   },
   {
@@ -60,31 +60,18 @@ const links = [
   },
 ];
 
-export default function AdminSidebar({
-  open = false,
-  onClose,
-}) {
+export default function AdminSidebar({ open = false, onClose }) {
   const pathname = usePathname();
 
   function isActive(item) {
-    if (item.exact) {
-      return pathname === item.href;
-    }
-
-    return (
-      pathname === item.href ||
-      pathname.startsWith(`${item.href}/`)
-    );
+    if (item.exact) return pathname === item.href;
+    return pathname === item.href || pathname.startsWith(`${item.href}/`);
   }
 
   const content = (
     <div className="flex min-h-full flex-col">
       <div className="sticky top-0 z-20 -mx-4 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] px-4 pb-5 pt-1 min-[375px]:-mx-5 min-[375px]:px-5">
-        <Link
-          href="/admin"
-          onClick={onClose}
-          className="flex items-center gap-3"
-        >
+        <Link href="/admin" onClick={onClose} className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
             <ShieldCheck size={21} />
           </div>
@@ -109,10 +96,7 @@ export default function AdminSidebar({
         </button>
       </div>
 
-      <nav
-        className="mt-5 space-y-1.5"
-        aria-label="Admin navigation"
-      >
+      <nav className="mt-5 space-y-1.5" aria-label="Admin navigation">
         {links.map((item) => {
           const Icon = item.icon;
           const active = isActive(item);
@@ -138,7 +122,7 @@ export default function AdminSidebar({
 
       <div className="sticky bottom-0 z-20 -mx-4 mt-auto border-t border-[var(--border)] bg-[var(--card)] px-4 pb-3 pt-5 min-[375px]:-mx-5 min-[375px]:px-5">
         <Link
-          href="/buy-number"
+          href="/dashboard"
           onClick={onClose}
           className="flex min-h-12 items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
         >
@@ -152,16 +136,12 @@ export default function AdminSidebar({
   return (
     <>
       <aside className="sticky top-0 hidden h-screen overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] lg:block">
-        <div className="min-h-full px-5 py-4">
-          {content}
-        </div>
+        <div className="min-h-full px-5 py-4">{content}</div>
       </aside>
 
       <div
         className={`fixed inset-0 z-50 transition-opacity duration-300 lg:hidden ${
-          open
-            ? "pointer-events-auto opacity-100"
-            : "pointer-events-none opacity-0"
+          open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
         }`}
         aria-hidden={!open}
       >
@@ -177,14 +157,10 @@ export default function AdminSidebar({
           aria-modal="true"
           aria-label="Admin navigation"
           className={`relative h-full w-[86vw] max-w-[330px] overflow-y-auto border-r border-[var(--border)] bg-[var(--card)] shadow-2xl transition-transform duration-300 ease-out ${
-            open
-              ? "translate-x-0"
-              : "-translate-x-full"
+            open ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="min-h-full px-4 py-4 min-[375px]:px-5">
-            {content}
-          </div>
+          <div className="min-h-full px-4 py-4 min-[375px]:px-5">{content}</div>
         </aside>
       </div>
     </>
