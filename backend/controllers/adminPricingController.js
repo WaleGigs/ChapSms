@@ -807,7 +807,9 @@ exports.getDashboardSummary = async (req, res) => {
     const [
       orderResults,
       totalUsers,
+      todayUsers,
       walletBalanceResults,
+      walletDeltaResults,
       providerBalanceResults,
     ] = await Promise.all([
       Order.aggregate([
@@ -1046,6 +1048,11 @@ exports.getDashboardSummary = async (req, res) => {
         userMatch
       ),
 
+      User.countDocuments({
+        role: "user",
+        createdAt: { $gte: todayStart },
+      }),
+
       Wallet.aggregate([
         {
           $lookup: {
@@ -1088,6 +1095,63 @@ exports.getDashboardSummary = async (req, res) => {
                   "$balance",
                   0,
                 ],
+              },
+            },
+          },
+        },
+      ]),
+
+      Wallet.aggregate([
+        { $unwind: "$transactions" },
+        {
+          $lookup: {
+            from: "users",
+            localField: "user",
+            foreignField: "_id",
+            as: "customer",
+          },
+        },
+        { $unwind: "$customer" },
+        {
+          $match: {
+            "customer.role": "user",
+            "transactions.createdAt": { $gte: todayStart },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            delta: {
+              $sum: {
+                $switch: {
+                  branches: [
+                    {
+                      case: {
+                        $and: [
+                          { $eq: ["$transactions.type", "deposit"] },
+                          { $eq: ["$transactions.status", "completed"] },
+                        ],
+                      },
+                      then: { $ifNull: ["$transactions.amount", 0] },
+                    },
+                    {
+                      case: { $eq: ["$transactions.type", "refund"] },
+                      then: { $ifNull: ["$transactions.amount", 0] },
+                    },
+                    {
+                      case: {
+                        $in: ["$transactions.type", ["purchase", "withdraw"]],
+                      },
+                      then: {
+                        $multiply: [
+                          { $ifNull: ["$transactions.amount", 0] },
+                          -1,
+                        ],
+                      },
+                    },
+                  ],
+                  default: 0,
+                },
               },
             },
           },
@@ -1210,6 +1274,9 @@ exports.getDashboardSummary = async (req, res) => {
         walletBalanceResults?.[0]
           ?.usersBalance || 0
       );
+
+    const todayUsersBalanceDelta =
+      Number(walletDeltaResults?.[0]?.delta || 0);
 
     /*
      * Useful metric for later:
@@ -1425,7 +1492,12 @@ exports.getDashboardSummary = async (req, res) => {
             totalUsers || 0
           ),
 
+        todayUsers:
+          Number(todayUsers || 0),
+
         usersBalance,
+
+        todayUsersBalanceDelta,
 
         /*
          * SMS provider balances.

@@ -1696,6 +1696,41 @@ async function fetchJson(url, { headers = {}, timeoutMs = 15000 } = {}) {
   }
 }
 
+function extractProviderBalance(payload) {
+  const preferredKeys = [
+    "balance",
+    "wallet_balance",
+    "walletBalance",
+    "available_balance",
+    "availableBalance",
+    "credit",
+    "credits",
+    "funds",
+  ];
+
+  const queue = [{ value: payload, depth: 0 }];
+  const seen = new Set();
+
+  while (queue.length) {
+    const { value, depth } = queue.shift();
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 4) continue;
+    seen.add(value);
+
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const parsed = Number(String(value[key] ?? "").replace(/,/g, ""));
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") queue.push({ value: child, depth: depth + 1 });
+    }
+  }
+
+  return null;
+}
+
 async function getSameehaBalance() {
   const baseUrl = String(
     process.env.SAMEEHA_API_BASE_URL || "https://sameehasocialhub.com/api/v1"
@@ -1708,7 +1743,7 @@ async function getSameehaBalance() {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
 
-  const balance = Number(data?.balance ?? data?.data?.balance);
+  const balance = extractProviderBalance(data);
   return {
     provider: "sameeha",
     name: "SameehaSocialHub Reseller",
@@ -1727,10 +1762,10 @@ async function getLoggsplugBalance() {
   if (!apiKey) throw new Error("LOGGSPLUG_API_KEY is missing");
 
   const data = await fetchJson(`${baseUrl}/me`, {
-    headers: { "X-Api-Key": apiKey, Authorization: `Bearer ${apiKey}` },
+    headers: { "X-Api-Key": apiKey },
   });
 
-  const balance = Number(data?.data?.balance ?? data?.balance);
+  const balance = extractProviderBalance(data);
   return {
     provider: "loggsplug",
     name: "LoggsPlug Reseller",

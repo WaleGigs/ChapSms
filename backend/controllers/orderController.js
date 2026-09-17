@@ -573,7 +573,7 @@ async function ensureRefundHistoryRecord({
         },
       },
       {
-        new: true,
+        returnDocument: "after",
         runValidators: true,
       },
     );
@@ -655,7 +655,7 @@ async function refundReservedWallet({
         },
       },
       {
-        new: true,
+        returnDocument: "after",
         runValidators: true,
         arrayFilters: [
           {
@@ -1061,7 +1061,7 @@ async function reconcileReservation({
       },
 
       {
-        new: true,
+        returnDocument: "after",
         runValidators: true,
       },
     );
@@ -1091,7 +1091,7 @@ async function reconcileReservation({
       },
 
       {
-        new: true,
+        returnDocument: "after",
         runValidators: true,
       },
     );
@@ -1113,7 +1113,7 @@ async function reconcileReservation({
     },
 
     {
-      new: true,
+      returnDocument: "after",
       runValidators: true,
     },
   );
@@ -1723,7 +1723,7 @@ exports.createOrder =
           },
 
           {
-            new: true,
+            returnDocument: "after",
             runValidators: true,
           },
         );
@@ -2854,7 +2854,7 @@ async function refundTerminalProviderOrder({
         },
       },
       {
-        new: true,
+        returnDocument: "after",
         runValidators: true,
       },
     );
@@ -3691,7 +3691,7 @@ exports.cancelOrder =
           },
 
           {
-            new: true,
+            returnDocument: "after",
             runValidators: true,
           },
         );

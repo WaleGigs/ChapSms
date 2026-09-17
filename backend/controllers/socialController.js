@@ -31,7 +31,7 @@ const PROVIDERS = {
 };
 
 const DEFAULT_CATALOG_TTL_MS =
-  60 * 1000;
+  15 * 1000;
 
 const DEFAULT_REQUEST_TIMEOUT_MS =
   20 * 1000;
@@ -182,7 +182,7 @@ function getCatalogTtlMs() {
   return Number.isFinite(
     configured
   ) &&
-    configured >= 10_000
+    configured >= 5_000
     ? configured
     : DEFAULT_CATALOG_TTL_MS;
 }
@@ -749,9 +749,9 @@ async function getSameehaProducts() {
         stock,
 
         inStock:
-          product?.in_stock ===
-          true ||
-          stock > 0,
+          typeof product?.in_stock === "boolean"
+            ? Boolean(product.in_stock && stock > 0)
+            : stock > 0,
       };
     })
     .filter(
@@ -2999,6 +2999,15 @@ exports.buySocialProduct =
         candidates.length ===
         0
       ) {
+        /*
+         * The live provider check is newer than the cached catalog.
+         * Refresh the public cache now so customers immediately see
+         * Out of Stock instead of repeatedly attempting the item.
+         */
+        await refreshCatalog().catch((refreshError) => {
+          console.error("Unable to refresh out-of-stock social item:", refreshError);
+        });
+
         return res
           .status(409)
           .json({
@@ -3336,6 +3345,11 @@ exports.buySocialProduct =
         );
       }
 
+      /* Keep customer stock in sync immediately after a provider sale. */
+      await refreshCatalog().catch((refreshError) => {
+        console.error("Post-purchase social catalog refresh failed:", refreshError);
+      });
+
       return res
         .status(
           finalStatus ===
@@ -3527,6 +3541,24 @@ exports.buySocialProduct =
               error
                 .walletBalance,
           });
+      }
+
+      const providerRejectedForStock =
+        error?.providerHttpStatus === 409 ||
+        /out\s*of\s*stock|not\s*enough\s*(keys|stock)|insufficient\s*stock/i.test(
+          String(error?.message || "")
+        );
+
+      if (providerRejectedForStock) {
+        await refreshCatalog().catch(() => null);
+
+        return res.status(409).json({
+          success: false,
+          code: "SOCIAL_OUT_OF_STOCK",
+          message: "This product is currently out of stock. Please try another product.",
+          refunded: Boolean(refundWallet),
+          walletBalance: refundWallet ? Number(refundWallet.balance || 0) : undefined,
+        });
       }
 
       return res
